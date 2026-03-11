@@ -1,6 +1,7 @@
 services:
   slskdsync:
-    build: .
+    image: ${SLSKDSYNC_IMAGE:-slskdsync:latest}
+    pull_policy: always
     container_name: slskdsync
     ports:
       - "5035:5035"

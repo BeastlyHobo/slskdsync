@@ -10,10 +10,26 @@ Single-container web app to:
 
 ```bash
 cp .env.example .env
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 Open `http://localhost:5035`.
+
+To use a published `latest` image, set `SLSKDSYNC_IMAGE` in `.env` (for example `ghcr.io/<your-user>/slskdsync:latest`) and run:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+If you are developing locally from source instead of pulling, run:
+
+```bash
+docker build -t slskdsync:latest .
+docker compose up -d
+```
+
 
 ## Settings (in UI)
 - `slskd_url`, `slskd_user`, `slskd_pass`, `slskd_api_key`
