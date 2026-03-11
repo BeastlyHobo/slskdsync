@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Settings</h2>
+<form method="post" class="settings-grid">
+  {% for key, value in settings.items() %}
+  <label>{{ key }}
+    <input name="{{key}}" value="{{value}}">
+  </label>
+  {% endfor %}
+  <button type="submit">Save</button>
+</form>
+{% endblock %}
