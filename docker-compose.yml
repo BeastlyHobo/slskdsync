@@ -1,0 +1,13 @@
+services:
+  slskdsync:
+    build: .
+    container_name: slskdsync
+    ports:
+      - "5035:5035"
+    env_file:
+      - .env
+    volumes:
+      - ./app/data:/app/app/data
+      - ./downloads:/downloads
+      - ./library:/music
+    restart: unless-stopped

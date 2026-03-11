@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% block content %}
+<section>
+  <h2>Import from Spotify / Apple Music</h2>
+  <form method="post" action="/import">
+    <input type="url" name="url" placeholder="Paste playlist, album, artist, or track URL" required style="width:100%">
+    <label><input type="checkbox" name="create_nav_playlist"> Create playlist in Navidrome (when source is a playlist)</label>
+    <button type="submit">Import</button>
+  </form>
+</section>
+<section>
+  <h2>Recent jobs</h2>
+  <table>
+    <tr><th>ID</th><th>Source</th><th>Type</th><th>Status</th><th>Created</th></tr>
+    {% for j in jobs %}
+      <tr><td>{{j.id}}</td><td>{{j.source}}</td><td>{{j.source_type}}</td><td>{{j.status}}</td><td>{{j.created_at}}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+<section>
+  <h2>Track queue</h2>
+  <table>
+    <tr><th>Artist</th><th>Album</th><th>Title</th><th>Status</th><th>Local path</th><th>Error/Note</th></tr>
+    {% for t in tracks %}
+      <tr>
+        <td>{{t.artist}}</td><td>{{t.album}}</td><td>{{t.title}}</td><td>{{t.slskd_state}}</td><td>{{t.local_path or ''}}</td><td>{{t.slskd_error or ''}}</td>
+      </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endblock %}
