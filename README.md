@@ -13,7 +13,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open `http://localhost:8080`.
+Open `http://localhost:5035`.
 
 ## Settings (in UI)
 - `slskd_url`, `slskd_user`, `slskd_pass`, `slskd_api_key`
