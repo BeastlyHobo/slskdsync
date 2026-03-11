@@ -1,0 +1,14 @@
+services:
+  slskdsync:
+    image: ${SLSKDSYNC_IMAGE:-slskdsync:latest}
+    pull_policy: always
+    container_name: slskdsync
+    ports:
+      - "5035:5035"
+    env_file:
+      - .env
+    volumes:
+      - ./app/data:/app/app/data
+      - ./downloads:/downloads
+      - ./library:/music
+    restart: unless-stopped
