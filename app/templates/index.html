@@ -1,31 +1,86 @@
 {% extends 'base.html' %}
 {% block content %}
-<section>
-  <h2>Import from Spotify / Apple Music</h2>
-  <form method="post" action="/import">
-    <input type="url" name="url" placeholder="Paste playlist, album, artist, or track URL" required style="width:100%">
-    <label><input type="checkbox" name="create_nav_playlist"> Create playlist in Navidrome (when source is a playlist)</label>
-    <button type="submit">Import</button>
+
+<!-- Import URL -->
+<div class="import-section">
+  <span class="section-label">Import from URL</span>
+  <form method="post" action="/import" id="import-form">
+    <div class="input-row">
+      <input
+        class="text-input"
+        type="url"
+        name="url"
+        id="import-url"
+        placeholder="Spotify, TIDAL, or Apple Music link…"
+        required
+      >
+      <button class="btn-primary" type="submit">Import</button>
+    </div>
+    <div class="dl-source-row mt">
+      <label>
+        <input type="radio" name="download_source" value="slskd" checked> Soulseek
+      </label>
+      <label>
+        <input type="radio" name="download_source" value="monochrome"> TIDAL/Monochrome
+      </label>
+    </div>
   </form>
-</section>
-<section>
-  <h2>Recent jobs</h2>
-  <table>
-    <tr><th>ID</th><th>Source</th><th>Type</th><th>Status</th><th>Created</th></tr>
-    {% for j in jobs %}
-      <tr><td>{{j.id}}</td><td>{{j.source}}</td><td>{{j.source_type}}</td><td>{{j.status}}</td><td>{{j.created_at}}</td></tr>
-    {% endfor %}
-  </table>
-</section>
-<section>
-  <h2>Track queue</h2>
-  <table>
-    <tr><th>Artist</th><th>Album</th><th>Title</th><th>Status</th><th>Local path</th><th>Error/Note</th></tr>
-    {% for t in tracks %}
-      <tr>
-        <td>{{t.artist}}</td><td>{{t.album}}</td><td>{{t.title}}</td><td>{{t.slskd_state}}</td><td>{{t.local_path or ''}}</td><td>{{t.slskd_error or ''}}</td>
-      </tr>
-    {% endfor %}
-  </table>
-</section>
+</div>
+
+<!-- Stats -->
+{% if stats.total > 0 %}
+<div class="stats-strip">
+  <div class="stat-chip"><strong>{{ stats.total }}</strong> total</div>
+  {% if stats.downloading > 0 %}<div class="stat-chip"><strong>{{ stats.downloading }}</strong> downloading</div>{% endif %}
+  {% if stats.pending > 0 %}<div class="stat-chip"><strong>{{ stats.pending }}</strong> pending</div>{% endif %}
+  {% if stats.completed > 0 %}<div class="stat-chip"><strong>{{ stats.completed }}</strong> done</div>{% endif %}
+  {% if stats.failed > 0 %}<div class="stat-chip"><strong>{{ stats.failed }}</strong> failed</div>{% endif %}
+</div>
+{% endif %}
+
+<!-- Queue -->
+{% if tracks %}
+<div class="card-list" id="queue">
+  {% for t in tracks %}
+  <div class="track-card">
+    {% if t.cover_url %}
+      <img class="cover" src="{{ t.cover_url }}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      <div class="cover-placeholder" style="display:none">🎵</div>
+    {% else %}
+      <div class="cover-placeholder">🎵</div>
+    {% endif %}
+    <div class="track-info">
+      <div class="track-title">{{ t.title or '—' }}</div>
+      <div class="track-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
+      {% if t.slskd_error %}
+      <div class="track-sub" style="color:#e05050;margin-top:3px" title="{{ t.slskd_error }}">
+        {{ t.slskd_error[:60] }}{% if t.slskd_error|length > 60 %}…{% endif %}
+      </div>
+      {% endif %}
+      {% if t.local_path %}
+      <div class="track-sub" style="color:#40cc70;margin-top:3px" title="{{ t.local_path }}">
+        ✓ {{ t.local_path.split('/')[-1] }}
+      </div>
+      {% endif %}
+    </div>
+    <span class="badge badge-{{ t.slskd_state or 'pending' }}">{{ (t.slskd_state or 'pending').replace('slskd_', '') }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <div class="empty-icon">📭</div>
+  <p>No tracks in queue yet.<br>Search for music or paste a playlist URL above.</p>
+</div>
+{% endif %}
+
+<script>
+// Auto-refresh queue every 15 s if any tracks are active
+(function() {
+  const active = {{ 'true' if (stats.pending + stats.downloading) > 0 else 'false' }};
+  if (active) {
+    setTimeout(() => location.reload(), 15000);
+  }
+})();
+</script>
 {% endblock %}

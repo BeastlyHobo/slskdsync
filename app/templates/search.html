@@ -1,0 +1,131 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="search-wrap">
+  <div class="search-inner">
+    <input
+      id="q"
+      class="search-input"
+      type="search"
+      placeholder="Search for artist, album, or track…"
+      autocomplete="off"
+      autofocus
+    >
+    <button class="search-clear" id="clear-btn" title="Clear">✕</button>
+  </div>
+</div>
+
+<div id="results-area">
+  <div class="empty-state">
+    <div class="empty-icon">🎵</div>
+    <p>Search to discover music, then<br>download via Soulseek or TIDAL</p>
+  </div>
+</div>
+
+<script>
+const input = document.getElementById('q');
+const clearBtn = document.getElementById('clear-btn');
+const area = document.getElementById('results-area');
+let debounce = null;
+
+input.addEventListener('input', () => {
+  clearBtn.classList.toggle('visible', input.value.length > 0);
+  clearTimeout(debounce);
+  const q = input.value.trim();
+  if (!q) {
+    area.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>Search to discover music</p></div>';
+    return;
+  }
+  if (q.length < 2) return;
+  debounce = setTimeout(() => doSearch(q), 350);
+});
+
+clearBtn.addEventListener('click', () => {
+  input.value = '';
+  clearBtn.classList.remove('visible');
+  area.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>Search to discover music</p></div>';
+  input.focus();
+});
+
+function fmtDur(s) {
+  if (!s) return '';
+  const m = Math.floor(s / 60), sec = s % 60;
+  return `${m}:${String(sec).padStart(2,'0')}`;
+}
+
+function doSearch(q) {
+  area.innerHTML = '<div class="loading"><span class="spinner"></span>Searching…</div>';
+  fetch('/api/search?q=' + encodeURIComponent(q))
+    .then(r => r.json())
+    .then(data => renderResults(data, q))
+    .catch(() => { area.innerHTML = '<div class="loading">Search failed. Try again.</div>'; });
+}
+
+function renderResults(items, q) {
+  if (!items || !items.length) {
+    area.innerHTML = '<div class="empty-state"><div class="empty-icon">🔇</div><p>No results for "' + escHtml(q) + '"</p></div>';
+    return;
+  }
+  const html = items.map(item => `
+    <div class="track-card">
+      ${item.cover
+        ? `<img class="cover" src="${escHtml(item.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+        : ''}
+      <div class="cover-placeholder" style="${item.cover ? 'display:none' : ''}">🎵</div>
+      <div class="track-info">
+        <div class="track-title">${escHtml(item.title)}</div>
+        <div class="track-sub">${escHtml(item.artist)}${item.album ? ' · ' + escHtml(item.album) : ''}</div>
+      </div>
+      ${item.duration ? `<span class="track-dur">${fmtDur(item.duration)}</span>` : ''}
+      <div class="dl-btns">
+        <button class="btn btn-slsk"
+          onclick="queueDownload(this, ${JSON.stringify(item)}, 'slskd')"
+          title="Download via Soulseek">Soulseek</button>
+        <button class="btn btn-mono"
+          onclick="queueDownload(this, ${JSON.stringify(item)}, 'monochrome')"
+          title="Download via TIDAL/Monochrome">TIDAL</button>
+      </div>
+    </div>
+  `).join('');
+  area.innerHTML = '<div class="card-list">' + html + '</div>';
+}
+
+function queueDownload(btn, item, source) {
+  btn.textContent = '…';
+  btn.disabled = true;
+  fetch('/api/download', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      artist: item.artist,
+      album: item.album,
+      title: item.title,
+      source_id: item.id,
+      cover: item.cover,
+      source: source,
+    }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.ok) {
+      btn.textContent = '✓';
+      btn.classList.add('btn-queued');
+      showToast('Queued: ' + item.title);
+    } else {
+      btn.textContent = '✗';
+      showToast('Error: ' + (data.error || 'Unknown error'), 3000);
+      setTimeout(() => { btn.textContent = source === 'slskd' ? 'Soulseek' : 'TIDAL'; btn.disabled = false; }, 2000);
+    }
+  })
+  .catch(() => {
+    btn.textContent = source === 'slskd' ? 'Soulseek' : 'TIDAL';
+    btn.disabled = false;
+    showToast('Network error', 3000);
+  });
+}
+
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}

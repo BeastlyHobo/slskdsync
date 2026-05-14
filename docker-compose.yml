@@ -1,6 +1,6 @@
 services:
   slskdsync:
-    image: ${SLSKDSYNC_IMAGE:-slskdsync:latest}
+    image: ${SLSKDSYNC_IMAGE:-ghcr.io/beastlyhobo/slskdsync:latest}
     pull_policy: always
     container_name: slskdsync
     ports:
