@@ -820,9 +820,13 @@ def _worker_tick():
         if not results:
             continue  # search still running
         logger.info(f"[slskd] {len(results)} results for '{meta.title}', selecting best")
-        scored = sorted(((slskd.score_result(r, meta), r) for r in results), reverse=True)
+        scored = sorted(
+            ((slskd.score_result(r, meta), i, r) for i, r in enumerate(results)),
+            key=lambda x: x[0],
+            reverse=True,
+        )
         if scored and scored[0][0] > 0:
-            best = scored[0][1]
+            best = scored[0][2]
             logger.info(f"[slskd] Downloading from {best['username']}: {best['filename']}")
             ok, msg = slskd.download_file(best["username"], best["filename"], best.get("size", 0))
             if ok:
