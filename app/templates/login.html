@@ -1,14 +1,31 @@
 <!doctype html>
-<html>
-<head><link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}"></head>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#18181c">
+  <title>slskdsync · Sign in</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
 <body>
-<main class="login">
-  <h2>Login</h2>
-  <form method="post">
-    <label>Username <input name="username" required></label>
-    <label>Password <input name="password" type="password" required></label>
-    <button type="submit">Sign in</button>
+<div class="login-wrap">
+  <div class="login-logo">slskdsync</div>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  <form method="post" action="/login">
+    <div class="field">
+      <label>Username</label>
+      <input name="username" type="text" autocomplete="username" autofocus>
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input name="password" type="password" autocomplete="current-password">
+    </div>
+    <button class="btn-full" type="submit">Sign in</button>
   </form>
-</main>
+</div>
 </body>
 </html>

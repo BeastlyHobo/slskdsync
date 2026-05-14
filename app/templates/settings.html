@@ -1,12 +1,88 @@
 {% extends 'base.html' %}
 {% block content %}
-<h2>Settings</h2>
-<form method="post" class="settings-grid">
-  {% for key, value in settings.items() %}
-  <label>{{ key }}
-    <input name="{{key}}" value="{{value}}">
-  </label>
-  {% endfor %}
-  <button type="submit">Save</button>
+
+<form method="post">
+
+  <div class="settings-group">
+    <div class="settings-group-title">Library</div>
+    <div class="field">
+      <label>Library path (destination)</label>
+      <input name="library_path" value="{{ settings.library_path }}" placeholder="/music">
+    </div>
+    <div class="field">
+      <label>Download watch path (slskd downloads folder)</label>
+      <input name="download_watch_path" value="{{ settings.download_watch_path }}" placeholder="/downloads">
+    </div>
+    <div class="field">
+      <label>Folder template</label>
+      <input name="folder_template" value="{{ settings.folder_template }}" placeholder="{artist}/{album}/{track_number:02d} - {title}{ext}">
+    </div>
+    <div class="field">
+      <label>Quality preference</label>
+      <select name="quality">
+        {% for opt in ['lossless', 'high', 'normal', 'low'] %}
+        <option value="{{ opt }}" {{ 'selected' if settings.quality == opt else '' }}>{{ opt }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>On conflict</label>
+      <select name="replace_existing">
+        <option value="0" {{ 'selected' if settings.replace_existing == '0' else '' }}>Skip existing</option>
+        <option value="1" {{ 'selected' if settings.replace_existing == '1' else '' }}>Overwrite existing</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-group-title">Soulseek (slskd)</div>
+    <div class="field">
+      <label>slskd URL</label>
+      <input name="slskd_url" value="{{ settings.slskd_url }}" placeholder="http://slskd:5030">
+    </div>
+    <div class="field">
+      <label>Username (optional)</label>
+      <input name="slskd_user" value="{{ settings.slskd_user }}" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Password (optional)</label>
+      <input name="slskd_pass" type="password" value="{{ settings.slskd_pass }}" autocomplete="new-password">
+    </div>
+    <div class="field">
+      <label>API key (optional)</label>
+      <input name="slskd_api_key" value="{{ settings.slskd_api_key }}" autocomplete="off">
+    </div>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-group-title">Monochrome / TIDAL</div>
+    <div class="field">
+      <label>Monochrome API URL</label>
+      <input name="monochrome_url" value="{{ settings.monochrome_url }}" placeholder="https://api.monochrome.tf">
+    </div>
+    <p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.4rem;line-height:1.4">
+      Used for TIDAL URL import and direct TIDAL downloads. The default instance may be blocked by TIDAL —
+      see the <a href="https://github.com/monochrome-music/monochrome/blob/main/INSTANCES.md" target="_blank">community instances list</a> for alternatives.
+    </p>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-group-title">Navidrome (optional)</div>
+    <div class="field">
+      <label>Navidrome URL</label>
+      <input name="navidrome_url" value="{{ settings.navidrome_url }}" placeholder="http://navidrome:4533">
+    </div>
+    <div class="field">
+      <label>Username</label>
+      <input name="navidrome_user" value="{{ settings.navidrome_user }}" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input name="navidrome_pass" type="password" value="{{ settings.navidrome_pass }}" autocomplete="new-password">
+    </div>
+  </div>
+
+  <button class="btn-full" type="submit">Save settings</button>
+
 </form>
 {% endblock %}
