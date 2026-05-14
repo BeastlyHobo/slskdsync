@@ -51,8 +51,8 @@
 .chevron { margin-left:auto; color:var(--text-muted); font-size:1rem; flex-shrink:0; }
 
 /* Album cards (grid) */
-.album-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.5rem; }
-@media(min-width:500px){ .album-grid { grid-template-columns:repeat(4,1fr); } }
+.album-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:.75rem; }
+@media(min-width:600px){ .album-grid { grid-template-columns:repeat(3,1fr); } }
 .album-card { background:var(--surface); border-radius:var(--radius-sm);
               padding:.65rem; cursor:pointer; transition:background .12s; }
 .album-card:hover { background:var(--surface2); }
@@ -96,6 +96,21 @@ let debounce = null;
 // navigation stack: [{type:'search'|'artist'|'album', id, name, restore}]
 let navStack = [];
 
+// Restore last search on page load
+(function() {
+  const q = sessionStorage.getItem('ss_query');
+  const tab = sessionStorage.getItem('ss_tab');
+  if (q) {
+    input.value = q;
+    clearBtn.classList.add('visible');
+    if (tab) {
+      activeTab = tab;
+      tabBar.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    }
+    triggerSearch(q);
+  }
+})();
+
 // ── Tabs ──────────────────────────────────────────────────────────────────
 tabBar.addEventListener('click', e => {
   const btn = e.target.closest('.tab');
@@ -103,6 +118,7 @@ tabBar.addEventListener('click', e => {
   tabBar.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
   activeTab = btn.dataset.tab;
+  sessionStorage.setItem('ss_tab', activeTab);
   navStack = [];
   renderBreadcrumb();
   const q = input.value.trim();
@@ -129,12 +145,16 @@ clearBtn.addEventListener('click', () => {
 });
 
 function reset() {
+  sessionStorage.removeItem('ss_query');
+  sessionStorage.removeItem('ss_tab');
   navStack = [];
   renderBreadcrumb();
   area.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>Search to discover music</p></div>';
 }
 
 function triggerSearch(q) {
+  sessionStorage.setItem('ss_query', q);
+  sessionStorage.setItem('ss_tab', activeTab);
   area.innerHTML = '<div class="loading"><span class="spinner"></span>Searching…</div>';
   fetch(`/api/search?q=${encodeURIComponent(q)}&type=${activeTab}`)
     .then(r => r.json())
@@ -404,20 +424,18 @@ function queueDl(btn, item, source) {
 }
 
 function queueAll(tracks, source) {
-  showToast(`Queueing ${tracks.length} tracks via ${source === 'slskd' ? 'Soulseek' : 'TIDAL'}…`);
-  let i = 0;
-  function next() {
-    if (i >= tracks.length) { showToast(`All ${tracks.length} tracks queued ✓`); return; }
-    const t = tracks[i++];
-    fetch('/api/download', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ artist: t.artist, album: t.album, title: t.title, cover: t.cover, source }),
-    })
-    .then(() => setTimeout(next, 150))
-    .catch(() => setTimeout(next, 300));
-  }
-  next();
+  showToast(`Queueing ${tracks.length} tracks…`);
+  fetch('/api/download/album', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ tracks, source }),
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.ok) showToast(`Queued ${d.count} tracks via ${source === 'slskd' ? 'Soulseek' : 'TIDAL'} ✓`);
+    else showToast('Error: ' + (d.error || 'Unknown'), 3500);
+  })
+  .catch(() => showToast('Network error', 3000));
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────

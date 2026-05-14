@@ -444,7 +444,7 @@ class DeezerProvider:
 
     def get_album(self, album_id: str) -> dict:
         album = self._get(f"/album/{album_id}")
-        tracks_data = self._get(f"/album/{album_id}/tracks")
+        tracks_data = self._get(f"/album/{album_id}/tracks", limit=100)
         album_artist = album.get("artist", {}).get("name", "")
         return {
             "id": str(album_id),
@@ -702,7 +702,8 @@ class SlskdClient:
 
     def score_result(self, result: dict, track: TrackMeta) -> int:
         fn_l = result.get("filename", "").lower()
-        ext = fn_l.rsplit(".", 1)[-1] if "." in fn_l else ""
+        basename_l = fn_l.replace("\\", "/").rsplit("/", 1)[-1]
+        ext = basename_l.rsplit(".", 1)[-1] if "." in basename_l else ""
         if ext not in {"flac", "mp3", "m4a", "ogg", "aac", "wav", "aif", "aiff", "opus", "wma"}:
             return -100
         score = {"flac": 100, "wav": 80, "aif": 80, "aiff": 80, "m4a": 65, "ogg": 55, "opus": 55}.get(ext, 0)
@@ -711,7 +712,7 @@ class SlskdClient:
             score = 60 if br >= 320 else 50 if br >= 256 else 40 if br >= 192 else 30
         title_l = (track.title or "").lower()
         artist_l = (track.artist or "").lower().split(",")[0].strip()
-        if title_l and title_l in fn_l:
+        if title_l and title_l in basename_l:
             score += 30
         if artist_l and artist_l in fn_l:
             score += 20
@@ -778,7 +779,7 @@ class Organizer:
 def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
     watch = Path(get_setting("download_watch_path"))
     if not watch.exists():
-        logger.debug(f"[discover] Watch path does not exist: {watch}")
+        logger.warning(f"[discover] Watch path does not exist: {watch}")
         return None
     title = (track["title"] or "").lower().strip()
     artist = (track["artist"] or "").lower().split(",")[0].strip()
@@ -891,7 +892,7 @@ def _worker_tick():
                          (result, t["id"]))
             conn.commit()
         else:
-            logger.debug(f"[slskd] Still waiting for '{t['title']}' to appear in {get_setting('download_watch_path')}")
+            logger.info(f"[slskd] Still waiting for '{t['title']}' to appear in {get_setting('download_watch_path')}")
 
     # pending monochrome → lookup TIDAL ID if needed, then download with fallback instances
     mc = MonochromeClient()
@@ -1227,6 +1228,40 @@ def api_tracks():
     rows = [dict(r) for r in conn.execute("SELECT * FROM tracks ORDER BY id DESC LIMIT 100").fetchall()]
     conn.close()
     return jsonify(rows)
+
+
+@app.route("/api/download/album", methods=["POST"])
+def api_download_album():
+    data = request.get_json() or {}
+    tracks = data.get("tracks", [])
+    source = data.get("source", "slskd")
+    if not tracks:
+        return jsonify({"ok": False, "error": "no tracks"}), 400
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
+        ("search", "album", "", 0, "queued"),
+    )
+    job_id = cur.lastrowid
+    count = 0
+    for t in tracks:
+        title = (t.get("title") or "").strip()
+        artist = (t.get("artist") or "").strip()
+        if not title or not artist:
+            continue
+        source_id = "" if source == "monochrome" else (t.get("source_id") or "").strip()
+        cur.execute(
+            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (job_id, artist, t.get("album", ""), title,
+             t.get("track_number", 0), source_id, t.get("cover", ""), source),
+        )
+        count += 1
+    conn.commit()
+    conn.close()
+    logger.info(f"[queue] Batch queued {count} tracks via {source}")
+    return jsonify({"ok": True, "count": count, "message": f"Queued {count} tracks via {source}"})
 
 
 @app.route("/api/download", methods=["POST"])
