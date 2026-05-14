@@ -1,11 +1,10 @@
 import os
 import re
-import json
 import sqlite3
 import threading
 import time
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -70,12 +69,11 @@ def init_db():
     """)
     # Migrate existing databases
     existing_cols = {row[1] for row in cur.execute("PRAGMA table_info(tracks)")}
-    migrations = [
+    for col, ddl in [
         ("cover_url", "TEXT"),
         ("download_source", "TEXT DEFAULT 'slskd'"),
         ("slskd_search_id", "TEXT"),
-    ]
-    for col, ddl in migrations:
+    ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
 
@@ -93,6 +91,9 @@ def init_db():
         "replace_existing": "0",
         "folder_template": "{artist}/{album}/{track_number:02d} - {title}{ext}",
         "download_watch_path": "/downloads",
+        # auth stored in DB (empty = not configured yet → first-run setup)
+        "app_username": "",
+        "app_password_hash": "",
     }
     for k, v in defaults.items():
         cur.execute("INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)", (k, v))
@@ -117,6 +118,28 @@ def set_setting(key: str, value: str):
     conn.close()
 
 
+def is_first_run() -> bool:
+    """True when no password has been configured in DB and no env override is present."""
+    if get_setting("app_password_hash"):
+        return False
+    if os.getenv("APP_PASSWORD_HASH"):
+        return False
+    pw = os.getenv("APP_PASSWORD", "admin")
+    # "admin" unchanged from default → still needs setup
+    return pw == "admin"
+
+
+def get_auth_credentials() -> tuple[str, str]:
+    """Return (username, password_hash) from DB if set, else from env."""
+    db_hash = get_setting("app_password_hash")
+    db_user = get_setting("app_username")
+    if db_hash and db_user:
+        return db_user, db_hash
+    env_hash = os.getenv("APP_PASSWORD_HASH") or generate_password_hash(os.getenv("APP_PASSWORD", "admin"))
+    env_user = os.getenv("APP_USER", "admin")
+    return env_user, env_hash
+
+
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
@@ -132,7 +155,7 @@ class TrackMeta:
 
 
 # ---------------------------------------------------------------------------
-# Music source providers (for URL import)
+# Music source providers (URL import)
 # ---------------------------------------------------------------------------
 
 class SpotifyProvider:
@@ -154,7 +177,7 @@ class SpotifyProvider:
 
     def parse(self, url: str) -> tuple[str, list[TrackMeta]]:
         if not self.client:
-            raise RuntimeError("Spotify credentials missing. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET.")
+            raise RuntimeError("Spotify credentials missing — set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET.")
 
         if "/playlist/" in url:
             pid = url.split("/playlist/")[1].split("?")[0]
@@ -249,16 +272,15 @@ class TidalProvider:
             tid = m.group(1)
             r = requests.get(f"{base}/info/{tid}", timeout=15)
             if r.status_code != 200:
-                raise RuntimeError(f"Monochrome API error {r.status_code} — is the monochrome URL configured?")
+                raise RuntimeError(f"Monochrome API error {r.status_code} — is the Monochrome URL configured correctly?")
             d = r.json()
-            cover = _tidal_cover_url(d.get("album", {}).get("cover", ""))
             return "track", [TrackMeta(
                 artist=(d.get("artist") or {}).get("name", "Unknown Artist"),
                 album=(d.get("album") or {}).get("title", "Unknown Album"),
                 title=d.get("title", "Unknown Title"),
                 track_number=d.get("trackNumber", 0),
                 source_id=tid,
-                cover_url=cover,
+                cover_url=_tidal_cover_url(d.get("album", {}).get("cover", "")),
             )]
 
         if "/album/" in url:
@@ -270,8 +292,7 @@ class TidalProvider:
             album_r = requests.get(f"{base}/album/{aid}", timeout=15)
             if tracks_r.status_code != 200:
                 raise RuntimeError(f"Monochrome API error {tracks_r.status_code}")
-            td = tracks_r.json()
-            ad = album_r.json() if album_r.status_code == 200 else {}
+            td, ad = tracks_r.json(), album_r.json() if album_r.ok else {}
             album_name = ad.get("title", "Unknown Album")
             cover = _tidal_cover_url(ad.get("cover", ""))
             tracks = []
@@ -294,9 +315,8 @@ class TidalProvider:
             r = requests.get(f"{base}/playlist/{pid}/tracks", timeout=15)
             if r.status_code != 200:
                 raise RuntimeError(f"Monochrome API error {r.status_code}")
-            d = r.json()
             tracks = []
-            for t in d.get("items", []):
+            for t in r.json().get("items", []):
                 cover = _tidal_cover_url((t.get("album") or {}).get("cover", ""))
                 tracks.append(TrackMeta(
                     artist=(t.get("artist") or {}).get("name", "Unknown Artist"),
@@ -308,7 +328,7 @@ class TidalProvider:
                 ))
             return "playlist", tracks
 
-        raise RuntimeError("Unsupported TIDAL URL type (track, album, or playlist links supported)")
+        raise RuntimeError("Unsupported TIDAL URL — paste a /track/, /album/, or /playlist/ link")
 
 
 def _tidal_cover_url(cover_id: str) -> str:
@@ -322,46 +342,109 @@ def _tidal_cover_url(cover_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 class DeezerProvider:
-    def search(self, query: str, limit: int = 25) -> list[dict]:
+    def _get(self, path: str, **params) -> dict:
+        r = requests.get(f"https://api.deezer.com{path}", params=params, timeout=12)
+        r.raise_for_status()
+        return r.json()
+
+    def search_tracks(self, query: str, limit: int = 25) -> list[dict]:
         try:
-            r = requests.get(
-                "https://api.deezer.com/search",
-                params={"q": query, "limit": limit},
-                timeout=12,
-            )
-            r.raise_for_status()
-            results = []
-            for item in r.json().get("data", []):
-                results.append({
-                    "id": str(item.get("id", "")),
-                    "title": item.get("title", ""),
-                    "artist": item.get("artist", {}).get("name", ""),
-                    "album": item.get("album", {}).get("title", ""),
-                    "cover": item.get("album", {}).get("cover_medium", ""),
-                    "duration": item.get("duration", 0),
-                    "source": "deezer",
-                })
-            return results
+            data = self._get("/search", q=query, limit=limit)
+            return [
+                {
+                    "id": str(i.get("id", "")),
+                    "title": i.get("title", ""),
+                    "artist": i.get("artist", {}).get("name", ""),
+                    "artist_id": str(i.get("artist", {}).get("id", "")),
+                    "album": i.get("album", {}).get("title", ""),
+                    "album_id": str(i.get("album", {}).get("id", "")),
+                    "cover": i.get("album", {}).get("cover_medium", ""),
+                    "duration": i.get("duration", 0),
+                    "type": "track",
+                }
+                for i in data.get("data", [])
+            ]
         except Exception:
             return []
 
-    def get_album_tracks(self, album_id: str) -> tuple[str, list[TrackMeta]]:
-        album_r = requests.get(f"https://api.deezer.com/album/{album_id}", timeout=12).json()
-        album_name = album_r.get("title", "Unknown Album")
-        cover = album_r.get("cover_medium", "")
-        tracks_r = requests.get(f"https://api.deezer.com/album/{album_id}/tracks", timeout=12).json()
-        tracks = []
-        for i, t in enumerate(tracks_r.get("data", []), 1):
-            artist = (t.get("artist") or album_r.get("artist") or {}).get("name", "Unknown Artist")
-            tracks.append(TrackMeta(
-                artist=artist,
-                album=album_name,
-                title=t.get("title", ""),
-                track_number=t.get("track_position", i),
-                source_id=str(t.get("id", "")),
-                cover_url=cover,
-            ))
-        return album_name, tracks
+    def search_artists(self, query: str, limit: int = 20) -> list[dict]:
+        try:
+            data = self._get("/search/artist", q=query, limit=limit)
+            return [
+                {
+                    "id": str(i.get("id", "")),
+                    "name": i.get("name", ""),
+                    "picture": i.get("picture_medium", ""),
+                    "nb_album": i.get("nb_album", 0),
+                    "type": "artist",
+                }
+                for i in data.get("data", [])
+            ]
+        except Exception:
+            return []
+
+    def search_albums(self, query: str, limit: int = 20) -> list[dict]:
+        try:
+            data = self._get("/search/album", q=query, limit=limit)
+            return [
+                {
+                    "id": str(i.get("id", "")),
+                    "title": i.get("title", ""),
+                    "artist": i.get("artist", {}).get("name", ""),
+                    "artist_id": str(i.get("artist", {}).get("id", "")),
+                    "cover": i.get("cover_medium", ""),
+                    "nb_tracks": i.get("nb_tracks", 0),
+                    "type": "album",
+                }
+                for i in data.get("data", [])
+            ]
+        except Exception:
+            return []
+
+    def get_artist(self, artist_id: str) -> dict:
+        artist = self._get(f"/artist/{artist_id}")
+        albums_data = self._get(f"/artist/{artist_id}/albums", limit=50)
+        return {
+            "id": str(artist_id),
+            "name": artist.get("name", ""),
+            "picture": artist.get("picture_medium", ""),
+            "nb_fan": artist.get("nb_fan", 0),
+            "albums": [
+                {
+                    "id": str(a.get("id", "")),
+                    "title": a.get("title", ""),
+                    "cover": a.get("cover_medium", ""),
+                    "release_date": a.get("release_date", ""),
+                    "nb_tracks": a.get("nb_tracks", 0),
+                    "type": "album",
+                }
+                for a in albums_data.get("data", [])
+            ],
+        }
+
+    def get_album(self, album_id: str) -> dict:
+        album = self._get(f"/album/{album_id}")
+        tracks_data = self._get(f"/album/{album_id}/tracks")
+        album_artist = album.get("artist", {}).get("name", "")
+        return {
+            "id": str(album_id),
+            "title": album.get("title", ""),
+            "artist": album_artist,
+            "artist_id": str(album.get("artist", {}).get("id", "")),
+            "cover": album.get("cover_medium", ""),
+            "release_date": album.get("release_date", ""),
+            "tracks": [
+                {
+                    "id": str(t.get("id", "")),
+                    "title": t.get("title", ""),
+                    "artist": (t.get("artist") or {}).get("name", "") or album_artist,
+                    "duration": t.get("duration", 0),
+                    "track_position": t.get("track_position", 0),
+                    "type": "track",
+                }
+                for t in tracks_data.get("data", [])
+            ],
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -372,50 +455,26 @@ class MonochromeClient:
     def __init__(self):
         self.base = (get_setting("monochrome_url") or "https://api.monochrome.tf").rstrip("/")
 
-    def search(self, query: str, limit: int = 20) -> list[dict]:
-        try:
-            r = requests.get(
-                f"{self.base}/search/",
-                params={"s": query, "limit": limit},
-                timeout=12,
-            )
-            r.raise_for_status()
-            results = []
-            for item in (r.json().get("tracks") or {}).get("items", []):
-                cover = _tidal_cover_url((item.get("album") or {}).get("cover", ""))
-                results.append({
-                    "id": str(item.get("id", "")),
-                    "title": item.get("title", ""),
-                    "artist": (item.get("artist") or {}).get("name", ""),
-                    "album": (item.get("album") or {}).get("title", ""),
-                    "cover": cover,
-                    "duration": item.get("duration", 0),
-                    "source": "tidal",
-                })
-            return results
-        except Exception:
-            return []
-
     def find_tidal_id(self, artist: str, title: str) -> Optional[str]:
-        results = self.search(f"{artist} {title}", limit=5)
-        if not results:
+        try:
+            r = requests.get(f"{self.base}/search/", params={"s": f"{artist} {title}", "limit": 5}, timeout=12)
+            r.raise_for_status()
+            items = (r.json().get("tracks") or {}).get("items", [])
+            if not items:
+                return None
+            title_l, artist_l = title.lower(), artist.lower().split(",")[0].strip()
+            for item in items:
+                if title_l in item.get("title", "").lower() and artist_l in (item.get("artist") or {}).get("name", "").lower():
+                    return str(item["id"])
+            return str(items[0]["id"])
+        except Exception:
             return None
-        title_l = title.lower()
-        artist_l = artist.lower().split(",")[0].strip()
-        for r in results:
-            if title_l in r["title"].lower() and artist_l in r["artist"].lower():
-                return r["id"]
-        return results[0]["id"] if results else None
 
     def download_track(self, tidal_id: str, artist: str, title: str) -> tuple[bool, str]:
         quality_map = {"lossless": "LOSSLESS", "high": "HIGH", "normal": "HIGH", "low": "LOW"}
         quality = quality_map.get(get_setting("quality"), "LOSSLESS")
         try:
-            r = requests.get(
-                f"{self.base}/track/{tidal_id}",
-                params={"quality": quality},
-                timeout=30,
-            )
+            r = requests.get(f"{self.base}/track/{tidal_id}", params={"quality": quality}, timeout=30)
             if r.status_code != 200:
                 return False, f"Monochrome API returned {r.status_code}"
             data = r.json()
@@ -459,8 +518,28 @@ class SlskdClient:
     def _auth(self):
         return (self.user, self.password) if self.user else None
 
+    def ping(self) -> tuple[bool, str]:
+        for ep in ["/api/v0/application", "/api/v1/application"]:
+            try:
+                r = requests.get(f"{self.base}{ep}", headers=self._headers(), auth=self._auth(), timeout=8)
+                if r.status_code < 300:
+                    d = r.json()
+                    ver = d.get("version") or d.get("server", {}).get("version", "")
+                    return True, f"Connected — slskd {ver}".strip(" —")
+            except Exception:
+                pass
+        # Try a basic GET to the root as fallback
+        try:
+            r = requests.get(self.base, timeout=8)
+            if r.status_code < 500:
+                return True, "Connected (version unknown)"
+        except Exception as ex:
+            return False, str(ex)
+        return False, "Could not connect to slskd"
+
     def start_search(self, track: TrackMeta) -> tuple[bool, str, str]:
         query = f"{track.artist} {track.title}"
+        last_err = "Could not reach slskd"
         for ep in ["/api/v0/searches", "/api/v1/searches"]:
             try:
                 r = requests.post(
@@ -472,28 +551,21 @@ class SlskdClient:
                 )
                 if r.status_code < 300:
                     return True, str(r.json().get("id", "")), "search started"
+                last_err = f"HTTP {r.status_code}"
             except Exception as ex:
                 last_err = str(ex)
-        return False, "", locals().get("last_err", "Could not reach slskd")
+        return False, "", last_err
 
     def get_search_results(self, search_id: str) -> list[dict]:
         if not search_id:
             return []
         try:
-            r = requests.get(
-                f"{self.base}/api/v0/searches/{search_id}",
-                headers=self._headers(),
-                auth=self._auth(),
-                timeout=15,
-            )
+            r = requests.get(f"{self.base}/api/v0/searches/{search_id}",
+                             headers=self._headers(), auth=self._auth(), timeout=15)
             if r.status_code != 200 or not r.json().get("isComplete"):
                 return []
-            r2 = requests.get(
-                f"{self.base}/api/v0/searches/{search_id}/files",
-                headers=self._headers(),
-                auth=self._auth(),
-                timeout=15,
-            )
+            r2 = requests.get(f"{self.base}/api/v0/searches/{search_id}/files",
+                              headers=self._headers(), auth=self._auth(), timeout=15)
             if r2.status_code != 200:
                 return []
             flat = []
@@ -513,25 +585,14 @@ class SlskdClient:
             return []
 
     def score_result(self, result: dict, track: TrackMeta) -> int:
-        fn = result.get("filename", "")
-        fn_l = fn.lower()
+        fn_l = result.get("filename", "").lower()
         ext = fn_l.rsplit(".", 1)[-1] if "." in fn_l else ""
         if ext not in {"flac", "mp3", "m4a", "ogg", "aac", "wav", "aif", "aiff", "opus", "wma"}:
             return -100
-
-        score = 0
-        if ext == "flac":
-            score += 100
-        elif ext in ("wav", "aif", "aiff"):
-            score += 80
-        elif ext == "m4a":
-            score += 65
-        elif ext == "mp3":
+        score = {"flac": 100, "wav": 80, "aif": 80, "aiff": 80, "m4a": 65, "ogg": 55, "opus": 55}.get(ext, 0)
+        if ext == "mp3":
             br = result.get("bitRate", 0)
-            score += 60 if br >= 320 else 50 if br >= 256 else 40 if br >= 192 else 30
-        elif ext in ("ogg", "opus"):
-            score += 55
-
+            score = 60 if br >= 320 else 50 if br >= 256 else 40 if br >= 192 else 30
         title_l = (track.title or "").lower()
         artist_l = (track.artist or "").lower().split(",")[0].strip()
         if title_l and title_l in fn_l:
@@ -567,13 +628,12 @@ class Organizer:
     def target_path(track: sqlite3.Row, src_path: Path) -> Path:
         library = Path(get_setting("library_path"))
         tmpl = get_setting("folder_template")
-        ext = src_path.suffix
         rel = tmpl.format(
             artist=(track["artist"] or "Unknown Artist").strip().replace("/", "-"),
             album=(track["album"] or "Unknown Album").strip().replace("/", "-"),
             track_number=track["track_number"] or 0,
             title=(track["title"] or src_path.stem).strip().replace("/", "-"),
-            ext=ext,
+            ext=src_path.suffix,
         )
         return library / rel
 
@@ -620,7 +680,8 @@ def _worker_tick():
 
     # pending slskd → start search
     for t in conn.execute(
-        "SELECT * FROM tracks WHERE slskd_state='pending' AND (download_source='slskd' OR download_source IS NULL) LIMIT 10"
+        "SELECT * FROM tracks WHERE slskd_state='pending'"
+        " AND (download_source='slskd' OR download_source IS NULL) LIMIT 10"
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
                          t["track_number"] or 0, t["source_id"] or "")
@@ -633,11 +694,11 @@ def _worker_tick():
         else:
             conn.execute(
                 "UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
-                (msg, t["id"]),
+                (f"slskd: {msg}", t["id"]),
             )
         conn.commit()
 
-    # queued slskd → poll results, auto-download best match
+    # queued slskd → poll results, auto-download best
     for t in conn.execute(
         "SELECT * FROM tracks WHERE slskd_state='queued' AND slskd_search_id IS NOT NULL LIMIT 10"
     ).fetchall():
@@ -645,7 +706,7 @@ def _worker_tick():
                          t["track_number"] or 0, t["source_id"] or "")
         results = slskd.get_search_results(t["slskd_search_id"])
         if not results:
-            continue  # search not done yet
+            continue  # search still running
         scored = sorted(((slskd.score_result(r, meta), r) for r in results), reverse=True)
         if scored and scored[0][0] > 0:
             best = scored[0][1]
@@ -653,10 +714,11 @@ def _worker_tick():
             if ok:
                 conn.execute("UPDATE tracks SET slskd_state='downloading' WHERE id=?", (t["id"],))
             else:
-                conn.execute("UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?", (msg, t["id"]))
+                conn.execute("UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
+                             (f"Download failed: {msg}", t["id"]))
         else:
             conn.execute(
-                "UPDATE tracks SET slskd_state='failed', slskd_error='No usable files in search results' WHERE id=?",
+                "UPDATE tracks SET slskd_state='failed', slskd_error='No usable files found in search results' WHERE id=?",
                 (t["id"],),
             )
         conn.commit()
@@ -670,9 +732,11 @@ def _worker_tick():
             target = Organizer.target_path(t, candidate)
             ok, result = Organizer.move_file(candidate, target)
             if ok:
-                conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?", (result, t["id"]))
+                conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?",
+                             (result, t["id"]))
             else:
-                conn.execute("UPDATE tracks SET slskd_state='completed', slskd_error=? WHERE id=?", (result, t["id"]))
+                conn.execute("UPDATE tracks SET slskd_state='completed', slskd_error=? WHERE id=?",
+                             (result, t["id"]))
             conn.commit()
 
     # pending monochrome → lookup TIDAL ID if needed, then download
@@ -688,7 +752,8 @@ def _worker_tick():
                 conn.commit()
             else:
                 conn.execute(
-                    "UPDATE tracks SET slskd_state='failed', slskd_error='Track not found on TIDAL via Monochrome' WHERE id=?",
+                    "UPDATE tracks SET slskd_state='failed',"
+                    " slskd_error='Track not found on TIDAL via Monochrome' WHERE id=?",
                     (t["id"],),
                 )
                 conn.commit()
@@ -735,34 +800,54 @@ def is_authed() -> bool:
     return session.get("authed") is True
 
 
+UNPROTECTED = {"/login", "/setup", "/sw.js", "/manifest.json"}
+
+
 @app.before_request
-def require_login():
-    if request.path.startswith("/static") or request.path in ["/login", "/sw.js", "/manifest.json"]:
+def gate():
+    if request.path.startswith("/static") or request.path in UNPROTECTED:
         return
+    # First-run: redirect to setup before login is even possible
+    if is_first_run() and request.path != "/setup":
+        return redirect(url_for("setup"))
     if not is_authed():
         return redirect(url_for("login"))
 
 
-@app.route("/sw.js")
-def service_worker():
-    return send_from_directory(app.static_folder, "sw.js", mimetype="application/javascript")
-
-
-@app.route("/manifest.json")
-def manifest():
-    return send_from_directory(app.static_folder, "manifest.json", mimetype="application/manifest+json")
-
-
 # ---------------------------------------------------------------------------
-# Auth
+# Auth & setup
 # ---------------------------------------------------------------------------
+
+@app.route("/setup", methods=["GET", "POST"])
+def setup():
+    # If already configured, only allow access when logged in
+    if not is_first_run() and not is_authed():
+        return redirect(url_for("login"))
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        confirm = request.form.get("confirm", "")
+        if not username:
+            flash("Username is required", "error")
+        elif len(password) < 6:
+            flash("Password must be at least 6 characters", "error")
+        elif password != confirm:
+            flash("Passwords do not match", "error")
+        else:
+            set_setting("app_username", username)
+            set_setting("app_password_hash", generate_password_hash(password))
+            flash("Password set — please sign in", "ok")
+            return redirect(url_for("login"))
+    return render_template("setup.html")
+
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    default_user = os.getenv("APP_USER", "admin")
-    pw_hash = os.getenv("APP_PASSWORD_HASH") or generate_password_hash(os.getenv("APP_PASSWORD", "admin"))
+    if is_first_run():
+        return redirect(url_for("setup"))
+    username, pw_hash = get_auth_credentials()
     if request.method == "POST":
-        if (request.form.get("username") == default_user
+        if (request.form.get("username") == username
                 and check_password_hash(pw_hash, request.form.get("password", ""))):
             session["authed"] = True
             return redirect(url_for("search"))
@@ -774,6 +859,20 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+# ---------------------------------------------------------------------------
+# Static PWA files
+# ---------------------------------------------------------------------------
+
+@app.route("/sw.js")
+def service_worker():
+    return send_from_directory(app.static_folder, "sw.js", mimetype="application/javascript")
+
+
+@app.route("/manifest.json")
+def manifest():
+    return send_from_directory(app.static_folder, "manifest.json", mimetype="application/manifest+json")
 
 
 # ---------------------------------------------------------------------------
@@ -789,10 +888,10 @@ def index():
     for t in tracks:
         s = t["slskd_state"] or "pending"
         stats["total"] += 1
-        if s in stats:
-            stats[s] += 1
-        elif s in ("queued",):
+        if s in ("pending", "queued"):
             stats["pending"] += 1
+        elif s in stats:
+            stats[s] += 1
     return render_template("index.html", tracks=tracks, stats=stats)
 
 
@@ -809,26 +908,103 @@ def settings():
         "monochrome_url",
         "navidrome_url", "navidrome_user", "navidrome_pass",
         "quality", "replace_existing",
+        "app_username", "app_password_hash",
     ]
     if request.method == "POST":
         for k in keys:
-            set_setting(k, request.form.get(k, ""))
+            if k == "app_password_hash":
+                # Only update password if a new one was typed
+                new_pw = request.form.get("new_password", "").strip()
+                if new_pw:
+                    if len(new_pw) < 6:
+                        flash("Password must be at least 6 characters", "error")
+                        return redirect(url_for("settings"))
+                    set_setting("app_password_hash", generate_password_hash(new_pw))
+            else:
+                set_setting(k, request.form.get(k, ""))
         flash("Settings saved", "ok")
         return redirect(url_for("settings"))
     return render_template("settings.html", settings={k: get_setting(k) for k in keys})
 
 
 # ---------------------------------------------------------------------------
-# API
+# Search API
 # ---------------------------------------------------------------------------
 
 @app.route("/api/search")
 def api_search():
     q = request.args.get("q", "").strip()
+    kind = request.args.get("type", "track")
     if not q:
         return jsonify([])
-    return jsonify(_deezer.search(q))
+    if kind == "artist":
+        return jsonify(_deezer.search_artists(q))
+    if kind == "album":
+        return jsonify(_deezer.search_albums(q))
+    return jsonify(_deezer.search_tracks(q))
 
+
+@app.route("/api/artist/<artist_id>")
+def api_artist(artist_id):
+    try:
+        return jsonify(_deezer.get_artist(artist_id))
+    except Exception as ex:
+        return jsonify({"error": str(ex)}), 500
+
+
+@app.route("/api/album/<album_id>")
+def api_album(album_id):
+    try:
+        return jsonify(_deezer.get_album(album_id))
+    except Exception as ex:
+        return jsonify({"error": str(ex)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Connection tests
+# ---------------------------------------------------------------------------
+
+@app.route("/api/test/slskd")
+def test_slskd():
+    ok, msg = SlskdClient().ping()
+    return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/test/monochrome")
+def test_monochrome():
+    mc = MonochromeClient()
+    try:
+        r = requests.get(f"{mc.base}/search/", params={"s": "test", "limit": 1}, timeout=8)
+        if r.status_code < 300:
+            return jsonify({"ok": True, "message": f"Connected — {mc.base}"})
+        return jsonify({"ok": False, "message": f"HTTP {r.status_code}"})
+    except Exception as ex:
+        return jsonify({"ok": False, "message": str(ex)})
+
+
+@app.route("/api/test/navidrome")
+def test_navidrome():
+    url = get_setting("navidrome_url").rstrip("/")
+    user = get_setting("navidrome_user")
+    pw = get_setting("navidrome_pass")
+    try:
+        r = requests.get(
+            f"{url}/rest/ping",
+            params={"u": user, "p": pw, "v": "1.16.1", "c": "slskdsync", "f": "json"},
+            timeout=8,
+        )
+        d = r.json().get("subsonic-response", {})
+        if d.get("status") == "ok":
+            return jsonify({"ok": True, "message": f"Connected — Navidrome {d.get('serverVersion', '')}".strip()})
+        err = d.get("error", {}).get("message", "Unknown error")
+        return jsonify({"ok": False, "message": err})
+    except Exception as ex:
+        return jsonify({"ok": False, "message": str(ex)})
+
+
+# ---------------------------------------------------------------------------
+# Queue API & actions
+# ---------------------------------------------------------------------------
 
 @app.route("/api/tracks")
 def api_tracks():
@@ -844,12 +1020,18 @@ def api_download():
     artist = (data.get("artist") or "").strip()
     album = (data.get("album") or "").strip()
     title = (data.get("title") or "").strip()
-    source_id = (data.get("source_id") or "").strip()
     cover_url = (data.get("cover") or "").strip()
     dl_source = data.get("source", "slskd")
 
     if not title or not artist:
         return jsonify({"ok": False, "error": "artist and title are required"}), 400
+
+    # For monochrome, source_id must be a TIDAL ID — never pass a Deezer ID.
+    # Leave it empty so the worker does a TIDAL lookup by artist+title.
+    if dl_source == "monochrome":
+        source_id = ""
+    else:
+        source_id = (data.get("source_id") or "").strip()
 
     conn = get_conn()
     cur = conn.cursor()
@@ -878,7 +1060,7 @@ def import_url():
 
     provider = next((p for p in _providers if p.supports(url)), None)
     if not provider:
-        flash("Unsupported URL. Paste a Spotify, TIDAL, or Apple Music link.", "error")
+        flash("Unsupported URL — paste a Spotify, TIDAL, or Apple Music link.", "error")
         return redirect(url_for("index"))
 
     try:

@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
 
-<form method="post">
+<form method="post" id="settings-form">
 
   <div class="settings-group">
     <div class="settings-group-title">Library</div>
@@ -15,59 +15,72 @@
     </div>
     <div class="field">
       <label>Folder template</label>
-      <input name="folder_template" value="{{ settings.folder_template }}" placeholder="{artist}/{album}/{track_number:02d} - {title}{ext}">
+      <input name="folder_template" value="{{ settings.folder_template }}">
     </div>
     <div class="field">
       <label>Quality preference</label>
       <select name="quality">
         {% for opt in ['lossless', 'high', 'normal', 'low'] %}
-        <option value="{{ opt }}" {{ 'selected' if settings.quality == opt else '' }}>{{ opt }}</option>
+        <option value="{{ opt }}" {{ 'selected' if settings.quality == opt }}>{{ opt }}</option>
         {% endfor %}
       </select>
     </div>
     <div class="field">
-      <label>On conflict</label>
+      <label>On file conflict</label>
       <select name="replace_existing">
-        <option value="0" {{ 'selected' if settings.replace_existing == '0' else '' }}>Skip existing</option>
-        <option value="1" {{ 'selected' if settings.replace_existing == '1' else '' }}>Overwrite existing</option>
+        <option value="0" {{ 'selected' if settings.replace_existing == '0' }}>Skip existing</option>
+        <option value="1" {{ 'selected' if settings.replace_existing == '1' }}>Overwrite existing</option>
       </select>
     </div>
   </div>
 
   <div class="settings-group">
-    <div class="settings-group-title">Soulseek (slskd)</div>
+    <div class="settings-group-title">
+      Soulseek (slskd)
+      <button type="button" class="test-btn" onclick="testConn('slskd', this)">Test</button>
+    </div>
+    <div class="test-result" id="result-slskd"></div>
     <div class="field">
       <label>slskd URL</label>
       <input name="slskd_url" value="{{ settings.slskd_url }}" placeholder="http://slskd:5030">
     </div>
     <div class="field">
-      <label>Username (optional)</label>
+      <label>Username (if auth is enabled)</label>
       <input name="slskd_user" value="{{ settings.slskd_user }}" autocomplete="off">
     </div>
     <div class="field">
-      <label>Password (optional)</label>
+      <label>Password</label>
       <input name="slskd_pass" type="password" value="{{ settings.slskd_pass }}" autocomplete="new-password">
     </div>
     <div class="field">
-      <label>API key (optional)</label>
+      <label>API key (alternative to username/password)</label>
       <input name="slskd_api_key" value="{{ settings.slskd_api_key }}" autocomplete="off">
     </div>
   </div>
 
   <div class="settings-group">
-    <div class="settings-group-title">Monochrome / TIDAL</div>
+    <div class="settings-group-title">
+      Monochrome / TIDAL
+      <button type="button" class="test-btn" onclick="testConn('monochrome', this)">Test</button>
+    </div>
+    <div class="test-result" id="result-monochrome"></div>
     <div class="field">
       <label>Monochrome API URL</label>
       <input name="monochrome_url" value="{{ settings.monochrome_url }}" placeholder="https://api.monochrome.tf">
     </div>
-    <p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.4rem;line-height:1.4">
-      Used for TIDAL URL import and direct TIDAL downloads. The default instance may be blocked by TIDAL —
-      see the <a href="https://github.com/monochrome-music/monochrome/blob/main/INSTANCES.md" target="_blank">community instances list</a> for alternatives.
+    <p class="hint">
+      Used for TIDAL URL import and direct TIDAL downloads. If the default instance is blocked,
+      find alternatives at the
+      <a href="https://github.com/monochrome-music/monochrome/blob/main/INSTANCES.md" target="_blank">community instances list</a>.
     </p>
   </div>
 
   <div class="settings-group">
-    <div class="settings-group-title">Navidrome (optional)</div>
+    <div class="settings-group-title">
+      Navidrome <span class="optional-label">(optional)</span>
+      <button type="button" class="test-btn" onclick="testConn('navidrome', this)">Test</button>
+    </div>
+    <div class="test-result" id="result-navidrome"></div>
     <div class="field">
       <label>Navidrome URL</label>
       <input name="navidrome_url" value="{{ settings.navidrome_url }}" placeholder="http://navidrome:4533">
@@ -82,7 +95,81 @@
     </div>
   </div>
 
-  <button class="btn-full" type="submit">Save settings</button>
+  <div class="settings-group">
+    <div class="settings-group-title">Login</div>
+    <div class="field">
+      <label>Username</label>
+      <input name="app_username" value="{{ settings.app_username }}" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>New password <span class="optional-label">(leave blank to keep current)</span></label>
+      <input name="new_password" type="password" autocomplete="new-password" placeholder="••••••">
+    </div>
+  </div>
 
+  <button class="btn-full" type="submit">Save settings</button>
 </form>
+
+<style>
+.settings-group-title {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+.test-btn {
+  margin-left: auto;
+  padding: .2rem .6rem;
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: .72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+.test-btn:hover { border-color: var(--accent); color: var(--accent); }
+.test-result {
+  font-size: .78rem;
+  min-height: 0;
+  margin-bottom: .5rem;
+  padding: 0;
+  transition: all .2s;
+  line-height: 1.4;
+}
+.test-result.ok   { color: var(--success-text); }
+.test-result.fail { color: var(--error-text); }
+.hint {
+  font-size: .75rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: .4rem;
+}
+.hint a { color: var(--accent); }
+.optional-label { font-size: .7rem; color: var(--text-muted); font-weight: 400; }
+</style>
+
+<script>
+function testConn(service, btn) {
+  const result = document.getElementById('result-' + service);
+  btn.textContent = '…';
+  btn.disabled = true;
+  result.textContent = '';
+  result.className = 'test-result';
+  fetch('/api/test/' + service)
+    .then(r => r.json())
+    .then(d => {
+      btn.textContent = 'Test';
+      btn.disabled = false;
+      result.textContent = (d.ok ? '✓ ' : '✗ ') + d.message;
+      result.className = 'test-result ' + (d.ok ? 'ok' : 'fail');
+    })
+    .catch(err => {
+      btn.textContent = 'Test';
+      btn.disabled = false;
+      result.textContent = '✗ Network error';
+      result.className = 'test-result fail';
+    });
+}
+</script>
 {% endblock %}
