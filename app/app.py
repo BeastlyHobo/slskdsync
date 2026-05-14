@@ -106,7 +106,7 @@ def init_db():
         "navidrome_pass": "",
         "quality": "lossless",
         "replace_existing": "0",
-        "folder_template": "{artist}/{album}/{track_number:02d} - {title}{ext}",
+        "folder_template": "{artist}/{album}/{title}{ext}",
         "download_watch_path": "/downloads",
         # auth stored in DB (empty = not configured yet → first-run setup)
         "app_username": "",
@@ -740,22 +740,37 @@ class SlskdClient:
 class Organizer:
     @staticmethod
     def target_path(track: sqlite3.Row, src_path: Path) -> Path:
-        library = Path(get_setting("library_path"))
-        tmpl = get_setting("folder_template")
-        rel = tmpl.format(
-            artist=(track["artist"] or "Unknown Artist").strip().replace("/", "-"),
-            album=(track["album"] or "Unknown Album").strip().replace("/", "-"),
-            track_number=track["track_number"] or 0,
-            title=(track["title"] or src_path.stem).strip().replace("/", "-"),
-            ext=src_path.suffix,
-        )
-        return library / rel
+        library_str = get_setting("library_path") or "/music"
+        library = Path(library_str)
+        artist = (track["artist"] or "Unknown Artist").strip().replace("/", "-")
+        album = (track["album"] or "Unknown Album").strip().replace("/", "-")
+        title = (track["title"] or src_path.stem).strip().replace("/", "-")
+        ext = src_path.suffix
+        track_num = track["track_number"] or 0
+
+        tmpl = get_setting("folder_template") or ""
+        if tmpl:
+            try:
+                rel = tmpl.format(
+                    artist=artist, album=album, track_number=track_num,
+                    title=title, ext=ext,
+                )
+                return library / rel
+            except (KeyError, ValueError):
+                pass  # fall through to default
+
+        # Default: Artist/Album/NN - Title.ext  (omit number prefix when unknown)
+        if track_num:
+            filename = f"{track_num:02d} - {title}{ext}"
+        else:
+            filename = f"{title}{ext}"
+        return library / artist / album / filename
 
     @staticmethod
     def move_file(src: Path, dst: Path) -> tuple[bool, str]:
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists() and get_setting("replace_existing") != "1":
-            return False, f"exists: {dst}"
+            return True, str(dst)  # already there — treat as success
         shutil.move(str(src), str(dst))
         return True, str(dst)
 
@@ -763,16 +778,26 @@ class Organizer:
 def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
     watch = Path(get_setting("download_watch_path"))
     if not watch.exists():
+        logger.debug(f"[discover] Watch path does not exist: {watch}")
         return None
-    title = (track["title"] or "").lower()
+    title = (track["title"] or "").lower().strip()
     artist = (track["artist"] or "").lower().split(",")[0].strip()
+    title_match = None
     for f in watch.glob("**/*"):
         if not f.is_file() or f.suffix.lower() not in AUDIO_EXTS:
             continue
         n = f.name.lower()
-        if title and title in n and artist and artist in n:
-            return f
-    return None
+        if title and title in n:
+            if artist and artist in n:
+                # Best match: both title and artist in filename
+                logger.debug(f"[discover] Exact match: {f.name}")
+                return f
+            if title_match is None:
+                # Fallback: title only
+                title_match = f
+    if title_match:
+        logger.debug(f"[discover] Title-only match: {title_match.name}")
+    return title_match
 
 
 # ---------------------------------------------------------------------------
@@ -851,6 +876,7 @@ def _worker_tick():
         conn.commit()
 
     # downloading → check watch folder, organize
+    library = get_setting("library_path") or "/music"
     for t in conn.execute(
         "SELECT * FROM tracks WHERE slskd_state='downloading' LIMIT 20"
     ).fetchall():
@@ -858,16 +884,14 @@ def _worker_tick():
         if candidate:
             logger.info(f"[slskd] Found file for '{t['title']}': {candidate.name}")
             target = Organizer.target_path(t, candidate)
+            logger.info(f"[slskd] Moving to library ({library}): {target}")
             ok, result = Organizer.move_file(candidate, target)
-            if ok:
-                logger.info(f"[slskd] Organized to: {result}")
-                conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?",
-                             (result, t["id"]))
-            else:
-                logger.warning(f"[slskd] Move skipped for '{t['title']}': {result}")
-                conn.execute("UPDATE tracks SET slskd_state='completed', slskd_error=? WHERE id=?",
-                             (result, t["id"]))
+            logger.info(f"[slskd] Organized to: {result}")
+            conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?",
+                         (result, t["id"]))
             conn.commit()
+        else:
+            logger.debug(f"[slskd] Still waiting for '{t['title']}' to appear in {get_setting('download_watch_path')}")
 
     # pending monochrome → lookup TIDAL ID if needed, then download with fallback instances
     mc = MonochromeClient()
@@ -1142,6 +1166,35 @@ def test_monochrome():
         return jsonify({"ok": False, "message": f"HTTP {r.status_code}: {r.text[:120]}"})
     except Exception as ex:
         return jsonify({"ok": False, "message": str(ex)})
+
+
+@app.route("/api/test/paths")
+def test_paths():
+    results = {}
+    for key, label in [("download_watch_path", "downloads"), ("library_path", "library")]:
+        path_str = get_setting(key) or ""
+        if not path_str:
+            results[label] = {"ok": False, "message": "Not configured"}
+            continue
+        p = Path(path_str)
+        if not p.exists():
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+                results[label] = {"ok": True, "message": f"{p} — created (did not exist)"}
+            except Exception as ex:
+                results[label] = {"ok": False, "message": f"{p} — cannot create: {ex}"}
+        elif not p.is_dir():
+            results[label] = {"ok": False, "message": f"{p} — exists but is not a directory"}
+        else:
+            # Check write access
+            test_file = p / ".slskdsync_write_test"
+            try:
+                test_file.touch()
+                test_file.unlink()
+                results[label] = {"ok": True, "message": f"{p} — exists, writable"}
+            except Exception as ex:
+                results[label] = {"ok": False, "message": f"{p} — not writable: {ex}"}
+    return jsonify(results)
 
 
 @app.route("/api/test/navidrome")

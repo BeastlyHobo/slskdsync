@@ -4,7 +4,11 @@
 <form method="post" id="settings-form">
 
   <div class="settings-group">
-    <div class="settings-group-title">Library</div>
+    <div class="settings-group-title">
+      Library
+      <button type="button" class="test-btn" onclick="testPaths(this)">Test paths</button>
+    </div>
+    <div class="test-result" id="result-paths"></div>
     <div class="field">
       <label>Library path (destination)</label>
       <input name="library_path" value="{{ settings.library_path }}" placeholder="/music">
@@ -15,7 +19,8 @@
     </div>
     <div class="field">
       <label>Folder template</label>
-      <input name="folder_template" value="{{ settings.folder_template }}">
+      <input name="folder_template" value="{{ settings.folder_template }}" placeholder="{artist}/{album}/{title}{ext}">
+      <p class="hint">Variables: <code>{artist}</code> <code>{album}</code> <code>{title}</code> <code>{ext}</code> <code>{track_number:02d}</code></p>
     </div>
     <div class="field">
       <label>Quality preference</label>
@@ -138,6 +143,7 @@
   padding: 0;
   transition: all .2s;
   line-height: 1.4;
+  white-space: pre-line;
 }
 .test-result.ok   { color: var(--success-text); }
 .test-result.fail { color: var(--error-text); }
@@ -166,8 +172,35 @@ function testConn(service, btn) {
       result.textContent = (d.ok ? '✓ ' : '✗ ') + d.message;
       result.className = 'test-result ' + (d.ok ? 'ok' : 'fail');
     })
-    .catch(err => {
+    .catch(() => {
       btn.textContent = 'Test';
+      btn.disabled = false;
+      result.textContent = '✗ Network error';
+      result.className = 'test-result fail';
+    });
+}
+
+function testPaths(btn) {
+  const result = document.getElementById('result-paths');
+  btn.textContent = '…';
+  btn.disabled = true;
+  result.textContent = '';
+  result.className = 'test-result';
+  fetch('/api/test/paths')
+    .then(r => r.json())
+    .then(d => {
+      btn.textContent = 'Test paths';
+      btn.disabled = false;
+      const lines = [];
+      for (const [label, info] of Object.entries(d)) {
+        lines.push((info.ok ? '✓ ' : '✗ ') + info.message);
+      }
+      const allOk = Object.values(d).every(v => v.ok);
+      result.textContent = lines.join('\n');
+      result.className = 'test-result ' + (allOk ? 'ok' : 'fail');
+    })
+    .catch(() => {
+      btn.textContent = 'Test paths';
       btn.disabled = false;
       result.textContent = '✗ Network error';
       result.className = 'test-result fail';
