@@ -32,6 +32,13 @@ DB_PATH = DATA_DIR / "app.db"
 
 AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".ogg", ".aac", ".wav", ".aif", ".aiff", ".opus", ".wma"}
 
+# Fallback Monochrome/hifi-api instances tried in order when the configured one returns 403
+MONOCHROME_FALLBACK_URLS = [
+    "https://hifi.geeked.wtf",
+    "https://monochrome-api.samidy.com",
+    "https://api.monochrome.tf",
+]
+
 
 # ---------------------------------------------------------------------------
 # Database
@@ -475,8 +482,8 @@ class MonochromeClient:
       GET /playlist/?id=UUID&limit=100    → playlist info + tracks combined
     """
 
-    def __init__(self):
-        self.base = (get_setting("monochrome_url") or "https://hifi.geeked.wtf").rstrip("/")
+    def __init__(self, base: str = None):
+        self.base = (base or get_setting("monochrome_url") or "https://hifi.geeked.wtf").rstrip("/")
 
     def search_tracks(self, query: str, limit: int = 10) -> list[dict]:
         url = f"{self.base}/search/"
@@ -820,9 +827,13 @@ def _worker_tick():
         if not results:
             continue  # search still running
         logger.info(f"[slskd] {len(results)} results for '{meta.title}', selecting best")
-        scored = sorted(((slskd.score_result(r, meta), r) for r in results), reverse=True)
+        scored = sorted(
+            ((slskd.score_result(r, meta), i, r) for i, r in enumerate(results)),
+            key=lambda x: x[0],
+            reverse=True,
+        )
         if scored and scored[0][0] > 0:
-            best = scored[0][1]
+            best = scored[0][2]
             logger.info(f"[slskd] Downloading from {best['username']}: {best['filename']}")
             ok, msg = slskd.download_file(best["username"], best["filename"], best.get("size", 0))
             if ok:
@@ -858,7 +869,7 @@ def _worker_tick():
                              (result, t["id"]))
             conn.commit()
 
-    # pending monochrome → lookup TIDAL ID if needed, then download
+    # pending monochrome → lookup TIDAL ID if needed, then download with fallback instances
     mc = MonochromeClient()
     for t in conn.execute(
         "SELECT * FROM tracks WHERE slskd_state='pending' AND download_source='monochrome' LIMIT 5"
@@ -874,9 +885,11 @@ def _worker_tick():
                 conn.commit()
             else:
                 logger.warning(f"[monochrome] Track not found on TIDAL: {t['artist']} — {t['title']}")
+                # Fall back to slskd
+                logger.info(f"[monochrome] Falling back to slskd for '{t['title']}'")
                 conn.execute(
-                    "UPDATE tracks SET slskd_state='failed',"
-                    " slskd_error='Track not found on TIDAL via Monochrome' WHERE id=?",
+                    "UPDATE tracks SET download_source='slskd', slskd_state='pending',"
+                    " slskd_error='TIDAL lookup failed; falling back to Soulseek' WHERE id=?",
                     (t["id"],),
                 )
                 conn.commit()
@@ -885,8 +898,23 @@ def _worker_tick():
         conn.execute("UPDATE tracks SET slskd_state='downloading' WHERE id=?", (t["id"],))
         conn.commit()
 
-        logger.info(f"[monochrome] Downloading TIDAL id={tidal_id}: {t['title']}")
-        ok, result = mc.download_track(tidal_id, t["artist"] or "", t["title"] or "")
+        # Build ordered list of instances to try: configured first, then fallbacks
+        configured = mc.base
+        instances = [configured] + [u.rstrip("/") for u in MONOCHROME_FALLBACK_URLS if u.rstrip("/") != configured]
+
+        ok, result = False, "No instances available"
+        for instance_url in instances:
+            if instance_url != configured:
+                logger.info(f"[monochrome] Trying fallback instance: {instance_url}")
+            mc_inst = MonochromeClient(base=instance_url)
+            ok, result = mc_inst.download_track(tidal_id, t["artist"] or "", t["title"] or "")
+            if ok:
+                break
+            logger.warning(f"[monochrome] Instance {instance_url} failed: {result[:100]}")
+            # Only retry on upstream/auth errors (403, 401, 500); stop on DRM/format errors
+            if not any(code in result for code in ("403", "401", "500", "Upstream", "upstream")):
+                break
+
         if ok:
             src = Path(result)
             if src.exists():
@@ -898,8 +926,14 @@ def _worker_tick():
             logger.info(f"[monochrome] Completed: {final}")
             conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?", (final, t["id"]))
         else:
-            logger.warning(f"[monochrome] Download failed for '{t['title']}': {result}")
-            conn.execute("UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?", (result, t["id"]))
+            logger.warning(f"[monochrome] All instances failed for '{t['title']}': {result}")
+            # Fall back to slskd
+            logger.info(f"[monochrome] Falling back to slskd for '{t['title']}'")
+            conn.execute(
+                "UPDATE tracks SET download_source='slskd', slskd_state='pending',"
+                " slskd_error='TIDAL download failed on all instances; falling back to Soulseek' WHERE id=?",
+                (t["id"],),
+            )
         conn.commit()
 
     conn.close()
