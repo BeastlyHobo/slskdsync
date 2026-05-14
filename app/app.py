@@ -4,9 +4,17 @@ import sqlite3
 import threading
 import time
 import shutil
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("slskdsync")
 
 import requests
 from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory
@@ -666,11 +674,12 @@ def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 def run_worker(stop_event: threading.Event):
+    logger.info("Worker started")
     while not stop_event.is_set():
         try:
             _worker_tick()
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.error(f"Worker tick error: {ex}")
         time.sleep(20)
 
 
@@ -685,13 +694,16 @@ def _worker_tick():
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
                          t["track_number"] or 0, t["source_id"] or "")
+        logger.info(f"[slskd] Starting search: {meta.artist} — {meta.title}")
         ok, search_id, msg = slskd.start_search(meta)
         if ok:
+            logger.info(f"[slskd] Search queued (id={search_id}): {meta.title}")
             conn.execute(
                 "UPDATE tracks SET slskd_state='queued', slskd_search_id=?, slskd_error=NULL WHERE id=?",
                 (search_id, t["id"]),
             )
         else:
+            logger.warning(f"[slskd] Search failed for '{meta.title}': {msg}")
             conn.execute(
                 "UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
                 (f"slskd: {msg}", t["id"]),
@@ -707,16 +719,20 @@ def _worker_tick():
         results = slskd.get_search_results(t["slskd_search_id"])
         if not results:
             continue  # search still running
+        logger.info(f"[slskd] {len(results)} results for '{meta.title}', selecting best")
         scored = sorted(((slskd.score_result(r, meta), r) for r in results), reverse=True)
         if scored and scored[0][0] > 0:
             best = scored[0][1]
+            logger.info(f"[slskd] Downloading from {best['username']}: {best['filename']}")
             ok, msg = slskd.download_file(best["username"], best["filename"], best.get("size", 0))
             if ok:
                 conn.execute("UPDATE tracks SET slskd_state='downloading' WHERE id=?", (t["id"],))
             else:
+                logger.warning(f"[slskd] Download request failed for '{meta.title}': {msg}")
                 conn.execute("UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
                              (f"Download failed: {msg}", t["id"]))
         else:
+            logger.warning(f"[slskd] No usable files found for '{meta.title}'")
             conn.execute(
                 "UPDATE tracks SET slskd_state='failed', slskd_error='No usable files found in search results' WHERE id=?",
                 (t["id"],),
@@ -729,12 +745,15 @@ def _worker_tick():
     ).fetchall():
         candidate = discover_download_for_track(t)
         if candidate:
+            logger.info(f"[slskd] Found file for '{t['title']}': {candidate.name}")
             target = Organizer.target_path(t, candidate)
             ok, result = Organizer.move_file(candidate, target)
             if ok:
+                logger.info(f"[slskd] Organized to: {result}")
                 conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?",
                              (result, t["id"]))
             else:
+                logger.warning(f"[slskd] Move skipped for '{t['title']}': {result}")
                 conn.execute("UPDATE tracks SET slskd_state='completed', slskd_error=? WHERE id=?",
                              (result, t["id"]))
             conn.commit()
@@ -745,12 +764,16 @@ def _worker_tick():
         "SELECT * FROM tracks WHERE slskd_state='pending' AND download_source='monochrome' LIMIT 5"
     ).fetchall():
         tidal_id = t["source_id"] or ""
+        logger.info(f"[monochrome] Processing: {t['artist']} — {t['title']}")
         if not tidal_id:
+            logger.info(f"[monochrome] Looking up TIDAL ID for '{t['title']}'")
             tidal_id = mc.find_tidal_id(t["artist"] or "", t["title"] or "") or ""
             if tidal_id:
+                logger.info(f"[monochrome] Found TIDAL ID {tidal_id} for '{t['title']}'")
                 conn.execute("UPDATE tracks SET source_id=? WHERE id=?", (tidal_id, t["id"]))
                 conn.commit()
             else:
+                logger.warning(f"[monochrome] Track not found on TIDAL: {t['artist']} — {t['title']}")
                 conn.execute(
                     "UPDATE tracks SET slskd_state='failed',"
                     " slskd_error='Track not found on TIDAL via Monochrome' WHERE id=?",
@@ -762,6 +785,7 @@ def _worker_tick():
         conn.execute("UPDATE tracks SET slskd_state='downloading' WHERE id=?", (t["id"],))
         conn.commit()
 
+        logger.info(f"[monochrome] Downloading TIDAL id={tidal_id}: {t['title']}")
         ok, result = mc.download_track(tidal_id, t["artist"] or "", t["title"] or "")
         if ok:
             src = Path(result)
@@ -771,8 +795,10 @@ def _worker_tick():
                 final = move_result if move_ok else result
             else:
                 final = result
+            logger.info(f"[monochrome] Completed: {final}")
             conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?", (final, t["id"]))
         else:
+            logger.warning(f"[monochrome] Download failed for '{t['title']}': {result}")
             conn.execute("UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?", (result, t["id"]))
         conn.commit()
 
