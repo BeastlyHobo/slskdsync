@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#18181c">
+  <title>slskdsync · Setup</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-logo">slskdsync</div>
+  <p style="text-align:center;font-size:.85rem;color:var(--text-muted);margin-bottom:1.25rem;line-height:1.4">
+    Welcome! Create your login to get started.
+  </p>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  <form method="post" action="/setup">
+    <div class="field">
+      <label>Username</label>
+      <input name="username" type="text" value="admin" autocomplete="username" autofocus>
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input name="password" type="password" autocomplete="new-password" placeholder="At least 6 characters">
+    </div>
+    <div class="field">
+      <label>Confirm password</label>
+      <input name="confirm" type="password" autocomplete="new-password">
+    </div>
+    <button class="btn-full" type="submit">Create account</button>
+  </form>
+</div>
+</body>
+</html>

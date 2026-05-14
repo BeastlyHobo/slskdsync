@@ -3,94 +3,332 @@
 
 <div class="search-wrap">
   <div class="search-inner">
-    <input
-      id="q"
-      class="search-input"
-      type="search"
-      placeholder="Search for artist, album, or track…"
-      autocomplete="off"
-      autofocus
-    >
+    <input id="q" class="search-input" type="search"
+      placeholder="Search for artist, album, or track…" autocomplete="off" autofocus>
     <button class="search-clear" id="clear-btn" title="Clear">✕</button>
   </div>
+  <div class="tab-bar" id="tab-bar">
+    <button class="tab active" data-tab="track">Tracks</button>
+    <button class="tab" data-tab="artist">Artists</button>
+    <button class="tab" data-tab="album">Albums</button>
+  </div>
 </div>
+
+<!-- breadcrumb shown when drilling into artist/album -->
+<div id="breadcrumb" class="breadcrumb hidden"></div>
 
 <div id="results-area">
   <div class="empty-state">
     <div class="empty-icon">🎵</div>
-    <p>Search to discover music, then<br>download via Soulseek or TIDAL</p>
+    <p>Search to discover music,<br>then download via Soulseek or TIDAL</p>
   </div>
 </div>
+
+<style>
+.tab-bar { display:flex; gap:.4rem; padding:.4rem 0 0; }
+.tab { flex:1; padding:.45rem; background:var(--surface); border:1.5px solid var(--border);
+       border-radius:var(--radius-sm); color:var(--text-muted); font-size:.8rem;
+       cursor:pointer; font-weight:600; transition:all .15s; }
+.tab.active { background:var(--surface2); border-color:var(--accent); color:var(--accent); }
+
+.breadcrumb { display:flex; align-items:center; gap:.4rem; padding:.5rem 0 .25rem;
+              font-size:.82rem; color:var(--text-muted); flex-wrap:wrap; }
+.breadcrumb-sep { color:var(--border); }
+.breadcrumb a { color:var(--accent); cursor:pointer; }
+.breadcrumb .current { color:var(--text); font-weight:600; }
+
+/* Artist cards */
+.artist-card { display:flex; align-items:center; gap:.75rem;
+               background:var(--surface); border-radius:var(--radius-sm);
+               padding:.65rem .75rem; cursor:pointer; transition:background .12s; }
+.artist-card:hover { background:var(--surface2); }
+.artist-pic { width:50px; height:50px; border-radius:50%; object-fit:cover;
+              flex-shrink:0; background:var(--surface2); }
+.artist-pic.placeholder { display:flex; align-items:center; justify-content:center;
+                           font-size:1.4rem; border-radius:50%; }
+.artist-name { font-weight:600; font-size:.9rem; }
+.artist-sub  { font-size:.75rem; color:var(--text-muted); margin-top:2px; }
+.chevron { margin-left:auto; color:var(--text-muted); font-size:1rem; flex-shrink:0; }
+
+/* Album cards (grid) */
+.album-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:.5rem; }
+@media(min-width:400px){ .album-grid { grid-template-columns:repeat(2,1fr); } }
+.album-card { background:var(--surface); border-radius:var(--radius-sm);
+              padding:.65rem; cursor:pointer; transition:background .12s; }
+.album-card:hover { background:var(--surface2); }
+.album-cover { width:100%; aspect-ratio:1; border-radius:6px; object-fit:cover;
+               background:var(--surface2); display:block; margin-bottom:.5rem; }
+.album-cover-ph { width:100%; aspect-ratio:1; border-radius:6px; background:var(--surface2);
+                  display:flex; align-items:center; justify-content:center;
+                  font-size:2rem; margin-bottom:.5rem; }
+.album-title { font-size:.85rem; font-weight:600; line-height:1.2;
+               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.album-sub   { font-size:.72rem; color:var(--text-muted); margin-top:2px; }
+
+/* Album track list (full-width rows) */
+.album-header { display:flex; gap:.75rem; align-items:center;
+                background:var(--surface); border-radius:var(--radius); padding:.75rem;
+                margin-bottom:.75rem; }
+.album-header-cover { width:72px; height:72px; border-radius:8px; object-fit:cover;
+                      flex-shrink:0; background:var(--surface2); }
+.album-header-cover-ph { width:72px; height:72px; border-radius:8px;
+                          background:var(--surface2); display:flex;
+                          align-items:center; justify-content:center; font-size:2rem; }
+.album-header-info { flex:1; min-width:0; }
+.album-header-title { font-size:1rem; font-weight:700; }
+.album-header-artist { font-size:.8rem; color:var(--text-muted); margin-top:3px; }
+
+.dl-all-row { display:flex; gap:.5rem; margin-bottom:.75rem; }
+.btn-dl-all { flex:1; padding:.55rem; border:none; border-radius:var(--radius-sm);
+              font-size:.82rem; font-weight:600; cursor:pointer; transition:opacity .15s; }
+.btn-dl-all:hover { opacity:.85; }
+</style>
 
 <script>
 const input = document.getElementById('q');
 const clearBtn = document.getElementById('clear-btn');
 const area = document.getElementById('results-area');
-let debounce = null;
+const breadcrumbEl = document.getElementById('breadcrumb');
+const tabBar = document.getElementById('tab-bar');
 
+let activeTab = 'track';
+let debounce = null;
+// navigation stack: [{type:'search'|'artist'|'album', id, name, restore}]
+let navStack = [];
+
+// ── Tabs ──────────────────────────────────────────────────────────────────
+tabBar.addEventListener('click', e => {
+  const btn = e.target.closest('.tab');
+  if (!btn) return;
+  tabBar.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  activeTab = btn.dataset.tab;
+  navStack = [];
+  renderBreadcrumb();
+  const q = input.value.trim();
+  if (q.length >= 2) triggerSearch(q);
+});
+
+// ── Search input ──────────────────────────────────────────────────────────
 input.addEventListener('input', () => {
   clearBtn.classList.toggle('visible', input.value.length > 0);
   clearTimeout(debounce);
   const q = input.value.trim();
-  if (!q) {
-    area.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>Search to discover music</p></div>';
-    return;
-  }
+  if (!q) { reset(); return; }
   if (q.length < 2) return;
-  debounce = setTimeout(() => doSearch(q), 350);
+  navStack = [];
+  renderBreadcrumb();
+  debounce = setTimeout(() => triggerSearch(q), 350);
 });
 
 clearBtn.addEventListener('click', () => {
   input.value = '';
   clearBtn.classList.remove('visible');
-  area.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>Search to discover music</p></div>';
+  reset();
   input.focus();
 });
 
-function fmtDur(s) {
-  if (!s) return '';
-  const m = Math.floor(s / 60), sec = s % 60;
-  return `${m}:${String(sec).padStart(2,'0')}`;
+function reset() {
+  navStack = [];
+  renderBreadcrumb();
+  area.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>Search to discover music</p></div>';
 }
 
-function doSearch(q) {
+function triggerSearch(q) {
   area.innerHTML = '<div class="loading"><span class="spinner"></span>Searching…</div>';
-  fetch('/api/search?q=' + encodeURIComponent(q))
+  fetch(`/api/search?q=${encodeURIComponent(q)}&type=${activeTab}`)
     .then(r => r.json())
-    .then(data => renderResults(data, q))
-    .catch(() => { area.innerHTML = '<div class="loading">Search failed. Try again.</div>'; });
+    .then(data => {
+      if (activeTab === 'track')  renderTracks(data, {album:'', cover:'', artist:''});
+      if (activeTab === 'artist') renderArtists(data);
+      if (activeTab === 'album')  renderAlbums(data);
+    })
+    .catch(() => { area.innerHTML = '<div class="loading">Search failed — try again.</div>'; });
 }
 
-function renderResults(items, q) {
-  if (!items || !items.length) {
-    area.innerHTML = '<div class="empty-state"><div class="empty-icon">🔇</div><p>No results for "' + escHtml(q) + '"</p></div>';
+// ── Breadcrumb ────────────────────────────────────────────────────────────
+function renderBreadcrumb() {
+  if (!navStack.length) { breadcrumbEl.classList.add('hidden'); return; }
+  breadcrumbEl.classList.remove('hidden');
+  const parts = [
+    `<a onclick="navTo(-1)">Search</a>`,
+    ...navStack.map((n, i) =>
+      i < navStack.length - 1
+        ? `<span class="breadcrumb-sep">›</span><a onclick="navTo(${i})">${esc(n.name)}</a>`
+        : `<span class="breadcrumb-sep">›</span><span class="current">${esc(n.name)}</span>`
+    ),
+  ];
+  breadcrumbEl.innerHTML = parts.join('');
+}
+
+function navTo(idx) {
+  if (idx === -1) {
+    navStack = [];
+    renderBreadcrumb();
+    triggerSearch(input.value.trim());
     return;
   }
-  const html = items.map(item => `
-    <div class="track-card">
-      ${item.cover
-        ? `<img class="cover" src="${escHtml(item.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
-        : ''}
-      <div class="cover-placeholder" style="${item.cover ? 'display:none' : ''}">🎵</div>
-      <div class="track-info">
-        <div class="track-title">${escHtml(item.title)}</div>
-        <div class="track-sub">${escHtml(item.artist)}${item.album ? ' · ' + escHtml(item.album) : ''}</div>
-      </div>
-      ${item.duration ? `<span class="track-dur">${fmtDur(item.duration)}</span>` : ''}
-      <div class="dl-btns">
-        <button class="btn btn-slsk"
-          onclick="queueDownload(this, ${JSON.stringify(item)}, 'slskd')"
-          title="Download via Soulseek">Soulseek</button>
-        <button class="btn btn-mono"
-          onclick="queueDownload(this, ${JSON.stringify(item)}, 'monochrome')"
-          title="Download via TIDAL/Monochrome">TIDAL</button>
-      </div>
-    </div>
-  `).join('');
-  area.innerHTML = '<div class="card-list">' + html + '</div>';
+  const frame = navStack[idx];
+  navStack = navStack.slice(0, idx + 1);
+  renderBreadcrumb();
+  frame.restore();
 }
 
-function queueDownload(btn, item, source) {
+// ── Track list ────────────────────────────────────────────────────────────
+function renderTracks(tracks, albumCtx) {
+  if (!tracks || !tracks.length) {
+    area.innerHTML = '<div class="empty-state"><div class="empty-icon">🔇</div><p>No tracks found</p></div>';
+    return;
+  }
+  const html = tracks.map(t => trackCardHtml({
+    title: t.title,
+    artist: t.artist,
+    album: t.album || albumCtx.album,
+    cover: t.cover || albumCtx.cover,
+    duration: t.duration,
+    artist_id: t.artist_id,
+    album_id: t.album_id,
+  })).join('');
+  area.innerHTML = `<div class="card-list">${html}</div>`;
+}
+
+function trackCardHtml(t, hideDrillLinks) {
+  const dur = fmtDur(t.duration);
+  const artistLink = t.artist_id && !hideDrillLinks
+    ? `<span class="track-link" onclick="loadArtist('${t.artist_id}','${esc(t.artist)}')">${esc(t.artist)}</span>`
+    : esc(t.artist || '');
+  const albumLink = t.album_id && !hideDrillLinks
+    ? ` · <span class="track-link" onclick="loadAlbum('${t.album_id}','${esc(t.album)}','${esc(t.artist)}','${esc(t.cover||'')}')">${esc(t.album)}</span>`
+    : (t.album ? ` · ${esc(t.album)}` : '');
+  const payload = JSON.stringify({title:t.title,artist:t.artist,album:t.album||'',cover:t.cover||''});
+  return `
+  <div class="track-card">
+    ${t.cover
+      ? `<img class="cover" src="${esc(t.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+         <div class="cover-placeholder" style="display:none">🎵</div>`
+      : `<div class="cover-placeholder">🎵</div>`}
+    <div class="track-info">
+      <div class="track-title">${esc(t.title)}</div>
+      <div class="track-sub">${artistLink}${albumLink}</div>
+    </div>
+    ${dur ? `<span class="track-dur">${dur}</span>` : ''}
+    <div class="dl-btns">
+      <button class="btn btn-slsk" onclick='queueDl(this,${payload},"slskd")'>Soulseek</button>
+      <button class="btn btn-mono" onclick='queueDl(this,${payload},"monochrome")'>TIDAL</button>
+    </div>
+  </div>`;
+}
+
+// ── Artist list ───────────────────────────────────────────────────────────
+function renderArtists(artists) {
+  if (!artists || !artists.length) {
+    area.innerHTML = '<div class="empty-state"><div class="empty-icon">🔇</div><p>No artists found</p></div>';
+    return;
+  }
+  const html = artists.map(a => `
+    <div class="artist-card card-list" onclick="loadArtist('${a.id}','${esc(a.name)}')">
+      ${a.picture
+        ? `<img class="artist-pic" src="${esc(a.picture)}" alt="" loading="lazy">`
+        : `<div class="artist-pic placeholder">👤</div>`}
+      <div class="track-info">
+        <div class="artist-name">${esc(a.name)}</div>
+        ${a.nb_album ? `<div class="artist-sub">${a.nb_album} albums</div>` : ''}
+      </div>
+      <span class="chevron">›</span>
+    </div>`).join('');
+  area.innerHTML = `<div class="card-list">${html}</div>`;
+}
+
+function loadArtist(id, name) {
+  navStack.push({ name, restore: () => loadArtist(id, name) });
+  renderBreadcrumb();
+  area.innerHTML = '<div class="loading"><span class="spinner"></span>Loading…</div>';
+  fetch(`/api/artist/${id}`)
+    .then(r => r.json())
+    .then(data => renderArtistPage(data))
+    .catch(() => { area.innerHTML = '<div class="loading">Failed to load artist.</div>'; });
+}
+
+function renderArtistPage(data) {
+  if (data.error) { area.innerHTML = `<div class="loading">${esc(data.error)}</div>`; return; }
+  if (!data.albums || !data.albums.length) {
+    area.innerHTML = '<div class="empty-state"><div class="empty-icon">💿</div><p>No albums found</p></div>';
+    return;
+  }
+  const html = data.albums.map(a => `
+    <div class="album-card" onclick="loadAlbum('${a.id}','${esc(a.title)}','${esc(data.name)}','${esc(a.cover)}')">
+      ${a.cover
+        ? `<img class="album-cover" src="${esc(a.cover)}" alt="" loading="lazy">`
+        : `<div class="album-cover-ph">💿</div>`}
+      <div class="album-title">${esc(a.title)}</div>
+      <div class="album-sub">${a.release_date ? a.release_date.slice(0,4) : ''}${a.nb_tracks ? ` · ${a.nb_tracks} tracks` : ''}</div>
+    </div>`).join('');
+  area.innerHTML = `<div class="album-grid">${html}</div>`;
+}
+
+// ── Album list ────────────────────────────────────────────────────────────
+function renderAlbums(albums) {
+  if (!albums || !albums.length) {
+    area.innerHTML = '<div class="empty-state"><div class="empty-icon">🔇</div><p>No albums found</p></div>';
+    return;
+  }
+  const html = albums.map(a => `
+    <div class="album-card" onclick="loadAlbum('${a.id}','${esc(a.title)}','${esc(a.artist)}','${esc(a.cover)}')">
+      ${a.cover
+        ? `<img class="album-cover" src="${esc(a.cover)}" alt="" loading="lazy">`
+        : `<div class="album-cover-ph">💿</div>`}
+      <div class="album-title">${esc(a.title)}</div>
+      <div class="album-sub">${esc(a.artist)}${a.nb_tracks ? ` · ${a.nb_tracks} tracks` : ''}</div>
+    </div>`).join('');
+  area.innerHTML = `<div class="album-grid">${html}</div>`;
+}
+
+function loadAlbum(id, title, artist, cover) {
+  navStack.push({ name: title, restore: () => loadAlbum(id, title, artist, cover) });
+  renderBreadcrumb();
+  area.innerHTML = '<div class="loading"><span class="spinner"></span>Loading…</div>';
+  fetch(`/api/album/${id}`)
+    .then(r => r.json())
+    .then(data => renderAlbumPage(data, cover))
+    .catch(() => { area.innerHTML = '<div class="loading">Failed to load album.</div>'; });
+}
+
+function renderAlbumPage(data, fallbackCover) {
+  if (data.error) { area.innerHTML = `<div class="loading">${esc(data.error)}</div>`; return; }
+  const cover = data.cover || fallbackCover || '';
+  const allPayload = JSON.stringify(data.tracks.map(t => ({
+    title: t.title, artist: t.artist || data.artist, album: data.title, cover,
+  })));
+
+  const header = `
+    <div class="album-header">
+      ${cover
+        ? `<img class="album-header-cover" src="${esc(cover)}" alt="">`
+        : `<div class="album-header-cover-ph">💿</div>`}
+      <div class="album-header-info">
+        <div class="album-header-title">${esc(data.title)}</div>
+        <div class="album-header-artist">${esc(data.artist)}</div>
+        ${data.release_date ? `<div class="album-sub" style="margin-top:4px">${data.release_date.slice(0,4)}</div>` : ''}
+      </div>
+    </div>
+    <div class="dl-all-row">
+      <button class="btn-dl-all btn-slsk" onclick='queueAll(${allPayload},"slskd")'>⬇ All via Soulseek</button>
+      <button class="btn-dl-all btn-mono" onclick='queueAll(${allPayload},"monochrome")'>⬇ All via TIDAL</button>
+    </div>`;
+
+  const tracks = data.tracks.map(t => trackCardHtml({
+    title: t.title,
+    artist: t.artist || data.artist,
+    album: data.title,
+    cover,
+    duration: t.duration,
+  }, true)).join('');
+
+  area.innerHTML = header + `<div class="card-list">${tracks}</div>`;
+}
+
+// ── Download actions ──────────────────────────────────────────────────────
+function queueDl(btn, item, source) {
   btn.textContent = '…';
   btn.disabled = true;
   fetch('/api/download', {
@@ -100,20 +338,19 @@ function queueDownload(btn, item, source) {
       artist: item.artist,
       album: item.album,
       title: item.title,
-      source_id: item.id,
       cover: item.cover,
-      source: source,
+      source,
     }),
   })
   .then(r => r.json())
-  .then(data => {
-    if (data.ok) {
+  .then(d => {
+    if (d.ok) {
       btn.textContent = '✓';
       btn.classList.add('btn-queued');
       showToast('Queued: ' + item.title);
     } else {
       btn.textContent = '✗';
-      showToast('Error: ' + (data.error || 'Unknown error'), 3000);
+      showToast('Error: ' + (d.error || 'Unknown'), 3500);
       setTimeout(() => { btn.textContent = source === 'slskd' ? 'Soulseek' : 'TIDAL'; btn.disabled = false; }, 2000);
     }
   })
@@ -124,8 +361,36 @@ function queueDownload(btn, item, source) {
   });
 }
 
-function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+function queueAll(tracks, source) {
+  showToast(`Queueing ${tracks.length} tracks via ${source === 'slskd' ? 'Soulseek' : 'TIDAL'}…`);
+  let i = 0;
+  function next() {
+    if (i >= tracks.length) { showToast(`All ${tracks.length} tracks queued ✓`); return; }
+    const t = tracks[i++];
+    fetch('/api/download', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ artist: t.artist, album: t.album, title: t.title, cover: t.cover, source }),
+    })
+    .then(() => setTimeout(next, 150))
+    .catch(() => setTimeout(next, 300));
+  }
+  next();
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function fmtDur(s) {
+  if (!s) return '';
+  return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+}
+
+function esc(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 </script>
+
+<style>
+.track-link { color: var(--accent); cursor: pointer; }
+.track-link:hover { text-decoration: underline; }
+</style>
 {% endblock %}
