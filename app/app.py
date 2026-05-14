@@ -526,6 +526,16 @@ class SlskdClient:
     def _auth(self):
         return (self.user, self.password) if self.user else None
 
+    @staticmethod
+    def _build_query(artist: str, title: str) -> str:
+        # First artist only (before comma, &, feat.)
+        artist = re.split(r',|&|\bfeat\.|\bft\.', artist, flags=re.IGNORECASE)[0].strip()
+        # Strip parenthetical/bracketed suffixes — "(From X)", "[OST]", etc.
+        title = re.sub(r'\s*[\(\[][^\)\]]*[\)\]]', '', title).strip()
+        # Strip "feat." and everything after from title
+        title = re.sub(r'\s*(feat\.|ft\.).*$', '', title, flags=re.IGNORECASE).strip()
+        return ' '.join(f"{artist} {title}".split())[:100]
+
     def ping(self) -> tuple[bool, str]:
         for ep in ["/api/v0/application", "/api/v1/application"]:
             try:
@@ -546,7 +556,7 @@ class SlskdClient:
         return False, "Could not connect to slskd"
 
     def start_search(self, track: TrackMeta) -> tuple[bool, str, str]:
-        query = f"{track.artist} {track.title}"
+        query = self._build_query(track.artist, track.title)
         last_err = "Could not reach slskd"
         for ep in ["/api/v0/searches", "/api/v1/searches"]:
             try:
@@ -694,7 +704,8 @@ def _worker_tick():
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
                          t["track_number"] or 0, t["source_id"] or "")
-        logger.info(f"[slskd] Starting search: {meta.artist} — {meta.title}")
+        query = SlskdClient._build_query(meta.artist, meta.title)
+        logger.info(f"[slskd] Starting search: {query!r}")
         ok, search_id, msg = slskd.start_search(meta)
         if ok:
             logger.info(f"[slskd] Search queued (id={search_id}): {meta.title}")
