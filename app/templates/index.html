@@ -38,10 +38,13 @@
 </div>
 {% endif %}
 
-<!-- Queue -->
+{% set active_tracks = tracks | selectattr('slskd_state', 'ne', 'completed') | list %}
+{% set done_tracks = tracks | selectattr('slskd_state', 'equalto', 'completed') | list %}
+
 {% if tracks %}
-<div class="card-list" id="queue">
-  {% for t in tracks %}
+{% if active_tracks %}
+<div class="card-list" id="queue-active">
+  {% for t in active_tracks %}
   <div class="track-card">
     {% if t.cover_url %}
       <img class="cover" src="{{ t.cover_url }}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
@@ -57,16 +60,49 @@
         {{ t.slskd_error[:60] }}{% if t.slskd_error|length > 60 %}…{% endif %}
       </div>
       {% endif %}
+    </div>
+    <span class="badge badge-{{ t.slskd_state or 'pending' }}">{{ (t.slskd_state or 'pending') }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if done_tracks %}
+<div class="completed-header" id="completed-toggle" onclick="toggleCompleted()">
+  <span>✓ {{ done_tracks|length }} completed</span>
+  <span id="completed-chevron">›</span>
+</div>
+<div class="card-list" id="queue-completed" style="display:none">
+  {% for t in done_tracks %}
+  <div class="track-card">
+    {% if t.cover_url %}
+      <img class="cover" src="{{ t.cover_url }}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      <div class="cover-placeholder" style="display:none">🎵</div>
+    {% else %}
+      <div class="cover-placeholder">🎵</div>
+    {% endif %}
+    <div class="track-info">
+      <div class="track-title">{{ t.title or '—' }}</div>
+      <div class="track-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
       {% if t.local_path %}
       <div class="track-sub" style="color:#40cc70;margin-top:3px" title="{{ t.local_path }}">
         ✓ {{ t.local_path.split('/')[-1] }}
       </div>
       {% endif %}
     </div>
-    <span class="badge badge-{{ t.slskd_state or 'pending' }}">{{ (t.slskd_state or 'pending').replace('slskd_', '') }}</span>
+    <span class="badge badge-completed">done</span>
   </div>
   {% endfor %}
 </div>
+{% endif %}
+
+{% if not active_tracks and not done_tracks %}
+<div class="empty-state">
+  <div class="empty-icon">📭</div>
+  <p>No tracks in queue yet.</p>
+</div>
+{% endif %}
+
 {% else %}
 <div class="empty-state">
   <div class="empty-icon">📭</div>
@@ -74,8 +110,35 @@
 </div>
 {% endif %}
 
+<style>
+.completed-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: .6rem .75rem;
+  margin-top: .75rem;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  font-size: .82rem;
+  color: var(--success-text, #40cc70);
+  cursor: pointer;
+  font-weight: 600;
+  border: 1px solid var(--border);
+}
+.completed-header:hover { background: var(--surface2); }
+#completed-chevron { transition: transform .2s; font-size: 1rem; }
+#completed-chevron.open { transform: rotate(90deg); }
+</style>
+
 <script>
-// Auto-refresh queue every 15 s if any tracks are active
+function toggleCompleted() {
+  const sec = document.getElementById('queue-completed');
+  const chev = document.getElementById('completed-chevron');
+  const open = sec.style.display !== 'none';
+  sec.style.display = open ? 'none' : 'block';
+  chev.classList.toggle('open', !open);
+}
+
 (function() {
   const active = {{ 'true' if (stats.pending + stats.downloading) > 0 else 'false' }};
   if (active) {
