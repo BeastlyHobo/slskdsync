@@ -9,12 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+_log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, _log_level, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("slskdsync")
+logger.info(f"Log level: {_log_level} (override with LOG_LEVEL env var)")
 
 import requests
 from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory
@@ -91,7 +93,7 @@ def init_db():
         "slskd_user": "",
         "slskd_pass": "",
         "slskd_api_key": "",
-        "monochrome_url": "https://api.monochrome.tf",
+        "monochrome_url": "https://hifi.geeked.wtf",
         "navidrome_url": "http://navidrome:4533",
         "navidrome_user": "",
         "navidrome_pass": "",
@@ -271,16 +273,16 @@ class TidalProvider:
         return "tidal.com" in url
 
     def parse(self, url: str) -> tuple[str, list[TrackMeta]]:
-        base = (get_setting("monochrome_url") or "https://api.monochrome.tf").rstrip("/")
+        base = (get_setting("monochrome_url") or "https://hifi.geeked.wtf").rstrip("/")
 
         if "/track/" in url:
             m = re.search(r"/track/(\d+)", url)
             if not m:
                 raise RuntimeError("Could not parse TIDAL track ID from URL")
             tid = m.group(1)
-            r = requests.get(f"{base}/info/{tid}", timeout=15)
+            r = requests.get(f"{base}/info/", params={"id": tid}, timeout=15)
             if r.status_code != 200:
-                raise RuntimeError(f"Monochrome API error {r.status_code} — is the Monochrome URL configured correctly?")
+                raise RuntimeError(f"Monochrome API error {r.status_code} — try setting Monochrome URL to https://hifi.geeked.wtf in Settings")
             d = r.json()
             return "track", [TrackMeta(
                 artist=(d.get("artist") or {}).get("name", "Unknown Artist"),
@@ -288,7 +290,7 @@ class TidalProvider:
                 title=d.get("title", "Unknown Title"),
                 track_number=d.get("trackNumber", 0),
                 source_id=tid,
-                cover_url=_tidal_cover_url(d.get("album", {}).get("cover", "")),
+                cover_url=_tidal_cover_url((d.get("album") or {}).get("cover", "")),
             )]
 
         if "/album/" in url:
@@ -296,17 +298,18 @@ class TidalProvider:
             if not m:
                 raise RuntimeError("Could not parse TIDAL album ID from URL")
             aid = m.group(1)
-            tracks_r = requests.get(f"{base}/album/{aid}/tracks", timeout=15)
-            album_r = requests.get(f"{base}/album/{aid}", timeout=15)
-            if tracks_r.status_code != 200:
-                raise RuntimeError(f"Monochrome API error {tracks_r.status_code}")
-            td, ad = tracks_r.json(), album_r.json() if album_r.ok else {}
-            album_name = ad.get("title", "Unknown Album")
-            cover = _tidal_cover_url(ad.get("cover", ""))
+            # /album/?id=… returns combined album info + tracks
+            r = requests.get(f"{base}/album/", params={"id": aid, "limit": 100}, timeout=15)
+            if r.status_code != 200:
+                raise RuntimeError(f"Monochrome API error {r.status_code}")
+            d = r.json()
+            album_name = d.get("title", "Unknown Album")
+            cover = _tidal_cover_url(d.get("cover", ""))
+            items = d.get("items") or (d.get("tracks") or {}).get("items", [])
             tracks = []
-            for t in td.get("items", []):
+            for t in items:
                 tracks.append(TrackMeta(
-                    artist=(t.get("artist") or ad.get("artist") or {}).get("name", "Unknown Artist"),
+                    artist=(t.get("artist") or d.get("artist") or {}).get("name", "Unknown Artist"),
                     album=album_name,
                     title=t.get("title", "Unknown Title"),
                     track_number=t.get("trackNumber", 0),
@@ -320,11 +323,13 @@ class TidalProvider:
             if not m:
                 raise RuntimeError("Could not parse TIDAL playlist ID")
             pid = m.group(1)
-            r = requests.get(f"{base}/playlist/{pid}/tracks", timeout=15)
+            r = requests.get(f"{base}/playlist/", params={"id": pid, "limit": 100}, timeout=15)
             if r.status_code != 200:
                 raise RuntimeError(f"Monochrome API error {r.status_code}")
+            d = r.json()
+            items = d.get("items") or (d.get("tracks") or {}).get("items", [])
             tracks = []
-            for t in r.json().get("items", []):
+            for t in items:
                 cover = _tidal_cover_url((t.get("album") or {}).get("cover", ""))
                 tracks.append(TrackMeta(
                     artist=(t.get("artist") or {}).get("name", "Unknown Artist"),
@@ -460,35 +465,67 @@ class DeezerProvider:
 # ---------------------------------------------------------------------------
 
 class MonochromeClient:
+    """Client for the hifi-api / monochrome TIDAL proxy.
+
+    Endpoint shape (verified against monochrome-music/hifi-api-workers):
+      GET /search/?s=QUERY&limit=N        → {"data": {"items": [...]}}
+      GET /info/?id=ID                    → TIDAL track metadata
+      GET /track/?id=ID&quality=LOSSLESS  → TIDAL playbackinfo (base64 manifest)
+      GET /album/?id=ID&limit=100         → album info + tracks combined
+      GET /playlist/?id=UUID&limit=100    → playlist info + tracks combined
+    """
+
     def __init__(self):
-        self.base = (get_setting("monochrome_url") or "https://api.monochrome.tf").rstrip("/")
+        self.base = (get_setting("monochrome_url") or "https://hifi.geeked.wtf").rstrip("/")
+
+    def search_tracks(self, query: str, limit: int = 10) -> list[dict]:
+        url = f"{self.base}/search/"
+        try:
+            r = requests.get(url, params={"s": query, "limit": limit}, timeout=12)
+            logger.debug(f"[mono] GET {url}?s={query!r} → {r.status_code}")
+            if r.status_code != 200:
+                logger.warning(f"[mono] Search failed: {r.status_code} {r.text[:200]}")
+                return []
+            # Response is wrapped: {"version": "...", "data": {"items": [...]}}
+            payload = r.json()
+            items = (payload.get("data") or {}).get("items", [])
+            # Some hifi-api deployments still use the legacy shape — fall back
+            if not items:
+                items = (payload.get("tracks") or {}).get("items", [])
+            return items
+        except Exception as ex:
+            logger.warning(f"[mono] Search exception: {ex}")
+            return []
 
     def find_tidal_id(self, artist: str, title: str) -> Optional[str]:
-        try:
-            r = requests.get(f"{self.base}/search/", params={"s": f"{artist} {title}", "limit": 5}, timeout=12)
-            r.raise_for_status()
-            items = (r.json().get("tracks") or {}).get("items", [])
-            if not items:
-                return None
-            title_l, artist_l = title.lower(), artist.lower().split(",")[0].strip()
-            for item in items:
-                if title_l in item.get("title", "").lower() and artist_l in (item.get("artist") or {}).get("name", "").lower():
-                    return str(item["id"])
-            return str(items[0]["id"])
-        except Exception:
+        items = self.search_tracks(f"{artist} {title}", limit=5)
+        if not items:
+            logger.info(f"[mono] No TIDAL results for '{artist} — {title}'")
             return None
+        title_l = title.lower()
+        artist_l = artist.lower().split(",")[0].strip()
+        for item in items:
+            if title_l in item.get("title", "").lower() and artist_l in (item.get("artist") or {}).get("name", "").lower():
+                return str(item["id"])
+        return str(items[0]["id"])
 
     def download_track(self, tidal_id: str, artist: str, title: str) -> tuple[bool, str]:
         quality_map = {"lossless": "LOSSLESS", "high": "HIGH", "normal": "HIGH", "low": "LOW"}
         quality = quality_map.get(get_setting("quality"), "LOSSLESS")
+        track_url = f"{self.base}/track/"
         try:
-            r = requests.get(f"{self.base}/track/{tidal_id}", params={"quality": quality}, timeout=30)
+            r = requests.get(track_url, params={"id": tidal_id, "quality": quality}, timeout=30)
+            logger.debug(f"[mono] GET {track_url}?id={tidal_id}&quality={quality} → {r.status_code}")
             if r.status_code != 200:
-                return False, f"Monochrome API returned {r.status_code}"
+                return False, f"Monochrome /track/ returned {r.status_code}: {r.text[:150]}"
             data = r.json()
-            url = data.get("url") or (data.get("urls") or [None])[0]
-            if not url:
-                return False, "No direct stream URL in response (track may use DRM or DASH streaming)"
+
+            # Resolve a downloadable URL from the various response shapes
+            stream_url = self._extract_stream_url(data, quality)
+            if not stream_url:
+                # Helpful diagnostic for the user
+                keys = list(data.keys()) if isinstance(data, dict) else type(data).__name__
+                return False, f"No downloadable URL in response (keys={keys}); HI_RES uses DRM, try LOSSLESS quality"
 
             ext = ".flac" if quality in ("LOSSLESS", "HI_RES_LOSSLESS") else ".m4a"
             watch = Path(get_setting("download_watch_path"))
@@ -496,14 +533,51 @@ class MonochromeClient:
             safe = re.sub(r'[<>:"/\\|?*]', "", f"{artist} - {title}").strip()[:180]
             dest = watch / f"{safe}{ext}"
 
-            with requests.get(url, stream=True, timeout=300) as resp:
+            logger.info(f"[mono] Streaming {stream_url[:80]}… → {dest.name}")
+            with requests.get(stream_url, stream=True, timeout=300) as resp:
                 resp.raise_for_status()
                 with open(dest, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=65536):
                         f.write(chunk)
             return True, str(dest)
         except Exception as ex:
+            logger.warning(f"[mono] Download exception: {ex}")
             return False, str(ex)
+
+    @staticmethod
+    def _extract_stream_url(data: dict, quality: str) -> Optional[str]:
+        """Pull a usable URL out of a TIDAL playbackinfo response.
+
+        Shapes seen in the wild:
+          * {"url": "https://..."}                     (legacy)
+          * {"urls": ["https://..."]}                  (legacy multi)
+          * {"OriginalTrackUrl": "https://..."}
+          * {"manifest": "<base64 JSON or MPD>", "manifestMimeType": "..."}
+        """
+        if not isinstance(data, dict):
+            return None
+        for key in ("url", "OriginalTrackUrl", "originalTrackUrl"):
+            if data.get(key):
+                return data[key]
+        urls = data.get("urls")
+        if isinstance(urls, list) and urls:
+            return urls[0]
+
+        manifest_b64 = data.get("manifest")
+        mime = (data.get("manifestMimeType") or "").lower()
+        if manifest_b64 and "vnd.tidal.bts" in mime:
+            try:
+                import base64, json as _json
+                decoded = base64.b64decode(manifest_b64).decode("utf-8", "replace")
+                bts = _json.loads(decoded)
+                bts_urls = bts.get("urls") or []
+                if bts_urls:
+                    return bts_urls[0]
+            except Exception as ex:
+                logger.debug(f"[mono] Failed to decode bts manifest: {ex}")
+
+        # DASH (HI_RES_LOSSLESS) is DRM-protected and can't be downloaded directly
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -537,39 +611,43 @@ class SlskdClient:
         return ' '.join(f"{artist} {title}".split())[:100]
 
     def ping(self) -> tuple[bool, str]:
-        for ep in ["/api/v0/application", "/api/v1/application"]:
+        for ep in ["/api/v0/application/version", "/api/v0/application", "/api/v1/application"]:
+            url = f"{self.base}{ep}"
             try:
-                r = requests.get(f"{self.base}{ep}", headers=self._headers(), auth=self._auth(), timeout=8)
+                r = requests.get(url, headers=self._headers(), auth=self._auth(), timeout=8)
                 if r.status_code < 300:
-                    d = r.json()
-                    ver = d.get("version") or d.get("server", {}).get("version", "")
+                    try:
+                        d = r.json()
+                        ver = d if isinstance(d, str) else (d.get("version") or d.get("server", {}).get("version", ""))
+                    except Exception:
+                        ver = r.text.strip()[:30]
                     return True, f"Connected — slskd {ver}".strip(" —")
-            except Exception:
-                pass
-        # Try a basic GET to the root as fallback
-        try:
-            r = requests.get(self.base, timeout=8)
-            if r.status_code < 500:
-                return True, "Connected (version unknown)"
-        except Exception as ex:
-            return False, str(ex)
-        return False, "Could not connect to slskd"
+                if r.status_code == 401:
+                    return False, "Auth required (set API key or username/password in settings)"
+            except Exception as ex:
+                last_err = str(ex)
+        return False, locals().get("last_err", "Could not connect to slskd")
 
     def start_search(self, track: TrackMeta) -> tuple[bool, str, str]:
         query = self._build_query(track.artist, track.title)
         last_err = "Could not reach slskd"
+        # slskd wants {"searchText": "..."} (camelCase) — not "query"
+        body = {
+            "searchText": query,
+            "fileLimit": 10000,
+            "filterResponses": True,
+            "responseLimit": 100,
+            "searchTimeout": 15000,
+        }
         for ep in ["/api/v0/searches", "/api/v1/searches"]:
+            url = f"{self.base}{ep}"
             try:
-                r = requests.post(
-                    f"{self.base}{ep}",
-                    headers=self._headers(),
-                    auth=self._auth(),
-                    json={"query": query},
-                    timeout=25,
-                )
+                r = requests.post(url, headers=self._headers(), auth=self._auth(),
+                                  json=body, timeout=25)
+                logger.debug(f"[slskd] POST {url} → {r.status_code} {r.text[:200]}")
                 if r.status_code < 300:
                     return True, str(r.json().get("id", "")), "search started"
-                last_err = f"HTTP {r.status_code}"
+                last_err = f"HTTP {r.status_code} from {ep}: {r.text[:150]}"
             except Exception as ex:
                 last_err = str(ex)
         return False, "", last_err
@@ -578,28 +656,41 @@ class SlskdClient:
         if not search_id:
             return []
         try:
-            r = requests.get(f"{self.base}/api/v0/searches/{search_id}",
-                             headers=self._headers(), auth=self._auth(), timeout=15)
-            if r.status_code != 200 or not r.json().get("isComplete"):
+            # First check if search is complete
+            check_url = f"{self.base}/api/v0/searches/{search_id}"
+            r = requests.get(check_url, headers=self._headers(), auth=self._auth(), timeout=15)
+            logger.debug(f"[slskd] GET {check_url} → {r.status_code}")
+            if r.status_code != 200:
+                logger.warning(f"[slskd] Search status check failed: {r.status_code} {r.text[:200]}")
                 return []
-            r2 = requests.get(f"{self.base}/api/v0/searches/{search_id}/files",
-                              headers=self._headers(), auth=self._auth(), timeout=15)
+            search_obj = r.json()
+            if not search_obj.get("isComplete"):
+                return []  # still running
+            # Fetch responses (NOT /files — that endpoint doesn't exist)
+            resp_url = f"{self.base}/api/v0/searches/{search_id}/responses"
+            r2 = requests.get(resp_url, headers=self._headers(), auth=self._auth(), timeout=15)
+            logger.debug(f"[slskd] GET {resp_url} → {r2.status_code}")
             if r2.status_code != 200:
+                logger.warning(f"[slskd] Failed to fetch responses: {r2.status_code} {r2.text[:200]}")
                 return []
             flat = []
-            for user_result in r2.json():
-                username = user_result.get("username", "")
-                has_slot = user_result.get("hasFreeUploadSlot", False)
-                for f in user_result.get("files", []):
+            for user_response in r2.json():
+                username = user_response.get("username", "")
+                has_slot = user_response.get("hasFreeUploadSlot", False)
+                upload_speed = user_response.get("uploadSpeed", 0)
+                for f in user_response.get("files", []):
                     flat.append({
                         "username": username,
                         "filename": f.get("filename", ""),
                         "size": f.get("size", 0),
                         "bitRate": f.get("bitRate", 0),
+                        "length": f.get("length", 0),
                         "has_slot": has_slot,
+                        "upload_speed": upload_speed,
                     })
             return flat
-        except Exception:
+        except Exception as ex:
+            logger.warning(f"[slskd] Exception fetching results: {ex}")
             return []
 
     def score_result(self, result: dict, track: TrackMeta) -> int:
@@ -622,14 +713,12 @@ class SlskdClient:
         return score
 
     def download_file(self, username: str, filename: str, size: int) -> tuple[bool, str]:
+        url = f"{self.base}/api/v0/transfers/downloads/{username}"
+        body = [{"filename": filename, "size": size}]
         try:
-            r = requests.post(
-                f"{self.base}/api/v0/transfers/downloads/{username}",
-                headers=self._headers(),
-                auth=self._auth(),
-                json=[{"filename": filename, "size": size}],
-                timeout=25,
-            )
+            r = requests.post(url, headers=self._headers(), auth=self._auth(),
+                              json=body, timeout=25)
+            logger.debug(f"[slskd] POST {url} → {r.status_code} body={body!r}")
             if r.status_code < 300:
                 return True, "download queued"
             return False, f"HTTP {r.status_code}: {r.text[:200]}"
@@ -1011,10 +1100,12 @@ def test_slskd():
 def test_monochrome():
     mc = MonochromeClient()
     try:
-        r = requests.get(f"{mc.base}/search/", params={"s": "test", "limit": 1}, timeout=8)
+        r = requests.get(f"{mc.base}/search/", params={"s": "daft punk", "limit": 1}, timeout=8)
         if r.status_code < 300:
-            return jsonify({"ok": True, "message": f"Connected — {mc.base}"})
-        return jsonify({"ok": False, "message": f"HTTP {r.status_code}"})
+            payload = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            n = len((payload.get("data") or payload.get("tracks") or {}).get("items", []))
+            return jsonify({"ok": True, "message": f"Connected — {mc.base} ({n} test results)"})
+        return jsonify({"ok": False, "message": f"HTTP {r.status_code}: {r.text[:120]}"})
     except Exception as ex:
         return jsonify({"ok": False, "message": str(ex)})
 
@@ -1084,6 +1175,7 @@ def api_download():
     )
     conn.commit()
     conn.close()
+    logger.info(f"[queue] User queued '{artist} — {title}' via {dl_source}")
     return jsonify({"ok": True, "message": f"Queued \"{title}\" via {dl_source}"})
 
 
