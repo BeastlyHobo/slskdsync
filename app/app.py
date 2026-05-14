@@ -783,22 +783,36 @@ def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
         return None
     title = (track["title"] or "").lower().strip()
     artist = (track["artist"] or "").lower().split(",")[0].strip()
+
+    # Collect all audio files once so we can log useful diagnostics
+    audio_files = [f for f in watch.glob("**/*")
+                   if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
+    if not audio_files:
+        logger.warning(f"[discover] Watch path {watch} exists but contains no audio files")
+        return None
+
     title_match = None
-    for f in watch.glob("**/*"):
-        if not f.is_file() or f.suffix.lower() not in AUDIO_EXTS:
-            continue
+    path_match = None  # title found in full path but not filename
+    for f in audio_files:
         n = f.name.lower()
+        full_l = str(f).lower().replace("\\", "/")
         if title and title in n:
             if artist and artist in n:
-                # Best match: both title and artist in filename
                 logger.debug(f"[discover] Exact match: {f.name}")
                 return f
             if title_match is None:
-                # Fallback: title only
                 title_match = f
-    if title_match:
-        logger.debug(f"[discover] Title-only match: {title_match.name}")
-    return title_match
+        elif title and title in full_l and path_match is None:
+            path_match = f  # title is in a parent folder name
+
+    best = title_match or path_match
+    if best:
+        logger.debug(f"[discover] Fuzzy match for '{title}': {best.name}")
+        return best
+
+    sample = [f.name for f in audio_files[:5]]
+    logger.info(f"[discover] No match for '{title}' among {len(audio_files)} files. Sample: {sample}")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1167,6 +1181,18 @@ def test_monochrome():
         return jsonify({"ok": False, "message": f"HTTP {r.status_code}: {r.text[:120]}"})
     except Exception as ex:
         return jsonify({"ok": False, "message": str(ex)})
+
+
+@app.route("/api/debug/watch")
+def debug_watch():
+    watch = Path(get_setting("download_watch_path") or "/downloads")
+    if not watch.exists():
+        return jsonify({"error": f"Watch path does not exist: {watch}"})
+    audio_files = sorted(
+        [str(f.relative_to(watch)) for f in watch.glob("**/*")
+         if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
+    )
+    return jsonify({"watch": str(watch), "count": len(audio_files), "files": audio_files[:100]})
 
 
 @app.route("/api/test/paths")
