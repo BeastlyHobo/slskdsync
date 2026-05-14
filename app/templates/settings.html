@@ -65,13 +65,15 @@
     </div>
     <div class="test-result" id="result-monochrome"></div>
     <div class="field">
-      <label>Monochrome API URL</label>
-      <input name="monochrome_url" value="{{ settings.monochrome_url }}" placeholder="https://api.monochrome.tf">
+      <label>Monochrome / hifi-api URL</label>
+      <input name="monochrome_url" value="{{ settings.monochrome_url }}" placeholder="https://hifi.geeked.wtf">
     </div>
     <p class="hint">
-      Used for TIDAL URL import and direct TIDAL downloads. If the default instance is blocked,
-      find alternatives at the
+      Used for TIDAL URL import and direct TIDAL downloads.
+      Default <code>hifi.geeked.wtf</code> is the official TypeScript rewrite; alternatives
+      include <code>monochrome-api.samidy.com</code>, <code>api.monochrome.tf</code>, and the
       <a href="https://github.com/monochrome-music/monochrome/blob/main/INSTANCES.md" target="_blank">community instances list</a>.
+      Use quality "lossless" — "hi-res lossless" is DRM-protected and won't download.
     </p>
   </div>
 
