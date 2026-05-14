@@ -146,7 +146,39 @@ function triggerSearch(q) {
     .catch(() => { area.innerHTML = '<div class="loading">Search failed — try again.</div>'; });
 }
 
-// ── Breadcrumb ────────────────────────────────────────────────────────────
+// ── Event delegation — handles all clicks inside results area ─────────────
+area.addEventListener('click', e => {
+  // Download button (track)
+  const dlBtn = e.target.closest('.dl-btn');
+  if (dlBtn) {
+    queueDl(dlBtn, {
+      title:  dlBtn.dataset.title,
+      artist: dlBtn.dataset.artist,
+      album:  dlBtn.dataset.album,
+      cover:  dlBtn.dataset.cover,
+    }, dlBtn.dataset.source);
+    return;
+  }
+  // Download-all button (album page)
+  const dlAll = e.target.closest('.dl-all-btn, [data-action="dl-all"]');
+  if (dlAll) {
+    const dataEl = document.getElementById('_album_tracks');
+    if (dataEl) queueAll(JSON.parse(dataEl.textContent), dlAll.dataset.source);
+    return;
+  }
+  // Artist card or artist link
+  const artistEl = e.target.closest('[data-action="artist"]');
+  if (artistEl) {
+    loadArtist(artistEl.dataset.id, artistEl.dataset.name);
+    return;
+  }
+  // Album card or album link
+  const albumEl = e.target.closest('[data-action="album"]');
+  if (albumEl) {
+    loadAlbum(albumEl.dataset.id, albumEl.dataset.name, albumEl.dataset.artist, albumEl.dataset.cover);
+    return;
+  }
+});
 function renderBreadcrumb() {
   if (!navStack.length) { breadcrumbEl.classList.add('hidden'); return; }
   breadcrumbEl.classList.remove('hidden');
@@ -195,12 +227,11 @@ function renderTracks(tracks, albumCtx) {
 function trackCardHtml(t, hideDrillLinks) {
   const dur = fmtDur(t.duration);
   const artistLink = t.artist_id && !hideDrillLinks
-    ? `<span class="track-link" onclick="loadArtist('${t.artist_id}','${esc(t.artist)}')">${esc(t.artist)}</span>`
+    ? `<span class="track-link" data-action="artist" data-id="${esc(t.artist_id)}" data-name="${esc(t.artist)}">${esc(t.artist)}</span>`
     : esc(t.artist || '');
   const albumLink = t.album_id && !hideDrillLinks
-    ? ` · <span class="track-link" onclick="loadAlbum('${t.album_id}','${esc(t.album)}','${esc(t.artist)}','${esc(t.cover||'')}')">${esc(t.album)}</span>`
+    ? ` · <span class="track-link" data-action="album" data-id="${esc(t.album_id)}" data-name="${esc(t.album)}" data-artist="${esc(t.artist)}" data-cover="${esc(t.cover||'')}">${esc(t.album)}</span>`
     : (t.album ? ` · ${esc(t.album)}` : '');
-  const payload = JSON.stringify({title:t.title,artist:t.artist,album:t.album||'',cover:t.cover||''});
   return `
   <div class="track-card">
     ${t.cover
@@ -213,8 +244,18 @@ function trackCardHtml(t, hideDrillLinks) {
     </div>
     ${dur ? `<span class="track-dur">${dur}</span>` : ''}
     <div class="dl-btns">
-      <button class="btn btn-slsk" onclick='queueDl(this,${payload},"slskd")'>Soulseek</button>
-      <button class="btn btn-mono" onclick='queueDl(this,${payload},"monochrome")'>TIDAL</button>
+      <button class="btn btn-slsk dl-btn"
+        data-source="slskd"
+        data-title="${esc(t.title)}"
+        data-artist="${esc(t.artist||'')}"
+        data-album="${esc(t.album||'')}"
+        data-cover="${esc(t.cover||'')}">Soulseek</button>
+      <button class="btn btn-mono dl-btn"
+        data-source="monochrome"
+        data-title="${esc(t.title)}"
+        data-artist="${esc(t.artist||'')}"
+        data-album="${esc(t.album||'')}"
+        data-cover="${esc(t.cover||'')}">TIDAL</button>
     </div>
   </div>`;
 }
@@ -226,7 +267,7 @@ function renderArtists(artists) {
     return;
   }
   const html = artists.map(a => `
-    <div class="artist-card" onclick="loadArtist('${a.id}','${esc(a.name)}')">
+    <div class="artist-card" data-action="artist" data-id="${esc(a.id)}" data-name="${esc(a.name)}">
       ${a.picture
         ? `<img class="artist-pic" src="${esc(a.picture)}" alt="" loading="lazy">`
         : `<div class="artist-pic placeholder">👤</div>`}
@@ -256,7 +297,7 @@ function renderArtistPage(data) {
     return;
   }
   const html = data.albums.map(a => `
-    <div class="album-card" onclick="loadAlbum('${a.id}','${esc(a.title)}','${esc(data.name)}','${esc(a.cover)}')">
+    <div class="album-card" data-action="album" data-id="${esc(a.id)}" data-name="${esc(a.title)}" data-artist="${esc(data.name)}" data-cover="${esc(a.cover)}">
       ${a.cover
         ? `<img class="album-cover" src="${esc(a.cover)}" alt="" loading="lazy">`
         : `<div class="album-cover-ph">💿</div>`}
@@ -273,7 +314,7 @@ function renderAlbums(albums) {
     return;
   }
   const html = albums.map(a => `
-    <div class="album-card" onclick="loadAlbum('${a.id}','${esc(a.title)}','${esc(a.artist)}','${esc(a.cover)}')">
+    <div class="album-card" data-action="album" data-id="${esc(a.id)}" data-name="${esc(a.title)}" data-artist="${esc(a.artist)}" data-cover="${esc(a.cover)}">
       ${a.cover
         ? `<img class="album-cover" src="${esc(a.cover)}" alt="" loading="lazy">`
         : `<div class="album-cover-ph">💿</div>`}
@@ -296,11 +337,12 @@ function loadAlbum(id, title, artist, cover) {
 function renderAlbumPage(data, fallbackCover) {
   if (data.error) { area.innerHTML = `<div class="loading">${esc(data.error)}</div>`; return; }
   const cover = data.cover || fallbackCover || '';
-  const allPayload = JSON.stringify(data.tracks.map(t => ({
+  const allTracks = data.tracks.map(t => ({
     title: t.title, artist: t.artist || data.artist, album: data.title, cover,
-  })));
+  }));
 
   const header = `
+    <script type="application/json" id="_album_tracks">${JSON.stringify(allTracks)}<\/script>
     <div class="album-header">
       ${cover
         ? `<img class="album-header-cover" src="${esc(cover)}" alt="">`
@@ -312,8 +354,8 @@ function renderAlbumPage(data, fallbackCover) {
       </div>
     </div>
     <div class="dl-all-row">
-      <button class="btn-dl-all btn-slsk" onclick='queueAll(${allPayload},"slskd")'>⬇ All via Soulseek</button>
-      <button class="btn-dl-all btn-mono" onclick='queueAll(${allPayload},"monochrome")'>⬇ All via TIDAL</button>
+      <button class="btn-dl-all btn-slsk dl-all-btn" data-source="slskd">⬇ All via Soulseek</button>
+      <button class="btn-dl-all btn-mono dl-all-btn" data-source="monochrome">⬇ All via TIDAL</button>
     </div>`;
 
   const tracks = data.tracks.map(t => trackCardHtml({
