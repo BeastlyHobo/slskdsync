@@ -1168,6 +1168,35 @@ def test_monochrome():
         return jsonify({"ok": False, "message": str(ex)})
 
 
+@app.route("/api/test/paths")
+def test_paths():
+    results = {}
+    for key, label in [("download_watch_path", "downloads"), ("library_path", "library")]:
+        path_str = get_setting(key) or ""
+        if not path_str:
+            results[label] = {"ok": False, "message": "Not configured"}
+            continue
+        p = Path(path_str)
+        if not p.exists():
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+                results[label] = {"ok": True, "message": f"{p} — created (did not exist)"}
+            except Exception as ex:
+                results[label] = {"ok": False, "message": f"{p} — cannot create: {ex}"}
+        elif not p.is_dir():
+            results[label] = {"ok": False, "message": f"{p} — exists but is not a directory"}
+        else:
+            # Check write access
+            test_file = p / ".slskdsync_write_test"
+            try:
+                test_file.touch()
+                test_file.unlink()
+                results[label] = {"ok": True, "message": f"{p} — exists, writable"}
+            except Exception as ex:
+                results[label] = {"ok": False, "message": f"{p} — not writable: {ex}"}
+    return jsonify(results)
+
+
 @app.route("/api/test/navidrome")
 def test_navidrome():
     url = get_setting("navidrome_url").rstrip("/")
