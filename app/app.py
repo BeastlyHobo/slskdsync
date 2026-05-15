@@ -783,7 +783,7 @@ class Organizer:
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists() and get_setting("replace_existing") != "1":
             return True, str(dst)  # already there — treat as success
-        shutil.copy2(str(src), str(dst))
+        shutil.copyfile(str(src), str(dst))
         try:
             src.unlink()
         except Exception as ex:
@@ -878,6 +878,12 @@ def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
     title = (track["title"] or "").lower().strip()
     artist = (track["artist"] or "").lower().split(",")[0].strip()
 
+    def _norm(s: str) -> str:
+        # Strip quote characters that differ between DB titles and peer filenames
+        return s.replace('"', '').replace('“', '').replace('”', '').replace('‘', '').replace('’', '')
+
+    title_norm = _norm(title)
+
     # Collect all audio files once so we can log useful diagnostics
     audio_files = [f for f in watch.glob("**/*")
                    if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
@@ -888,15 +894,16 @@ def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
     title_match = None
     path_match = None  # title found in full path but not filename
     for f in audio_files:
-        n = f.name.lower()
-        full_l = str(f).lower().replace("\\", "/")
-        if title and title in n:
-            if artist and artist in n:
+        n = _norm(f.name.lower())
+        full_l = _norm(str(f).lower().replace("\\", "/"))
+        if title_norm and title_norm in n:
+            artist_norm = _norm(artist)
+            if artist_norm and artist_norm in n:
                 logger.debug(f"[discover] Exact match: {f.name}")
                 return f
             if title_match is None:
                 title_match = f
-        elif title and title in full_l and path_match is None:
+        elif title_norm and title_norm in full_l and path_match is None:
             path_match = f  # title is in a parent folder name
 
     best = title_match or path_match
