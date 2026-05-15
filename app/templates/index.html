@@ -27,14 +27,26 @@
   </form>
 </div>
 
-<!-- Stats -->
+<!-- Stats + queue actions -->
 {% if stats.total > 0 %}
 <div class="stats-strip">
   <div class="stat-chip"><strong>{{ stats.total }}</strong> total</div>
   {% if stats.downloading > 0 %}<div class="stat-chip"><strong>{{ stats.downloading }}</strong> downloading</div>{% endif %}
   {% if stats.pending > 0 %}<div class="stat-chip"><strong>{{ stats.pending }}</strong> pending</div>{% endif %}
   {% if stats.completed > 0 %}<div class="stat-chip"><strong>{{ stats.completed }}</strong> done</div>{% endif %}
-  {% if stats.failed > 0 %}<div class="stat-chip"><strong>{{ stats.failed }}</strong> failed</div>{% endif %}
+  {% if stats.failed > 0 %}<div class="stat-chip stat-chip-fail"><strong>{{ stats.failed }}</strong> failed</div>{% endif %}
+</div>
+<div class="queue-actions">
+  {% if stats.failed > 0 %}
+  <button class="qa-btn qa-retry" onclick="queueAction('retry_failed')">↺ Retry failed</button>
+  <button class="qa-btn qa-clear" onclick="queueAction('clear_failed')">✕ Clear failed</button>
+  {% endif %}
+  {% if stats.completed > 0 %}
+  <button class="qa-btn qa-clear" onclick="queueAction('clear_completed')">✕ Clear done</button>
+  {% endif %}
+  {% if stats.total > 0 %}
+  <button class="qa-btn qa-clear" onclick="queueAction('clear_all')">✕ Clear all</button>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -45,7 +57,7 @@
 {% if active_tracks %}
 <div class="card-list" id="queue-active">
   {% for t in active_tracks %}
-  <div class="track-card">
+  <div class="track-card expandable" onclick="toggleExpand(this)">
     {% if t.cover_url %}
       <img class="cover" src="{{ t.cover_url }}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
       <div class="cover-placeholder" style="display:none">🎵</div>
@@ -56,10 +68,13 @@
       <div class="track-title">{{ t.title or '—' }}</div>
       <div class="track-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
       {% if t.slskd_error %}
-      <div class="track-sub" style="color:#e05050;margin-top:3px" title="{{ t.slskd_error }}">
-        {{ t.slskd_error[:60] }}{% if t.slskd_error|length > 60 %}…{% endif %}
-      </div>
+      <div class="track-sub track-error">{{ t.slskd_error[:80] }}{% if t.slskd_error|length > 80 %}…{% endif %}</div>
       {% endif %}
+      <div class="track-detail">
+        <div class="detail-row"><span class="detail-label">Source</span> {{ t.download_source or 'slskd' }}</div>
+        {% if t.slskd_error %}<div class="detail-row"><span class="detail-label">Error</span> {{ t.slskd_error }}</div>{% endif %}
+        {% if t.slskd_search_id %}<div class="detail-row"><span class="detail-label">Search ID</span> {{ t.slskd_search_id[:16] }}…</div>{% endif %}
+      </div>
     </div>
     <span class="badge badge-{{ t.slskd_state or 'pending' }}">{{ (t.slskd_state or 'pending') }}</span>
   </div>
@@ -74,7 +89,7 @@
 </div>
 <div class="card-list" id="queue-completed" style="display:none">
   {% for t in done_tracks %}
-  <div class="track-card">
+  <div class="track-card expandable" onclick="toggleExpand(this)">
     {% if t.cover_url %}
       <img class="cover" src="{{ t.cover_url }}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
       <div class="cover-placeholder" style="display:none">🎵</div>
@@ -85,10 +100,12 @@
       <div class="track-title">{{ t.title or '—' }}</div>
       <div class="track-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
       {% if t.local_path %}
-      <div class="track-sub" style="color:#40cc70;margin-top:3px" title="{{ t.local_path }}">
-        ✓ {{ t.local_path.split('/')[-1] }}
-      </div>
+      <div class="track-sub" style="color:#40cc70;margin-top:3px">✓ {{ t.local_path.split('/')[-1] }}</div>
       {% endif %}
+      <div class="track-detail">
+        <div class="detail-row"><span class="detail-label">Source</span> {{ t.download_source or 'slskd' }}</div>
+        {% if t.local_path %}<div class="detail-row"><span class="detail-label">Path</span> {{ t.local_path }}</div>{% endif %}
+      </div>
     </div>
     <span class="badge badge-completed">done</span>
   </div>
@@ -111,19 +128,36 @@
 {% endif %}
 
 <style>
+.stat-chip-fail { color: #e05050 !important; }
+.queue-actions {
+  display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .75rem;
+}
+.qa-btn {
+  padding: .3rem .65rem; border-radius: var(--radius-sm); font-size: .75rem;
+  font-weight: 600; cursor: pointer; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-muted); transition: all .15s;
+}
+.qa-btn:hover { background: var(--surface2); }
+.qa-retry { color: #5a9aee; border-color: #1a3a5c; }
+.qa-retry:hover { border-color: #5a9aee; }
+.qa-clear:hover { color: #e05050; border-color: #5c1a1a; }
+
+.track-card.expandable { cursor: pointer; flex-wrap: wrap; }
+.track-card.expandable:hover { background: var(--surface2); }
+.track-detail { display: none; width: 100%; margin-top: .5rem; padding-top: .5rem;
+                border-top: 1px solid var(--border); }
+.track-card.expanded .track-detail { display: block; }
+.detail-row { font-size: .72rem; color: var(--text-muted); line-height: 1.6;
+              word-break: break-all; }
+.detail-label { color: var(--text-muted); font-weight: 600; margin-right: .35rem; }
+.track-error { color: #e05050; margin-top: 3px; font-size: .75rem; }
+
 .completed-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: .6rem .75rem;
-  margin-top: .75rem;
-  background: var(--surface);
-  border-radius: var(--radius-sm);
-  font-size: .82rem;
-  color: var(--success-text, #40cc70);
-  cursor: pointer;
-  font-weight: 600;
-  border: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  padding: .6rem .75rem; margin-top: .75rem;
+  background: var(--surface); border-radius: var(--radius-sm);
+  font-size: .82rem; color: var(--success-text, #40cc70);
+  cursor: pointer; font-weight: 600; border: 1px solid var(--border);
 }
 .completed-header:hover { background: var(--surface2); }
 #completed-chevron { transition: transform .2s; font-size: 1rem; }
@@ -131,12 +165,24 @@
 </style>
 
 <script>
+function toggleExpand(card) {
+  card.classList.toggle('expanded');
+}
+
 function toggleCompleted() {
   const sec = document.getElementById('queue-completed');
   const chev = document.getElementById('completed-chevron');
   const open = sec.style.display !== 'none';
   sec.style.display = open ? 'none' : 'block';
   chev.classList.toggle('open', !open);
+}
+
+function queueAction(action) {
+  fetch('/api/queue/action', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action}),
+  }).then(() => location.reload());
 }
 
 (function() {
