@@ -5,9 +5,15 @@ import threading
 import time
 import shutil
 import logging
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+import mutagen
+import mutagen.flac
+import mutagen.id3
+import mutagen.mp4
 
 _log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -785,6 +791,85 @@ class Organizer:
         return True, str(dst)
 
 
+def _fetch_cover(url: str) -> Optional[bytes]:
+    if not url:
+        return None
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200 and r.content:
+            return r.content
+    except Exception as ex:
+        logger.debug(f"[tag] Cover fetch failed: {ex}")
+    return None
+
+
+def _embed_cover(path: Path, data: bytes) -> None:
+    mime = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg"
+    ext = path.suffix.lower()
+    try:
+        if ext == ".flac":
+            audio = mutagen.flac.FLAC(path)
+            pic = mutagen.flac.Picture()
+            pic.type = 3
+            pic.mime = mime
+            pic.data = data
+            audio.clear_pictures()
+            audio.add_picture(pic)
+            audio.save()
+        elif ext == ".mp3":
+            try:
+                tags = mutagen.id3.ID3(path)
+            except mutagen.id3.ID3NoHeaderError:
+                tags = mutagen.id3.ID3()
+            tags.delall("APIC")
+            tags.add(mutagen.id3.APIC(encoding=3, mime=mime, type=3, desc="Cover", data=data))
+            tags.save(path)
+        elif ext in (".m4a", ".alac", ".aac"):
+            audio = mutagen.mp4.MP4(path)
+            fmt = mutagen.mp4.MP4Cover.FORMAT_PNG if mime == "image/png" else mutagen.mp4.MP4Cover.FORMAT_JPEG
+            audio.tags["covr"] = [mutagen.mp4.MP4Cover(data, imageformat=fmt)]
+            audio.save()
+        elif ext in (".ogg", ".opus"):
+            audio = mutagen.File(path)
+            if audio is not None:
+                pic = mutagen.flac.Picture()
+                pic.type = 3
+                pic.mime = mime
+                pic.data = data
+                pic.width = pic.height = pic.depth = pic.colors = 0
+                audio["metadata_block_picture"] = [base64.b64encode(pic.write()).decode("ascii")]
+                audio.save()
+        else:
+            logger.debug(f"[tag] Cover embedding not supported for {ext}")
+    except Exception as ex:
+        logger.debug(f"[tag] Cover embed failed for {path.name}: {ex}")
+
+
+def tag_file(path: Path, track: sqlite3.Row) -> None:
+    try:
+        audio = mutagen.File(path, easy=True)
+        if audio is None:
+            logger.debug(f"[tag] Skipping unsupported format: {path.suffix}")
+            return
+        if audio.tags is None:
+            audio.add_tags()
+        if track["title"]:
+            audio["title"] = [track["title"]]
+        if track["artist"]:
+            audio["artist"] = [track["artist"]]
+        if track["album"]:
+            audio["album"] = [track["album"]]
+        if track["track_number"]:
+            audio["tracknumber"] = [str(track["track_number"])]
+        audio.save()
+        logger.info(f"[tag] Tagged: {path.name} — {track['artist']} / {track['title']}")
+        cover_data = _fetch_cover(track["cover_url"] or "")
+        if cover_data:
+            _embed_cover(path, cover_data)
+    except Exception as ex:
+        logger.warning(f"[tag] Failed to tag {path.name}: {ex}")
+
+
 def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
     watch = Path(get_setting("download_watch_path"))
     if not watch.exists():
@@ -912,6 +997,7 @@ def _worker_tick():
             try:
                 ok, result = Organizer.move_file(candidate, target)
                 logger.info(f"[slskd] Organized to: {result}")
+                tag_file(Path(result), t)
                 conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?",
                              (result, t["id"]))
             except Exception as ex:
@@ -977,6 +1063,8 @@ def _worker_tick():
             else:
                 final = result
             logger.info(f"[monochrome] Completed: {final}")
+            if Path(final).exists():
+                tag_file(Path(final), t)
             conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?", (final, t["id"]))
         else:
             logger.warning(f"[monochrome] All instances failed for '{t['title']}': {result}")
