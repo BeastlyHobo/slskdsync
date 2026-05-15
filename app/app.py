@@ -101,6 +101,14 @@ def init_db():
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
 
+    existing_job_cols = {row[1] for row in cur.execute("PRAGMA table_info(import_jobs)")}
+    for col, ddl in [
+        ("album_search_id", "TEXT DEFAULT NULL"),
+        ("preferred_username", "TEXT DEFAULT NULL"),
+    ]:
+        if col not in existing_job_cols:
+            cur.execute(f"ALTER TABLE import_jobs ADD COLUMN {col} {ddl}")
+
     defaults = {
         "library_path": "/music",
         "slskd_url": "http://slskd:5030",
@@ -671,6 +679,29 @@ class SlskdClient:
                 last_err = str(ex)
         return False, "", last_err
 
+    def start_search_raw(self, query: str) -> tuple[bool, str, str]:
+        """Start an slskd search with a raw query string, skipping track-level cleanup."""
+        body = {
+            "searchText": query[:100],
+            "fileLimit": 10000,
+            "filterResponses": True,
+            "responseLimit": 100,
+            "searchTimeout": 15000,
+        }
+        last_err = "Could not reach slskd"
+        for ep in ["/api/v0/searches", "/api/v1/searches"]:
+            url = f"{self.base}{ep}"
+            try:
+                r = requests.post(url, headers=self._headers(), auth=self._auth(),
+                                  json=body, timeout=25)
+                logger.debug(f"[slskd] POST {url} → {r.status_code} {r.text[:200]}")
+                if r.status_code < 300:
+                    return True, str(r.json().get("id", "")), "search started"
+                last_err = f"HTTP {r.status_code} from {ep}: {r.text[:150]}"
+            except Exception as ex:
+                last_err = str(ex)
+        return False, "", last_err
+
     def get_search_results(self, search_id: str) -> list[dict]:
         if not search_id:
             return []
@@ -768,6 +799,36 @@ class SlskdClient:
             return False, f"HTTP {r.status_code}: {r.text[:200]}"
         except Exception as ex:
             return False, str(ex)
+
+
+# ---------------------------------------------------------------------------
+# Album-search helpers
+# ---------------------------------------------------------------------------
+
+def _score_user_album_coverage(user_files: list, album_tracks: list) -> int:
+    """Count how many album tracks this user has a matching file for."""
+    matched = 0
+    for track in album_tracks:
+        title_l = (track["title"] or "").lower()
+        if not title_l:
+            continue
+        for f in user_files:
+            basename = f["filename"].replace("\\", "/").rsplit("/", 1)[-1].lower()
+            if title_l in basename:
+                matched += 1
+                break
+    return matched
+
+
+def _find_file_for_track(user_files: list, track: sqlite3.Row,
+                          slskd_client: "SlskdClient") -> Optional[dict]:
+    """Return the best audio file for a track from a specific user's file list."""
+    meta = TrackMeta(track["artist"] or "", track["album"] or "",
+                     track["title"] or "", track["track_number"] or 0)
+    candidates = [f for f in user_files if slskd_client.score_result(f, meta) > 0]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda f: slskd_client.score_result(f, meta))
 
 
 # ---------------------------------------------------------------------------
@@ -958,6 +1019,117 @@ def run_worker(stop_event: threading.Event):
 def _worker_tick():
     conn = get_conn()
     slskd = SlskdClient()
+
+    # ── ALBUM SEARCH: start ────────────────────────────────────────────────
+    # Jobs with 3+ pending slskd tracks get one "Artist Album" search instead
+    # of N individual searches; all tracks hold in 'album_queued' state.
+    for job in conn.execute("""
+        SELECT j.id, t.artist, t.album, COUNT(*) as cnt
+        FROM import_jobs j
+        JOIN tracks t ON t.job_id = j.id
+        WHERE t.download_source IN ('slskd', '')
+          AND t.slskd_state = 'pending'
+          AND j.album_search_id IS NULL
+        GROUP BY j.id
+        HAVING cnt >= 3
+        LIMIT 3
+    """).fetchall():
+        artist = re.split(r',|&|\bfeat\.|\bft\.', job["artist"] or "",
+                          flags=re.IGNORECASE)[0].strip()
+        album = (job["album"] or "").strip()
+        query = f"{artist} {album}".strip()[:100]
+        if not query:
+            continue
+        ok, search_id, msg = slskd.start_search_raw(query)
+        if ok:
+            conn.execute("UPDATE import_jobs SET album_search_id=? WHERE id=?",
+                         (search_id, job["id"]))
+            conn.execute(
+                "UPDATE tracks SET slskd_state='album_queued'"
+                " WHERE job_id=? AND slskd_state='pending'",
+                (job["id"],)
+            )
+            logger.info(f"[album] Album search started job={job['id']} query={query!r} id={search_id}")
+        else:
+            logger.warning(f"[album] Album search failed job={job['id']}: {msg}")
+        conn.commit()
+
+    # ── ALBUM SEARCH: process results ─────────────────────────────────────
+    # When the album search completes, pick the peer with best track coverage
+    # and initiate downloads for all matched tracks. Unmatched tracks fall
+    # back to 'pending' for individual search on the next tick.
+    for job in conn.execute("""
+        SELECT j.id, j.album_search_id
+        FROM import_jobs j
+        WHERE j.album_search_id IS NOT NULL
+          AND j.preferred_username IS NULL
+          AND EXISTS (
+              SELECT 1 FROM tracks t
+              WHERE t.job_id = j.id AND t.slskd_state = 'album_queued'
+          )
+        LIMIT 3
+    """).fetchall():
+        results = slskd.get_search_results(job["album_search_id"])
+        if not results:
+            continue  # search still running
+
+        album_tracks = conn.execute(
+            "SELECT * FROM tracks WHERE job_id=? AND slskd_state='album_queued'",
+            (job["id"],)
+        ).fetchall()
+        if not album_tracks:
+            continue
+
+        # Group flat results by username
+        by_user: dict = {}
+        for r in results:
+            by_user.setdefault(r["username"], []).append(r)
+
+        # Pick the user with the best combination of coverage, speed, and free slot
+        def _user_total_score(username, files):
+            coverage = _score_user_album_coverage(files, album_tracks)
+            speed_bonus = min(files[0].get("upload_speed", 0) / (1024 * 1024), 10)
+            slot_bonus = 5 if files[0].get("has_slot") else 0
+            return coverage * 10 + speed_bonus + slot_bonus
+
+        best_username = max(by_user, key=lambda u: _user_total_score(u, by_user[u]),
+                            default=None)
+        conn.execute("UPDATE import_jobs SET preferred_username=? WHERE id=?",
+                     (best_username or "", job["id"]))
+
+        if best_username:
+            preferred_files = by_user[best_username]
+            coverage = _score_user_album_coverage(preferred_files, album_tracks)
+            logger.info(f"[album] job={job['id']} preferred peer={best_username!r} "
+                        f"({coverage}/{len(album_tracks)} tracks matched)")
+            for track in album_tracks:
+                best_file = _find_file_for_track(preferred_files, track, slskd)
+                if best_file:
+                    ok, msg = slskd.download_file(
+                        best_username, best_file["filename"], best_file.get("size", 0))
+                    if ok:
+                        conn.execute(
+                            "UPDATE tracks SET slskd_state='downloading',"
+                            " slskd_search_id=?, slskd_tried_users=? WHERE id=?",
+                            (job["album_search_id"], best_username, track["id"])
+                        )
+                        logger.info(f"[album] Downloading {track['title']!r} from {best_username}")
+                    else:
+                        logger.warning(f"[album] Download failed for {track['title']!r}: {msg}")
+                        conn.execute(
+                            "UPDATE tracks SET slskd_state='pending' WHERE id=?", (track["id"],))
+                else:
+                    logger.info(f"[album] No match for {track['title']!r} from preferred peer, falling back")
+                    conn.execute(
+                        "UPDATE tracks SET slskd_state='pending' WHERE id=?", (track["id"],))
+        else:
+            logger.warning(f"[album] No peers found for job={job['id']}, falling back to individual search")
+            conn.execute(
+                "UPDATE tracks SET slskd_state='pending'"
+                " WHERE job_id=? AND slskd_state='album_queued'",
+                (job["id"],)
+            )
+        conn.commit()
 
     # pending slskd → start search
     for t in conn.execute(
