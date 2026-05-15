@@ -706,6 +706,7 @@ class SlskdClient:
                         "length": f.get("length", 0),
                         "has_slot": has_slot,
                         "upload_speed": upload_speed,
+                        "queue_length": user_response.get("queueLength", 0),
                     })
             return flat
         except Exception as ex:
@@ -718,18 +719,41 @@ class SlskdClient:
         ext = basename_l.rsplit(".", 1)[-1] if "." in basename_l else ""
         if ext not in {"flac", "mp3", "m4a", "ogg", "aac", "wav", "aif", "aiff", "opus", "wma"}:
             return -100
+
+        # Format quality — primary factor, prefer lossless
         score = {"flac": 100, "wav": 80, "aif": 80, "aiff": 80, "m4a": 65, "ogg": 55, "opus": 55}.get(ext, 0)
         if ext == "mp3":
             br = result.get("bitRate", 0)
             score = 60 if br >= 320 else 50 if br >= 256 else 40 if br >= 192 else 30
+
+        # Metadata match
         title_l = (track.title or "").lower()
         artist_l = (track.artist or "").lower().split(",")[0].strip()
         if title_l and title_l in basename_l:
             score += 30
         if artist_l and artist_l in fn_l:
             score += 20
+
+        # Availability — free slot means download starts immediately (+15)
         if result.get("has_slot"):
+            score += 15
+
+        # Upload speed bonus (0–15 pts) — breaks ties between equal-quality sources
+        speed_mbps = result.get("upload_speed", 0) / (1024 * 1024)
+        if speed_mbps >= 5:
+            score += 15
+        elif speed_mbps >= 2:
+            score += 10
+        elif speed_mbps >= 0.5:
             score += 5
+
+        # Queue length penalty — long queues mean slow starts
+        queue_len = result.get("queue_length", 0)
+        if queue_len > 10:
+            score -= 10
+        elif queue_len > 5:
+            score -= 5
+
         return score
 
     def download_file(self, username: str, filename: str, size: int) -> tuple[bool, str]:
