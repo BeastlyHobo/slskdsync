@@ -96,6 +96,7 @@ def init_db():
         ("cover_url", "TEXT"),
         ("download_source", "TEXT DEFAULT 'slskd'"),
         ("slskd_search_id", "TEXT"),
+        ("slskd_tried_users", "TEXT DEFAULT ''"),
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
@@ -705,6 +706,7 @@ class SlskdClient:
                         "length": f.get("length", 0),
                         "has_slot": has_slot,
                         "upload_speed": upload_speed,
+                        "queue_length": user_response.get("queueLength", 0),
                     })
             return flat
         except Exception as ex:
@@ -717,18 +719,41 @@ class SlskdClient:
         ext = basename_l.rsplit(".", 1)[-1] if "." in basename_l else ""
         if ext not in {"flac", "mp3", "m4a", "ogg", "aac", "wav", "aif", "aiff", "opus", "wma"}:
             return -100
+
+        # Format quality — primary factor, prefer lossless
         score = {"flac": 100, "wav": 80, "aif": 80, "aiff": 80, "m4a": 65, "ogg": 55, "opus": 55}.get(ext, 0)
         if ext == "mp3":
             br = result.get("bitRate", 0)
             score = 60 if br >= 320 else 50 if br >= 256 else 40 if br >= 192 else 30
+
+        # Metadata match
         title_l = (track.title or "").lower()
         artist_l = (track.artist or "").lower().split(",")[0].strip()
         if title_l and title_l in basename_l:
             score += 30
         if artist_l and artist_l in fn_l:
             score += 20
+
+        # Availability — free slot means download starts immediately (+15)
         if result.get("has_slot"):
+            score += 15
+
+        # Upload speed bonus (0–15 pts) — breaks ties between equal-quality sources
+        speed_mbps = result.get("upload_speed", 0) / (1024 * 1024)
+        if speed_mbps >= 5:
+            score += 15
+        elif speed_mbps >= 2:
+            score += 10
+        elif speed_mbps >= 0.5:
             score += 5
+
+        # Queue length penalty — long queues mean slow starts
+        queue_len = result.get("queue_length", 0)
+        if queue_len > 10:
+            score -= 10
+        elif queue_len > 5:
+            score -= 5
+
         return score
 
     def download_file(self, username: str, filename: str, size: int) -> tuple[bool, str]:
@@ -967,9 +992,11 @@ def _worker_tick():
         results = slskd.get_search_results(t["slskd_search_id"])
         if not results:
             continue  # search still running
-        logger.info(f"[slskd] {len(results)} results for '{meta.title}', selecting best")
+        tried = set(u for u in (t["slskd_tried_users"] or "").split(",") if u)
+        logger.info(f"[slskd] {len(results)} results for '{meta.title}', selecting best (tried: {len(tried)})")
         scored = sorted(
-            ((slskd.score_result(r, meta), i, r) for i, r in enumerate(results)),
+            ((slskd.score_result(r, meta), i, r) for i, r in enumerate(results)
+             if r.get("username") not in tried),
             key=lambda x: x[0],
             reverse=True,
         )
@@ -978,11 +1005,25 @@ def _worker_tick():
             logger.info(f"[slskd] Downloading from {best['username']}: {best['filename']}")
             ok, msg = slskd.download_file(best["username"], best["filename"], best.get("size", 0))
             if ok:
-                conn.execute("UPDATE tracks SET slskd_state='downloading' WHERE id=?", (t["id"],))
+                tried.add(best["username"])
+                conn.execute(
+                    "UPDATE tracks SET slskd_state='downloading', slskd_tried_users=? WHERE id=?",
+                    (",".join(tried), t["id"]),
+                )
             else:
                 logger.warning(f"[slskd] Download request failed for '{meta.title}': {msg}")
-                conn.execute("UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
-                             (f"Download failed: {msg}", t["id"]))
+                tried.add(best["username"])
+                if len(tried) < 4:
+                    logger.info(f"[slskd] Retrying '{meta.title}' (attempt {len(tried)+1})")
+                    conn.execute(
+                        "UPDATE tracks SET slskd_state='queued', slskd_tried_users=?, slskd_error=? WHERE id=?",
+                        (",".join(tried), f"Retrying (attempt {len(tried)}): {msg[:80]}", t["id"]),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
+                        (f"All peers failed: {msg[:100]}", t["id"]),
+                    )
         else:
             logger.warning(f"[slskd] No usable files found for '{meta.title}'")
             conn.execute(
@@ -1363,6 +1404,30 @@ def api_tracks():
     rows = [dict(r) for r in conn.execute("SELECT * FROM tracks ORDER BY id DESC LIMIT 100").fetchall()]
     conn.close()
     return jsonify(rows)
+
+
+@app.route("/api/queue/action", methods=["POST"])
+def api_queue_action():
+    action = (request.get_json() or {}).get("action", "")
+    conn = get_conn()
+    if action == "clear_failed":
+        conn.execute("DELETE FROM tracks WHERE slskd_state='failed'")
+    elif action == "clear_completed":
+        conn.execute("DELETE FROM tracks WHERE slskd_state='completed'")
+    elif action == "clear_all":
+        conn.execute("DELETE FROM tracks WHERE slskd_state IN ('failed','completed')")
+    elif action == "retry_failed":
+        conn.execute(
+            "UPDATE tracks SET slskd_state='pending', slskd_error=NULL, slskd_search_id=NULL,"
+            " slskd_tried_users='' WHERE slskd_state='failed'"
+        )
+    else:
+        conn.close()
+        return jsonify({"ok": False, "error": "unknown action"}), 400
+    conn.commit()
+    affected = conn.execute("SELECT changes()").fetchone()[0]
+    conn.close()
+    return jsonify({"ok": True, "affected": affected})
 
 
 @app.route("/api/download/album", methods=["POST"])
