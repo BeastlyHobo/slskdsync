@@ -37,6 +37,9 @@
   {% if stats.failed > 0 %}<div class="stat-chip stat-chip-fail"><strong>{{ stats.failed }}</strong> failed</div>{% endif %}
 </div>
 <div class="queue-actions">
+  {% if stats.downloading > 0 %}
+  <button class="qa-btn qa-retry" onclick="queueAction('retry_downloading')">↺ Retry stuck</button>
+  {% endif %}
   {% if stats.failed > 0 %}
   <button class="qa-btn qa-retry" onclick="queueAction('retry_failed')">↺ Retry failed</button>
   <button class="qa-btn qa-clear" onclick="queueAction('clear_failed')">✕ Clear failed</button>
