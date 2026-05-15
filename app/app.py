@@ -114,6 +114,11 @@ def init_db():
     }
     for k, v in defaults.items():
         cur.execute("INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)", (k, v))
+    # Migrate old default folder template (had track_number prefix which renders as 00 when unknown)
+    cur.execute(
+        "UPDATE settings SET value=? WHERE key='folder_template' AND value=?",
+        ("{artist}/{album}/{title}{ext}", "{artist}/{album}/{track_number:02d} - {title}{ext}"),
+    )
     conn.commit()
     conn.close()
 
@@ -772,7 +777,11 @@ class Organizer:
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists() and get_setting("replace_existing") != "1":
             return True, str(dst)  # already there — treat as success
-        shutil.move(str(src), str(dst))
+        shutil.copy2(str(src), str(dst))
+        try:
+            src.unlink()
+        except Exception as ex:
+            logger.debug(f"[organizer] Could not remove source file (permission issue — OK): {ex}")
         return True, str(dst)
 
 
@@ -900,10 +909,15 @@ def _worker_tick():
             logger.info(f"[slskd] Found file for '{t['title']}': {candidate.name}")
             target = Organizer.target_path(t, candidate)
             logger.info(f"[slskd] Moving to library ({library}): {target}")
-            ok, result = Organizer.move_file(candidate, target)
-            logger.info(f"[slskd] Organized to: {result}")
-            conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?",
-                         (result, t["id"]))
+            try:
+                ok, result = Organizer.move_file(candidate, target)
+                logger.info(f"[slskd] Organized to: {result}")
+                conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?",
+                             (result, t["id"]))
+            except Exception as ex:
+                logger.error(f"[slskd] Failed to move '{t['title']}': {ex}")
+                conn.execute("UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
+                             (f"Move failed: {ex}", t["id"]))
             conn.commit()
         else:
             logger.info(f"[slskd] Still waiting for '{t['title']}' to appear in {get_setting('download_watch_path')}")
