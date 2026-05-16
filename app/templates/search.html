@@ -94,8 +94,13 @@ const tabBar = document.getElementById('tab-bar');
 
 let activeTab = 'track';
 let debounce = null;
-// navigation stack: [{type:'search'|'artist'|'album', id, name, restore}]
 let navStack = [];
+
+// Library index: Set of "artist||title" keys for already-downloaded check
+let libIndex = new Set();
+fetch('/api/library/index').then(r => r.json()).then(items => {
+  libIndex = new Set(items.map(i => i.a + '||' + i.t));
+}).catch(() => {});
 
 // Restore last search on page load
 (function() {
@@ -247,6 +252,8 @@ function renderTracks(tracks, albumCtx) {
 
 function trackCardHtml(t, hideDrillLinks) {
   const dur = fmtDur(t.duration);
+  const libKey = (t.artist || '').toLowerCase().trim() + '||' + (t.title || '').toLowerCase().trim();
+  const inLib = libIndex.has(libKey);
   const artistLink = t.artist_id && !hideDrillLinks
     ? `<span class="track-link" data-action="artist" data-id="${esc(t.artist_id)}" data-name="${esc(t.artist)}">${esc(t.artist)}</span>`
     : esc(t.artist || '');
@@ -254,13 +261,13 @@ function trackCardHtml(t, hideDrillLinks) {
     ? ` · <span class="track-link" data-action="album" data-id="${esc(t.album_id)}" data-name="${esc(t.album)}" data-artist="${esc(t.artist)}" data-cover="${esc(t.cover||'')}">${esc(t.album)}</span>`
     : (t.album ? ` · ${esc(t.album)}` : '');
   return `
-  <div class="track-card">
+  <div class="track-card${inLib ? ' track-in-lib' : ''}">
     ${t.cover
       ? `<img class="cover" src="${esc(t.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
          <div class="cover-placeholder" style="display:none">🎵</div>`
       : `<div class="cover-placeholder">🎵</div>`}
     <div class="track-info">
-      <div class="track-title">${esc(t.title)}</div>
+      <div class="track-title">${esc(t.title)}${inLib ? ' <span class="in-lib-badge">✓ Library</span>' : ''}</div>
       <div class="track-sub">${artistLink}${albumLink}</div>
     </div>
     ${dur ? `<span class="track-dur">${dur}</span>` : ''}
@@ -313,19 +320,65 @@ function loadArtist(id, name) {
 
 function renderArtistPage(data) {
   if (data.error) { area.innerHTML = `<div class="loading">${esc(data.error)}</div>`; return; }
-  if (!data.albums || !data.albums.length) {
-    area.innerHTML = '<div class="empty-state"><div class="empty-icon">💿</div><p>No albums found</p></div>';
-    return;
+
+  const fansStr = data.nb_fan > 1e6
+    ? (data.nb_fan / 1e6).toFixed(1) + 'M fans'
+    : data.nb_fan > 1e3
+    ? Math.round(data.nb_fan / 1e3) + 'K fans'
+    : (data.nb_fan || '') + ' fans';
+
+  const hero = `
+    <div class="artist-hero">
+      ${data.picture
+        ? `<img class="artist-hero-img" src="${esc(data.picture)}" alt=""
+              onerror="this.style.display='none'">`
+        : ''}
+      <div class="artist-hero-overlay">
+        <div class="artist-hero-name">${esc(data.name)}</div>
+        ${data.nb_fan ? `<div class="artist-hero-fans">${fansStr}</div>` : ''}
+      </div>
+    </div>`;
+
+  let topSection = '';
+  if (data.top_tracks && data.top_tracks.length) {
+    const rows = data.top_tracks.map((t, i) => {
+      const libKey = (t.artist || '').toLowerCase().trim() + '||' + (t.title || '').toLowerCase().trim();
+      const inLib = libIndex.has(libKey);
+      return `
+      <div class="top-track-row${inLib ? ' track-in-lib' : ''}">
+        <span class="top-track-num">${i + 1}</span>
+        <div class="top-track-info">
+          <div class="top-track-title">${esc(t.title)}${inLib ? ' <span class="in-lib-badge">✓</span>' : ''}</div>
+          ${t.album ? `<div class="top-track-album">${esc(t.album)}</div>` : ''}
+        </div>
+        <span class="top-track-dur">${fmtDur(t.duration)}</span>
+        <div class="dl-btns">
+          <button class="btn btn-slsk dl-btn" data-source="slskd"
+            data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
+            data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">SLSK</button>
+          <button class="btn btn-mono dl-btn" data-source="monochrome"
+            data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
+            data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">TIDAL</button>
+        </div>
+      </div>`;
+    }).join('');
+    topSection = `<div class="section-label" style="margin:.9rem 0 .4rem">Popular Tracks</div>
+      <div class="top-tracks-list">${rows}</div>`;
   }
-  const html = data.albums.map(a => `
+
+  const albumsHtml = (data.albums || []).map(a => `
     <div class="album-card" data-action="album" data-id="${esc(a.id)}" data-name="${esc(a.title)}" data-artist="${esc(data.name)}" data-cover="${esc(a.cover)}">
       ${a.cover
         ? `<img class="album-cover" src="${esc(a.cover)}" alt="" loading="lazy">`
         : `<div class="album-cover-ph">💿</div>`}
       <div class="album-title">${esc(a.title)}</div>
-      <div class="album-sub">${a.release_date ? a.release_date.slice(0,4) : ''}${a.nb_tracks ? ` · ${a.nb_tracks} tracks` : ''}</div>
+      <div class="album-sub">${a.release_date ? a.release_date.slice(0,4) : ''}${a.nb_tracks ? ` · ${a.nb_tracks} tr` : ''}</div>
     </div>`).join('');
-  area.innerHTML = `<div class="album-grid">${html}</div>`;
+  const albumsSection = albumsHtml
+    ? `<div class="section-label" style="margin:.9rem 0 .4rem">Albums</div><div class="album-grid">${albumsHtml}</div>`
+    : '';
+
+  area.innerHTML = hero + topSection + albumsSection;
 }
 
 // ── Album list ────────────────────────────────────────────────────────────
@@ -453,5 +506,59 @@ function esc(str) {
 <style>
 .track-link { color: var(--accent); cursor: pointer; }
 .track-link:hover { text-decoration: underline; }
+
+/* Already-in-library indicator */
+.in-lib-badge {
+  font-size: .65rem; font-weight: 700; color: var(--success-text);
+  background: #163020; border-radius: 3px; padding: 1px 5px;
+  margin-left: .3rem; vertical-align: middle; letter-spacing: .02em;
+}
+
+/* Artist hero banner */
+.artist-hero {
+  position: relative; height: 160px; border-radius: var(--radius);
+  overflow: hidden; margin-bottom: .1rem;
+  background: var(--surface2);
+}
+.artist-hero-img {
+  width: 100%; height: 100%; object-fit: cover; object-position: center top;
+  display: block;
+}
+.artist-hero-overlay {
+  position: absolute; inset: 0;
+  background: linear-gradient(to top, rgba(0,0,0,.8) 0%, rgba(0,0,0,.1) 60%);
+  display: flex; flex-direction: column; justify-content: flex-end;
+  padding: .85rem 1rem;
+}
+.artist-hero-name {
+  font-size: 1.5rem; font-weight: 800; letter-spacing: -.01em; line-height: 1.1;
+}
+.artist-hero-fans { font-size: .75rem; color: rgba(255,255,255,.6); margin-top: .25rem; }
+
+/* Top tracks list */
+.top-tracks-list {
+  background: var(--surface); border-radius: var(--radius-sm);
+  border: 1px solid var(--border); overflow: hidden;
+}
+.top-track-row {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .55rem .75rem; border-bottom: 1px solid var(--border);
+}
+.top-track-row:last-child { border-bottom: none; }
+.top-track-row:hover { background: var(--surface2); }
+.top-track-num {
+  width: 1.2rem; text-align: center; font-size: .75rem;
+  color: var(--text-muted); flex-shrink: 0; font-weight: 600;
+}
+.top-track-info { flex: 1; min-width: 0; }
+.top-track-title {
+  font-size: .85rem; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.top-track-album { font-size: .7rem; color: var(--text-muted); margin-top: 1px;
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top-track-dur { font-size: .72rem; color: var(--text-muted); flex-shrink: 0; }
+.top-track-row .dl-btns { flex-shrink: 0; }
+.top-track-row .btn { padding: .2rem .45rem; font-size: .68rem; }
 </style>
 {% endblock %}

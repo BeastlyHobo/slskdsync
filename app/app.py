@@ -445,11 +445,26 @@ class DeezerProvider:
     def get_artist(self, artist_id: str) -> dict:
         artist = self._get(f"/artist/{artist_id}")
         albums_data = self._get(f"/artist/{artist_id}/albums", limit=50)
+        top_data = self._get(f"/artist/{artist_id}/top", limit=10)
         return {
             "id": str(artist_id),
             "name": artist.get("name", ""),
-            "picture": artist.get("picture_medium", ""),
+            "picture": artist.get("picture_xl", "") or artist.get("picture_big", "") or artist.get("picture_medium", ""),
             "nb_fan": artist.get("nb_fan", 0),
+            "nb_album": artist.get("nb_album", 0),
+            "top_tracks": [
+                {
+                    "id": str(t.get("id", "")),
+                    "title": t.get("title", ""),
+                    "artist": artist.get("name", ""),
+                    "artist_id": str(artist_id),
+                    "album": (t.get("album") or {}).get("title", ""),
+                    "album_id": str((t.get("album") or {}).get("id", "")),
+                    "cover": (t.get("album") or {}).get("cover_medium", ""),
+                    "duration": t.get("duration", 0),
+                }
+                for t in top_data.get("data", [])
+            ],
             "albums": [
                 {
                     "id": str(a.get("id", "")),
@@ -1437,19 +1452,43 @@ def search():
 
 @app.route("/library")
 def library():
-    conn = get_conn()
-    tracks = conn.execute(
-        "SELECT * FROM tracks WHERE slskd_state='completed'"
-        " ORDER BY artist, album, track_number, title"
-    ).fetchall()
-    conn.close()
-    # Group into {artist: {album: [tracks]}}
+    music_path = Path(get_setting("library_path") or "/music")
     grouped: dict = {}
-    for t in tracks:
-        a = t["artist"] or "Unknown Artist"
-        al = t["album"] or "Unknown Album"
-        grouped.setdefault(a, {}).setdefault(al, []).append(t)
-    return render_template("library.html", grouped=grouped, total=len(tracks))
+    total = 0
+    if music_path.exists():
+        for f in sorted(music_path.rglob("*")):
+            if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
+                continue
+            artist, album, title, track_num, cover = "", "", f.stem, 0, ""
+            try:
+                audio = mutagen.File(f, easy=True)
+                if audio and audio.tags:
+                    artist = str(audio.tags.get("artist", [""])[0])
+                    album = str(audio.tags.get("album", [""])[0])
+                    title = str(audio.tags.get("title", [f.stem])[0])
+                    tn = audio.tags.get("tracknumber", ["0"])[0]
+                    track_num = int(str(tn).split("/")[0]) if tn else 0
+            except Exception:
+                pass
+            # Fall back to directory structure if tags empty
+            if not artist:
+                parts = f.relative_to(music_path).parts
+                artist = parts[0] if len(parts) > 2 else "Unknown Artist"
+            if not album:
+                parts = f.relative_to(music_path).parts
+                album = parts[1] if len(parts) > 2 else parts[0] if len(parts) > 1 else "Unknown Album"
+            grouped.setdefault(artist, {}).setdefault(album, []).append({
+                "title": title,
+                "track_number": track_num,
+                "ext": f.suffix[1:].upper(),
+                "path": str(f),
+            })
+            total += 1
+    # Sort tracks within each album by track number then title
+    for albums in grouped.values():
+        for trk_list in albums.values():
+            trk_list.sort(key=lambda t: (t["track_number"] or 999, t["title"]))
+    return render_template("library.html", grouped=grouped, total=total, music_path=str(music_path))
 
 
 @app.route("/settings", methods=["GET", "POST"])
@@ -1510,6 +1549,29 @@ def api_album(album_id):
         return jsonify(_deezer.get_album(album_id))
     except Exception as ex:
         return jsonify({"error": str(ex)}), 500
+
+
+@app.route("/api/tracks/<int:track_id>", methods=["DELETE"])
+def delete_track(track_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM tracks WHERE id=?", (track_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/library/index")
+def api_library_index():
+    """Lightweight list of downloaded track keys for the search page to check."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT artist, title FROM tracks WHERE slskd_state='completed'"
+    ).fetchall()
+    conn.close()
+    return jsonify([
+        {"a": (r["artist"] or "").lower().strip(), "t": (r["title"] or "").lower().strip()}
+        for r in rows
+    ])
 
 
 # ---------------------------------------------------------------------------

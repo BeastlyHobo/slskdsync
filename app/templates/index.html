@@ -56,10 +56,8 @@
 {% set active_tracks = tracks | selectattr('slskd_state', 'ne', 'completed') | list %}
 {% set done_tracks = tracks | selectattr('slskd_state', 'equalto', 'completed') | list %}
 
-{% if tracks %}
-{% if active_tracks %}
-<div class="card-list" id="queue-active">
-  {% for t in active_tracks %}
+{% macro track_card(t) %}
+<div class="swipe-row" data-id="{{ t.id }}">
   <div class="track-card expandable" onclick="toggleExpand(this)">
     {% if t.cover_url %}
       <img class="cover" src="{{ t.cover_url }}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
@@ -73,15 +71,30 @@
       {% if t.slskd_error %}
       <div class="track-sub track-error">{{ t.slskd_error[:80] }}{% if t.slskd_error|length > 80 %}…{% endif %}</div>
       {% endif %}
+      {% if t.local_path and t.slskd_state == 'completed' %}
+      <div class="track-sub" style="color:#40cc70;margin-top:2px">✓ {{ t.local_path.split('/')[-1] }}</div>
+      {% endif %}
       <div class="track-detail">
         <div class="detail-row"><span class="detail-label">Source</span> {{ t.download_source or 'slskd' }}</div>
         {% if t.slskd_error %}<div class="detail-row"><span class="detail-label">Error</span> {{ t.slskd_error }}</div>{% endif %}
+        {% if t.local_path %}<div class="detail-row"><span class="detail-label">Path</span> {{ t.local_path }}</div>{% endif %}
         {% if t.slskd_search_id %}<div class="detail-row"><span class="detail-label">Search ID</span> {{ t.slskd_search_id[:16] }}…</div>{% endif %}
       </div>
     </div>
+    {% if t.slskd_state == 'completed' %}
+    <span class="badge badge-completed">done</span>
+    {% else %}
     <span class="badge badge-{{ t.slskd_state or 'pending' }}">{{ (t.slskd_state or 'pending') }}</span>
+    {% endif %}
   </div>
-  {% endfor %}
+  <button class="swipe-del-btn" onclick="deleteTrack(this)">Delete</button>
+</div>
+{% endmacro %}
+
+{% if tracks %}
+{% if active_tracks %}
+<div class="card-list" id="queue-active">
+  {% for t in active_tracks %}{{ track_card(t) }}{% endfor %}
 </div>
 {% endif %}
 
@@ -91,28 +104,7 @@
   <span id="completed-chevron">›</span>
 </div>
 <div class="card-list" id="queue-completed" style="display:none">
-  {% for t in done_tracks %}
-  <div class="track-card expandable" onclick="toggleExpand(this)">
-    {% if t.cover_url %}
-      <img class="cover" src="{{ t.cover_url }}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-      <div class="cover-placeholder" style="display:none">🎵</div>
-    {% else %}
-      <div class="cover-placeholder">🎵</div>
-    {% endif %}
-    <div class="track-info">
-      <div class="track-title">{{ t.title or '—' }}</div>
-      <div class="track-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
-      {% if t.local_path %}
-      <div class="track-sub" style="color:#40cc70;margin-top:3px">✓ {{ t.local_path.split('/')[-1] }}</div>
-      {% endif %}
-      <div class="track-detail">
-        <div class="detail-row"><span class="detail-label">Source</span> {{ t.download_source or 'slskd' }}</div>
-        {% if t.local_path %}<div class="detail-row"><span class="detail-label">Path</span> {{ t.local_path }}</div>{% endif %}
-      </div>
-    </div>
-    <span class="badge badge-completed">done</span>
-  </div>
-  {% endfor %}
+  {% for t in done_tracks %}{{ track_card(t) }}{% endfor %}
 </div>
 {% endif %}
 
@@ -132,9 +124,7 @@
 
 <style>
 .stat-chip-fail { color: #e05050 !important; }
-.queue-actions {
-  display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .75rem;
-}
+.queue-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .75rem; }
 .qa-btn {
   padding: .3rem .65rem; border-radius: var(--radius-sm); font-size: .75rem;
   font-weight: 600; cursor: pointer; border: 1px solid var(--border);
@@ -145,14 +135,31 @@
 .qa-retry:hover { border-color: #5a9aee; }
 .qa-clear:hover { color: #e05050; border-color: #5c1a1a; }
 
+/* ── Swipe-to-delete ────────────────────────── */
+.swipe-row {
+  position: relative; overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+.swipe-row .track-card {
+  transition: transform .18s ease;
+  border-radius: var(--radius-sm);
+}
+.swipe-del-btn {
+  position: absolute; right: 0; top: 0; bottom: 0; width: 76px;
+  background: #c0392b; color: #fff; border: none;
+  font-size: .78rem; font-weight: 700; cursor: pointer;
+  transform: translateX(76px); transition: transform .18s ease;
+}
+.swipe-row.swiped .track-card { transform: translateX(-76px); }
+.swipe-row.swiped .swipe-del-btn { transform: translateX(0); }
+
 .track-card.expandable { cursor: pointer; flex-wrap: wrap; }
 .track-card.expandable:hover { background: var(--surface2); }
 .track-detail { display: none; width: 100%; margin-top: .5rem; padding-top: .5rem;
                 border-top: 1px solid var(--border); }
 .track-card.expanded .track-detail { display: block; }
-.detail-row { font-size: .72rem; color: var(--text-muted); line-height: 1.6;
-              word-break: break-all; }
-.detail-label { color: var(--text-muted); font-weight: 600; margin-right: .35rem; }
+.detail-row { font-size: .72rem; color: var(--text-muted); line-height: 1.6; word-break: break-all; }
+.detail-label { font-weight: 600; margin-right: .35rem; }
 .track-error { color: #e05050; margin-top: 3px; font-size: .75rem; }
 
 .completed-header {
@@ -169,6 +176,11 @@
 
 <script>
 function toggleExpand(card) {
+  const row = card.closest('.swipe-row');
+  if (row && row.classList.contains('swiped')) {
+    row.classList.remove('swiped');
+    return;
+  }
   card.classList.toggle('expanded');
 }
 
@@ -188,11 +200,55 @@ function queueAction(action) {
   }).then(() => location.reload());
 }
 
+function deleteTrack(btn) {
+  const row = btn.closest('.swipe-row');
+  const id = row.dataset.id;
+  fetch(`/api/tracks/${id}`, { method: 'DELETE' })
+    .then(r => r.json())
+    .then(d => { if (d.ok) row.remove(); });
+}
+
+// ── Swipe gesture ─────────────────────────────
+(function() {
+  let active = null, x0 = 0, dx = 0;
+
+  document.addEventListener('touchstart', e => {
+    const row = e.target.closest('.swipe-row');
+    if (!row) { active = null; return; }
+    // Close any other open rows
+    document.querySelectorAll('.swipe-row.swiped').forEach(r => {
+      if (r !== row) r.classList.remove('swiped');
+    });
+    active = row; x0 = e.touches[0].clientX; dx = 0;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', e => {
+    if (!active) return;
+    dx = e.touches[0].clientX - x0;
+    if (dx >= 0) return;
+    const travel = Math.min(Math.abs(dx), 76);
+    const card = active.querySelector('.track-card');
+    const btn  = active.querySelector('.swipe-del-btn');
+    if (card) card.style.transform = `translateX(-${travel}px)`;
+    if (btn)  btn.style.transform  = `translateX(${76 - travel}px)`;
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => {
+    if (!active) return;
+    const row = active;
+    const card = row.querySelector('.track-card');
+    const btn  = row.querySelector('.swipe-del-btn');
+    // Clear inline transforms — CSS classes take over
+    if (card) card.style.transform = '';
+    if (btn)  btn.style.transform  = '';
+    row.classList.toggle('swiped', dx < -50);
+    active = null;
+  });
+})();
+
 (function() {
   const active = {{ 'true' if (stats.pending + stats.downloading) > 0 else 'false' }};
-  if (active) {
-    setTimeout(() => location.reload(), 15000);
-  }
+  if (active) setTimeout(() => location.reload(), 15000);
 })();
 </script>
 {% endblock %}
