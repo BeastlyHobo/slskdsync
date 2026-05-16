@@ -1,0 +1,98 @@
+{% extends 'base.html' %}
+{% block content %}
+
+{% if total == 0 %}
+<div class="empty-state">
+  <div class="empty-icon">🎵</div>
+  <p>No downloads yet.<br>Search for music and download it first.</p>
+</div>
+{% else %}
+<div class="lib-header">
+  <span class="lib-count">{{ total }} track{{ 's' if total != 1 }}</span>
+</div>
+
+{% for artist, albums in grouped.items() %}
+<div class="lib-artist">
+  <div class="lib-artist-name">{{ artist }}</div>
+  {% for album, tracks in albums.items() %}
+  <div class="lib-album">
+    <div class="lib-album-header" onclick="toggleAlbum(this)">
+      {% set cover = tracks[0].cover_url %}
+      {% if cover %}
+        <img class="lib-album-cover" src="{{ cover }}" alt="" loading="lazy"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+        <div class="lib-album-cover-ph" style="display:none">💿</div>
+      {% else %}
+        <div class="lib-album-cover-ph">💿</div>
+      {% endif %}
+      <div class="lib-album-info">
+        <div class="lib-album-title">{{ album }}</div>
+        <div class="lib-album-sub">{{ tracks|length }} track{{ 's' if tracks|length != 1 }}</div>
+      </div>
+      <span class="lib-chevron">›</span>
+    </div>
+    <div class="lib-track-list" style="display:none">
+      {% for t in tracks %}
+      <div class="lib-track">
+        <span class="lib-track-num">{{ '%02d'|format(t.track_number) if t.track_number else '–' }}</span>
+        <span class="lib-track-title">{{ t.title or '—' }}</span>
+        {% if t.local_path %}
+        <span class="lib-track-ext">{{ t.local_path.split('.')[-1].upper() }}</span>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+{% endif %}
+
+<style>
+.lib-header { display:flex; align-items:center; margin-bottom:.75rem; }
+.lib-count { font-size:.8rem; color:var(--text-muted); }
+
+.lib-artist { margin-bottom:1rem; }
+.lib-artist-name { font-size:.72rem; font-weight:700; text-transform:uppercase;
+                   letter-spacing:.06em; color:var(--text-muted); margin-bottom:.4rem;
+                   padding-left:.1rem; }
+
+.lib-album { background:var(--surface); border-radius:var(--radius-sm);
+             border:1px solid var(--border); margin-bottom:.4rem; overflow:hidden; }
+.lib-album-header { display:flex; align-items:center; gap:.65rem; padding:.6rem .75rem;
+                    cursor:pointer; }
+.lib-album-header:hover { background:var(--surface2); }
+.lib-album-cover { width:42px; height:42px; border-radius:5px; object-fit:cover;
+                   flex-shrink:0; background:var(--surface2); }
+.lib-album-cover-ph { width:42px; height:42px; border-radius:5px; background:var(--surface2);
+                       flex-shrink:0; display:flex; align-items:center; justify-content:center;
+                       font-size:1.2rem; }
+.lib-album-info { flex:1; min-width:0; }
+.lib-album-title { font-size:.88rem; font-weight:600;
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lib-album-sub { font-size:.72rem; color:var(--text-muted); margin-top:2px; }
+.lib-chevron { color:var(--text-muted); font-size:1rem; flex-shrink:0; transition:transform .2s; }
+.lib-chevron.open { transform:rotate(90deg); }
+
+.lib-track-list { border-top:1px solid var(--border); padding:.25rem 0; }
+.lib-track { display:flex; align-items:center; gap:.6rem; padding:.3rem .75rem; }
+.lib-track:hover { background:var(--surface2); }
+.lib-track-num { width:1.6rem; text-align:right; font-size:.72rem;
+                 color:var(--text-muted); flex-shrink:0; }
+.lib-track-title { flex:1; font-size:.82rem;
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lib-track-ext { font-size:.65rem; font-weight:700; color:var(--accent);
+                 background:var(--surface3); border-radius:3px; padding:1px 4px;
+                 flex-shrink:0; }
+</style>
+
+<script>
+function toggleAlbum(header) {
+  const list = header.nextElementSibling;
+  const chev = header.querySelector('.lib-chevron');
+  const open = list.style.display !== 'none';
+  list.style.display = open ? 'none' : 'block';
+  chev.classList.toggle('open', !open);
+}
+</script>
+{% endblock %}

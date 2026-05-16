@@ -97,6 +97,7 @@ def init_db():
         ("download_source", "TEXT DEFAULT 'slskd'"),
         ("slskd_search_id", "TEXT"),
         ("slskd_tried_users", "TEXT DEFAULT ''"),
+        ("slskd_queued_at", "TEXT DEFAULT NULL"),
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
@@ -1020,6 +1021,18 @@ def _worker_tick():
     conn = get_conn()
     slskd = SlskdClient()
 
+    # ── STUCK SEARCH TIMEOUT ────────────────────────────────────────────────
+    # Searches have a 15 s timeout; if a track is still 'queued' after 3 min
+    # the search ID is probably stale — reset to 'pending' to retry.
+    conn.execute("""
+        UPDATE tracks SET slskd_state='pending', slskd_search_id=NULL,
+            slskd_error='Search timed out, retrying'
+        WHERE slskd_state='queued'
+          AND slskd_queued_at IS NOT NULL
+          AND datetime(slskd_queued_at, '+3 minutes') < datetime('now')
+    """)
+    conn.commit()
+
     # ── ALBUM SEARCH: start ────────────────────────────────────────────────
     # Jobs with 3+ pending slskd tracks get one "Artist Album" search instead
     # of N individual searches; all tracks hold in 'album_queued' state.
@@ -1144,7 +1157,8 @@ def _worker_tick():
         if ok:
             logger.info(f"[slskd] Search queued (id={search_id}): {meta.title}")
             conn.execute(
-                "UPDATE tracks SET slskd_state='queued', slskd_search_id=?, slskd_error=NULL WHERE id=?",
+                "UPDATE tracks SET slskd_state='queued', slskd_search_id=?,"
+                " slskd_error=NULL, slskd_queued_at=datetime('now') WHERE id=?",
                 (search_id, t["id"]),
             )
         else:
@@ -1409,7 +1423,7 @@ def index():
     for t in tracks:
         s = t["slskd_state"] or "pending"
         stats["total"] += 1
-        if s in ("pending", "queued"):
+        if s in ("pending", "queued", "album_queued"):
             stats["pending"] += 1
         elif s in stats:
             stats[s] += 1
@@ -1419,6 +1433,23 @@ def index():
 @app.route("/search")
 def search():
     return render_template("search.html")
+
+
+@app.route("/library")
+def library():
+    conn = get_conn()
+    tracks = conn.execute(
+        "SELECT * FROM tracks WHERE slskd_state='completed'"
+        " ORDER BY artist, album, track_number, title"
+    ).fetchall()
+    conn.close()
+    # Group into {artist: {album: [tracks]}}
+    grouped: dict = {}
+    for t in tracks:
+        a = t["artist"] or "Unknown Artist"
+        al = t["album"] or "Unknown Album"
+        grouped.setdefault(a, {}).setdefault(al, []).append(t)
+    return render_template("library.html", grouped=grouped, total=len(tracks))
 
 
 @app.route("/settings", methods=["GET", "POST"])
@@ -1592,6 +1623,11 @@ def api_queue_action():
         conn.execute(
             "UPDATE tracks SET slskd_state='pending', slskd_error=NULL, slskd_search_id=NULL,"
             " slskd_tried_users='' WHERE slskd_state='failed'"
+        )
+    elif action == "retry_downloading":
+        conn.execute(
+            "UPDATE tracks SET slskd_state='pending', slskd_error=NULL, slskd_search_id=NULL,"
+            " slskd_tried_users='' WHERE slskd_state IN ('downloading','queued','album_queued')"
         )
     else:
         conn.close()
