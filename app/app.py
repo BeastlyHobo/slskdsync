@@ -98,6 +98,7 @@ def init_db():
         ("slskd_search_id", "TEXT"),
         ("slskd_tried_users", "TEXT DEFAULT ''"),
         ("slskd_queued_at", "TEXT DEFAULT NULL"),
+        ("force_overwrite", "INTEGER DEFAULT 0"),
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
@@ -881,9 +882,9 @@ class Organizer:
         return library / artist / album / filename
 
     @staticmethod
-    def move_file(src: Path, dst: Path) -> tuple[bool, str]:
+    def move_file(src: Path, dst: Path, force_overwrite: bool = False) -> tuple[bool, str]:
         dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists() and get_setting("replace_existing") != "1":
+        if dst.exists() and not force_overwrite and get_setting("replace_existing") != "1":
             return True, str(dst)  # already there — treat as success
         shutil.copyfile(str(src), str(dst))
         try:
@@ -1244,7 +1245,8 @@ def _worker_tick():
             target = Organizer.target_path(t, candidate)
             logger.info(f"[slskd] Moving to library ({library}): {target}")
             try:
-                ok, result = Organizer.move_file(candidate, target)
+                ok, result = Organizer.move_file(candidate, target,
+                                                   force_overwrite=bool(t["force_overwrite"]))
                 logger.info(f"[slskd] Organized to: {result}")
                 tag_file(Path(result), t)
                 conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?",
@@ -1453,42 +1455,24 @@ def search():
 @app.route("/library")
 def library():
     music_path = Path(get_setting("library_path") or "/music")
-    grouped: dict = {}
-    total = 0
+    tracks = []
     if music_path.exists():
+        num_re = re.compile(r"^\d+\s*[-\.]\s*")
         for f in sorted(music_path.rglob("*")):
             if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
                 continue
-            artist, album, title, track_num, cover = "", "", f.stem, 0, ""
-            try:
-                audio = mutagen.File(f, easy=True)
-                if audio and audio.tags:
-                    artist = str(audio.tags.get("artist", [""])[0])
-                    album = str(audio.tags.get("album", [""])[0])
-                    title = str(audio.tags.get("title", [f.stem])[0])
-                    tn = audio.tags.get("tracknumber", ["0"])[0]
-                    track_num = int(str(tn).split("/")[0]) if tn else 0
-            except Exception:
-                pass
-            # Fall back to directory structure if tags empty
-            if not artist:
-                parts = f.relative_to(music_path).parts
-                artist = parts[0] if len(parts) > 2 else "Unknown Artist"
-            if not album:
-                parts = f.relative_to(music_path).parts
-                album = parts[1] if len(parts) > 2 else parts[0] if len(parts) > 1 else "Unknown Album"
-            grouped.setdefault(artist, {}).setdefault(album, []).append({
-                "title": title,
-                "track_number": track_num,
-                "ext": f.suffix[1:].upper(),
-                "path": str(f),
+            parts = f.relative_to(music_path).parts
+            artist = parts[0] if len(parts) >= 3 else ""
+            album  = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
+            title  = num_re.sub("", f.stem)  # strip leading "01 - " etc.
+            tracks.append({
+                "artist": artist,
+                "album":  album,
+                "title":  title,
+                "ext":    f.suffix[1:].upper(),
+                "path":   str(f),
             })
-            total += 1
-    # Sort tracks within each album by track number then title
-    for albums in grouped.values():
-        for trk_list in albums.values():
-            trk_list.sort(key=lambda t: (t["track_number"] or 999, t["title"]))
-    return render_template("library.html", grouped=grouped, total=total, music_path=str(music_path))
+    return render_template("library.html", tracks=tracks, music_path=str(music_path))
 
 
 @app.route("/settings", methods=["GET", "POST"])
@@ -1572,6 +1556,31 @@ def api_library_index():
         {"a": (r["artist"] or "").lower().strip(), "t": (r["title"] or "").lower().strip()}
         for r in rows
     ])
+
+
+@app.route("/api/library/redownload", methods=["POST"])
+def api_library_redownload():
+    data = request.get_json() or {}
+    artist = (data.get("artist") or "").strip()
+    title  = (data.get("title")  or "").strip()
+    album  = (data.get("album")  or "").strip()
+    if not artist or not title:
+        return jsonify({"ok": False, "error": "artist and title required"}), 400
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
+        ("library", "redownload", "", 0, "queued"),
+    )
+    cur.execute(
+        "INSERT INTO tracks(job_id,artist,album,title,download_source,force_overwrite)"
+        " VALUES(?,?,?,?,?,?)",
+        (cur.lastrowid, artist, album, title, "slskd", 1),
+    )
+    conn.commit()
+    conn.close()
+    logger.info(f"[library] Re-download queued: {artist} — {title}")
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------
