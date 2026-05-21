@@ -24,6 +24,15 @@
         <input type="radio" name="download_source" value="monochrome"> TIDAL/Monochrome
       </label>
     </div>
+    <div class="dl-source-row mt" id="m3u-row" style="display:none">
+      <label style="gap:.4rem">
+        <input type="checkbox" name="create_m3u" value="1" id="m3u-check" onchange="toggleM3uName()">
+        Save as .m3u playlist
+      </label>
+      <input type="text" name="playlist_name" id="m3u-name" class="text-input"
+        placeholder="Playlist name…"
+        style="display:none;flex:1;margin-left:.5rem;font-size:.82rem">
+    </div>
   </form>
 </div>
 
@@ -250,5 +259,28 @@ function deleteTrack(btn) {
   const active = {{ 'true' if (stats.pending + stats.downloading) > 0 else 'false' }};
   if (active) setTimeout(() => location.reload(), 15000);
 })();
+
+// ── M3U playlist row ──────────────────────────
+(function() {
+  const urlInput = document.getElementById('import-url');
+  const m3uRow   = document.getElementById('m3u-row');
+  if (!urlInput || !m3uRow) return;
+  urlInput.addEventListener('input', () => {
+    const v = urlInput.value.trim();
+    const isPlaylist = /playlist|album/i.test(v);
+    m3uRow.style.display = isPlaylist ? '' : 'none';
+    if (!isPlaylist) {
+      document.getElementById('m3u-check').checked = false;
+      document.getElementById('m3u-name').style.display = 'none';
+    }
+  });
+})();
+
+function toggleM3uName() {
+  const checked = document.getElementById('m3u-check').checked;
+  const nameEl  = document.getElementById('m3u-name');
+  nameEl.style.display = checked ? '' : 'none';
+  if (checked) nameEl.focus();
+}
 </script>
 {% endblock %}

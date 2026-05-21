@@ -108,6 +108,7 @@ def init_db():
     for col, ddl in [
         ("album_search_id", "TEXT DEFAULT NULL"),
         ("preferred_username", "TEXT DEFAULT NULL"),
+        ("playlist_name", "TEXT DEFAULT NULL"),
     ]:
         if col not in existing_job_cols:
             cur.execute(f"ALTER TABLE import_jobs ADD COLUMN {col} {ddl}")
@@ -1132,6 +1133,29 @@ def run_worker(stop_event: threading.Event):
         time.sleep(20)
 
 
+def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
+    """Write/update an M3U file in the library with all completed tracks for this job."""
+    library = get_setting("library_path") or "/music"
+    safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
+    m3u_path = Path(library) / f"{safe}.m3u"
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT local_path, artist, title FROM tracks"
+        " WHERE job_id=? AND slskd_state='completed' AND local_path IS NOT NULL"
+        " ORDER BY track_number, id",
+        (job_id,),
+    ).fetchall()
+    conn.close()
+    if not rows:
+        return
+    lines = ["#EXTM3U"]
+    for r in rows:
+        lines.append(f"#EXTINF:0,{r['artist'] or ''} - {r['title'] or ''}")
+        lines.append(r["local_path"])
+    m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.info(f"[m3u] {safe}.m3u updated — {len(rows)} tracks")
+
+
 def _worker_tick():
     conn = get_conn()
     slskd = SlskdClient()
@@ -1350,6 +1374,11 @@ def _worker_tick():
                 tag_file(Path(result), t)
                 conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?",
                              (result, t["id"]))
+                conn.commit()
+                job = conn.execute("SELECT playlist_name FROM import_jobs WHERE id=?",
+                                   (t["job_id"],)).fetchone()
+                if job and job["playlist_name"]:
+                    write_playlist_m3u(t["job_id"], job["playlist_name"])
             except Exception as ex:
                 logger.error(f"[slskd] Failed to move '{t['title']}': {ex}")
                 conn.execute("UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
@@ -1426,6 +1455,11 @@ def _worker_tick():
                 (t["id"],),
             )
         conn.commit()
+        if ok:
+            job = conn.execute("SELECT playlist_name FROM import_jobs WHERE id=?",
+                               (t["job_id"],)).fetchone()
+            if job and job["playlist_name"]:
+                write_playlist_m3u(t["job_id"], job["playlist_name"])
 
     conn.close()
 
@@ -1925,11 +1959,14 @@ def import_url():
         flash(str(ex), "error")
         return redirect(url_for("index"))
 
+    create_m3u = request.form.get("create_m3u") == "1"
+    playlist_name = (request.form.get("playlist_name") or "").strip() if create_m3u else None
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
-        (provider.name, source_type, url, 0, "queued"),
+        "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status,playlist_name) VALUES(?,?,?,?,?,?)",
+        (provider.name, source_type, url, 0, "queued", playlist_name or None),
     )
     job_id = cur.lastrowid
     for t in tracks:
