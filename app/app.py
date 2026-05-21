@@ -276,21 +276,26 @@ class SpotifyProvider:
 
 
 def _apple_jwt() -> str:
-    team_id = get_setting("apple_team_id").strip()
-    key_id   = get_setting("apple_key_id").strip()
+    team_id     = get_setting("apple_team_id").strip()
+    key_id      = get_setting("apple_key_id").strip()
     private_key = get_setting("apple_private_key").strip()
-    if not (team_id and key_id and private_key):
-        raise RuntimeError(
-            "Apple Music API not configured. Add your Team ID, Key ID, and "
-            "private key (.p8 contents) in Settings → Apple Music."
-        )
+    missing = [n for n, v in [("Team ID", team_id), ("Key ID", key_id), ("Private Key", private_key)] if not v]
+    if missing:
+        raise RuntimeError(f"Apple Music: missing {', '.join(missing)} — check Settings → Apple Music.")
     now = int(time.time())
-    token = pyjwt.encode(
-        {"iss": team_id, "iat": now, "exp": now + 15_777_000},
-        private_key,
-        algorithm="ES256",
-        headers={"kid": key_id},
-    )
+    try:
+        token = pyjwt.encode(
+            {"iss": team_id, "iat": now, "exp": now + 15_777_000},
+            private_key,
+            algorithm="ES256",
+            headers={"kid": key_id},
+        )
+    except Exception as ex:
+        raise RuntimeError(
+            f"Apple Music: could not sign JWT — {ex}. "
+            "Make sure the private key field contains the full .p8 file contents "
+            "including the BEGIN/END lines."
+        )
     return token
 
 
@@ -1690,6 +1695,15 @@ def test_slskd():
 
 @app.route("/api/test/apple")
 def test_apple():
+    team_id     = get_setting("apple_team_id").strip()
+    key_id      = get_setting("apple_key_id").strip()
+    private_key = get_setting("apple_private_key").strip()
+    # Report what's saved so the user can see which fields landed
+    status = (
+        f"Team ID: {'✓ ' + team_id if team_id else '✗ missing'} | "
+        f"Key ID: {'✓ ' + key_id if key_id else '✗ missing'} | "
+        f"Private key: {'✓ ' + str(len(private_key)) + ' chars' if private_key else '✗ missing'}"
+    )
     try:
         token = _apple_jwt()
         r = requests.get(
@@ -1699,10 +1713,10 @@ def test_apple():
             timeout=10,
         )
         if r.status_code == 200:
-            return jsonify({"ok": True, "message": "Apple Music API connected"})
-        return jsonify({"ok": False, "message": f"HTTP {r.status_code}: {r.text[:120]}"})
+            return jsonify({"ok": True, "message": f"Connected ✓\n{status}"})
+        return jsonify({"ok": False, "message": f"HTTP {r.status_code}: {r.text[:120]}\n{status}"})
     except Exception as ex:
-        return jsonify({"ok": False, "message": str(ex)})
+        return jsonify({"ok": False, "message": f"{ex}\n{status}"})
 
 
 @app.route("/api/test/monochrome")
