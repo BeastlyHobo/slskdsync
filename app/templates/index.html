@@ -43,6 +43,7 @@
   {% if stats.downloading > 0 %}<div class="stat-chip"><strong>{{ stats.downloading }}</strong> downloading</div>{% endif %}
   {% if stats.pending > 0 %}<div class="stat-chip"><strong>{{ stats.pending }}</strong> pending</div>{% endif %}
   {% if stats.completed > 0 %}<div class="stat-chip"><strong>{{ stats.completed }}</strong> done</div>{% endif %}
+  {% if stats.needs_search > 0 %}<div class="stat-chip stat-chip-warn"><strong>{{ stats.needs_search }}</strong> need search</div>{% endif %}
   {% if stats.failed > 0 %}<div class="stat-chip stat-chip-fail"><strong>{{ stats.failed }}</strong> failed</div>{% endif %}
 </div>
 <div class="queue-actions">
@@ -62,7 +63,7 @@
 </div>
 {% endif %}
 
-{% set active_tracks = tracks | selectattr('slskd_state', 'ne', 'completed') | list %}
+{% set active_tracks = tracks | rejectattr('slskd_state', 'equalto', 'completed') | list %}
 {% set done_tracks = tracks | selectattr('slskd_state', 'equalto', 'completed') | list %}
 
 {% macro track_card(t) %}
@@ -92,10 +93,20 @@
     </div>
     {% if t.slskd_state == 'completed' %}
     <span class="badge badge-completed">done</span>
+    {% elif t.slskd_state == 'needs_search' %}
+    <span class="badge badge-needs_search">fix search</span>
     {% else %}
     <span class="badge badge-{{ t.slskd_state or 'pending' }}">{{ (t.slskd_state or 'pending') }}</span>
     {% endif %}
   </div>
+  {% if t.slskd_state == 'needs_search' %}
+  <div class="needs-search-panel" onclick="event.stopPropagation()">
+    <input class="ns-input" type="text" placeholder="Enter search query…"
+      value="{{ t.title or '' }}"
+      onkeydown="if(event.key==='Enter')submitSearch(this,{{ t.id }})">
+    <button class="ns-btn" onclick="submitSearch(this.previousElementSibling,{{ t.id }})">Search</button>
+  </div>
+  {% endif %}
   <button class="swipe-del-btn" onclick="deleteTrack(this)">Delete</button>
 </div>
 {% endmacro %}
@@ -133,6 +144,7 @@
 
 <style>
 .stat-chip-fail { color: #e05050 !important; }
+.stat-chip-warn { color: #e09020 !important; }
 .queue-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .75rem; }
 .qa-btn {
   padding: .3rem .65rem; border-radius: var(--radius-sm); font-size: .75rem;
@@ -170,6 +182,25 @@
 .detail-row { font-size: .72rem; color: var(--text-muted); line-height: 1.6; word-break: break-all; }
 .detail-label { font-weight: 600; margin-right: .35rem; }
 .track-error { color: #e05050; margin-top: 3px; font-size: .75rem; }
+
+/* needs_search inline panel */
+.needs-search-panel {
+  display: flex; gap: .4rem; padding: .4rem .65rem .5rem;
+  background: var(--surface); border-top: 1px solid var(--border);
+}
+.ns-input {
+  flex: 1; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text); font-size: .8rem;
+  padding: .3rem .5rem; min-width: 0;
+}
+.ns-input:focus { outline: none; border-color: var(--accent); }
+.ns-btn {
+  padding: .3rem .65rem; background: var(--accent); color: #fff;
+  border: none; border-radius: var(--radius-sm); font-size: .78rem;
+  font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.ns-btn:disabled { opacity: .5; }
+.badge-needs_search { background: #4a2e00; color: #e09020; }
 
 .completed-header {
   display: flex; justify-content: space-between; align-items: center;
@@ -217,6 +248,33 @@ function deleteTrack(btn) {
     .then(d => { if (d.ok) row.remove(); });
 }
 
+function submitSearch(input, trackId) {
+  const query = input.value.trim();
+  const btn = input.nextElementSibling;
+  if (!query) return;
+  btn.disabled = true;
+  btn.textContent = '…';
+  fetch(`/api/tracks/${trackId}/retry`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({query}),
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.ok) {
+      const row = input.closest('.swipe-row');
+      const badge = row.querySelector('.badge');
+      if (badge) { badge.className = 'badge badge-pending'; badge.textContent = 'pending'; }
+      const panel = row.querySelector('.needs-search-panel');
+      if (panel) panel.remove();
+      setTimeout(() => location.reload(), 2000);
+    } else {
+      btn.disabled = false; btn.textContent = 'Search';
+    }
+  })
+  .catch(() => { btn.disabled = false; btn.textContent = 'Search'; });
+}
+
 // ── Swipe gesture ─────────────────────────────
 (function() {
   let active = null, x0 = 0, dx = 0;
@@ -258,6 +316,7 @@ function deleteTrack(btn) {
 (function() {
   const active = {{ 'true' if (stats.pending + stats.downloading) > 0 else 'false' }};
   if (active) setTimeout(() => location.reload(), 15000);
+  // Keep needs_search visible in stats strip without reloading constantly
 })();
 
 // ── M3U playlist row ──────────────────────────

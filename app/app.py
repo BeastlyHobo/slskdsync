@@ -100,6 +100,8 @@ def init_db():
         ("slskd_tried_users", "TEXT DEFAULT ''"),
         ("slskd_queued_at", "TEXT DEFAULT NULL"),
         ("force_overwrite", "INTEGER DEFAULT 0"),
+        ("slskd_search_attempt", "INTEGER DEFAULT 0"),
+        ("custom_search", "TEXT DEFAULT NULL"),
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
@@ -819,7 +821,20 @@ class SlskdClient:
                 last_err = str(ex)
         return False, "", last_err
 
-    def get_search_results(self, search_id: str) -> list[dict]:
+    def cancel_search(self, search_id: str) -> None:
+        if not search_id:
+            return
+        for ep in ["/api/v0/searches", "/api/v1/searches"]:
+            try:
+                requests.delete(f"{self.base}{ep}/{search_id}",
+                                headers=self._headers(), auth=self._auth(), timeout=8)
+                return
+            except Exception:
+                pass
+
+    def get_search_results(self, search_id: str) -> list[dict] | None:
+        """Returns None if the search is still running, [] if complete with no results,
+        or a populated list if results are available."""
         if not search_id:
             return []
         try:
@@ -832,7 +847,7 @@ class SlskdClient:
                 return []
             search_obj = r.json()
             if not search_obj.get("isComplete"):
-                return []  # still running
+                return None  # still running
             # Fetch responses (NOT /files — that endpoint doesn't exist)
             resp_url = f"{self.base}/api/v0/searches/{search_id}/responses"
             r2 = requests.get(resp_url, headers=self._headers(), auth=self._auth(), timeout=15)
@@ -1222,7 +1237,7 @@ def _worker_tick():
         LIMIT 3
     """).fetchall():
         results = slskd.get_search_results(job["album_search_id"])
-        if not results:
+        if results is None:
             continue  # search still running
 
         album_tracks = conn.execute(
@@ -1290,14 +1305,24 @@ def _worker_tick():
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
                          t["track_number"] or 0, t["source_id"] or "")
-        query = SlskdClient._build_query(meta.artist, meta.title)
-        logger.info(f"[slskd] Starting search: {query!r}")
-        ok, search_id, msg = slskd.start_search(meta)
+        custom = (t["custom_search"] or "").strip()
+        attempt = t["slskd_search_attempt"] or 0
+        if custom:
+            logger.info(f"[slskd] Custom search: {custom!r}")
+            ok, search_id, msg = slskd.start_search_raw(custom)
+        elif attempt >= 1:
+            query_str = (t["title"] or "").strip()
+            logger.info(f"[slskd] Title-only retry for '{meta.title}': {query_str!r}")
+            ok, search_id, msg = slskd.start_search_raw(query_str) if query_str else (False, "", "empty title")
+        else:
+            query = SlskdClient._build_query(meta.artist, meta.title)
+            logger.info(f"[slskd] Starting search: {query!r}")
+            ok, search_id, msg = slskd.start_search(meta)
         if ok:
             logger.info(f"[slskd] Search queued (id={search_id}): {meta.title}")
             conn.execute(
                 "UPDATE tracks SET slskd_state='queued', slskd_search_id=?,"
-                " slskd_error=NULL, slskd_queued_at=datetime('now') WHERE id=?",
+                " slskd_error=NULL, slskd_queued_at=datetime('now'), custom_search=NULL WHERE id=?",
                 (search_id, t["id"]),
             )
         else:
@@ -1315,10 +1340,11 @@ def _worker_tick():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
                          t["track_number"] or 0, t["source_id"] or "")
         results = slskd.get_search_results(t["slskd_search_id"])
-        if not results:
+        if results is None:
             continue  # search still running
         tried = set(u for u in (t["slskd_tried_users"] or "").split(",") if u)
-        logger.info(f"[slskd] {len(results)} results for '{meta.title}', selecting best (tried: {len(tried)})")
+        if results:
+            logger.info(f"[slskd] {len(results)} results for '{meta.title}', selecting best (tried: {len(tried)})")
         scored = sorted(
             ((slskd.score_result(r, meta), i, r) for i, r in enumerate(results)
              if r.get("username") not in tried),
@@ -1350,11 +1376,23 @@ def _worker_tick():
                         (f"All peers failed: {msg[:100]}", t["id"]),
                     )
         else:
-            logger.warning(f"[slskd] No usable files found for '{meta.title}'")
-            conn.execute(
-                "UPDATE tracks SET slskd_state='failed', slskd_error='No usable files found in search results' WHERE id=?",
-                (t["id"],),
-            )
+            # No usable results — retry with progressively simpler queries, then ask user
+            attempt = t["slskd_search_attempt"] or 0
+            if attempt == 0:
+                logger.info(f"[slskd] No results for '{meta.title}', retrying with title-only search")
+                conn.execute(
+                    "UPDATE tracks SET slskd_state='pending', slskd_search_attempt=1,"
+                    " slskd_error='No results — retrying with title-only search…',"
+                    " slskd_search_id=NULL WHERE id=?",
+                    (t["id"],),
+                )
+            else:
+                logger.warning(f"[slskd] Still no results for '{meta.title}' after {attempt+1} attempts")
+                conn.execute(
+                    "UPDATE tracks SET slskd_state='needs_search',"
+                    " slskd_error='No results found automatically. Enter a custom search.' WHERE id=?",
+                    (t["id"],),
+                )
         conn.commit()
 
     # downloading → check watch folder, organize
@@ -1569,12 +1607,14 @@ def index():
     conn = get_conn()
     tracks = conn.execute("SELECT * FROM tracks ORDER BY id DESC LIMIT 100").fetchall()
     conn.close()
-    stats = {"total": 0, "pending": 0, "downloading": 0, "completed": 0, "failed": 0}
+    stats = {"total": 0, "pending": 0, "downloading": 0, "completed": 0, "failed": 0, "needs_search": 0}
     for t in tracks:
         s = t["slskd_state"] or "pending"
         stats["total"] += 1
         if s in ("pending", "queued", "album_queued"):
             stats["pending"] += 1
+        elif s == "needs_search":
+            stats["needs_search"] += 1
         elif s in stats:
             stats[s] += 1
     return render_template("index.html", tracks=tracks, stats=stats)
@@ -1672,7 +1712,39 @@ def api_album(album_id):
 @app.route("/api/tracks/<int:track_id>", methods=["DELETE"])
 def delete_track(track_id):
     conn = get_conn()
+    track = conn.execute("SELECT slskd_search_id, job_id FROM tracks WHERE id=?",
+                         (track_id,)).fetchone()
     conn.execute("DELETE FROM tracks WHERE id=?", (track_id,))
+    conn.commit()
+    if track:
+        slskd = SlskdClient()
+        if track["slskd_search_id"]:
+            slskd.cancel_search(track["slskd_search_id"])
+        # If job has no more tracks, cancel the album-level search too
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM tracks WHERE job_id=?", (track["job_id"],)
+        ).fetchone()[0]
+        if remaining == 0:
+            job = conn.execute(
+                "SELECT album_search_id FROM import_jobs WHERE id=?", (track["job_id"],)
+            ).fetchone()
+            if job and job["album_search_id"]:
+                slskd.cancel_search(job["album_search_id"])
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/tracks/<int:track_id>/retry", methods=["POST"])
+def retry_track(track_id):
+    """Reset a needs_search track with an optional custom search query."""
+    data = request.get_json(silent=True) or {}
+    query = (data.get("query") or "").strip()
+    conn = get_conn()
+    conn.execute(
+        "UPDATE tracks SET slskd_state='pending', slskd_search_attempt=0,"
+        " custom_search=?, slskd_error=NULL, slskd_search_id=NULL, slskd_tried_users='' WHERE id=?",
+        (query or None, track_id),
+    )
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
