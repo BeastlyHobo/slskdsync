@@ -278,10 +278,12 @@ class AppleProvider:
         return "music.apple.com" in url
 
     def parse(self, url: str) -> tuple[str, list[TrackMeta]]:
+        # Individual track link: music.apple.com/…/album/…?i=TRACKID
         song_match = re.search(r"[?&]i=(\d+)", url)
         if song_match:
             sid = song_match.group(1)
-            data = requests.get("https://itunes.apple.com/lookup", params={"id": sid}, timeout=20).json()
+            data = requests.get("https://itunes.apple.com/lookup",
+                                params={"id": sid}, timeout=20).json()
             result = (data.get("results") or [{}])[0]
             cover = result.get("artworkUrl100", "").replace("100x100bb", "300x300bb")
             return "track", [TrackMeta(
@@ -292,7 +294,42 @@ class AppleProvider:
                 source_id=str(result.get("trackId", "")),
                 cover_url=cover,
             )]
-        raise RuntimeError("Apple Music album/playlist import requires an Apple Music API token (not configured).")
+
+        # Album link: music.apple.com/…/album/…/ALBUMID
+        # Uses the free iTunes lookup API — no key required.
+        album_match = re.search(r"/album/[^/]+/(\d+)$", url.split("?")[0])
+        if album_match:
+            aid = album_match.group(1)
+            data = requests.get(
+                "https://itunes.apple.com/lookup",
+                params={"id": aid, "entity": "song", "limit": 200},
+                timeout=20,
+            ).json()
+            results = data.get("results") or []
+            # First result is the album collection; rest are tracks
+            collection = next((r for r in results if r.get("wrapperType") == "collection"), {})
+            album_title = collection.get("collectionName", "Unknown Album")
+            album_cover = collection.get("artworkUrl100", "").replace("100x100bb", "300x300bb")
+            tracks = [
+                TrackMeta(
+                    artist=r.get("artistName", "Unknown Artist"),
+                    album=album_title,
+                    title=r.get("trackName", ""),
+                    track_number=r.get("trackNumber", 0),
+                    source_id=str(r.get("trackId", "")),
+                    cover_url=album_cover,
+                )
+                for r in results
+                if r.get("wrapperType") == "track" and r.get("trackName")
+            ]
+            if not tracks:
+                raise RuntimeError("No tracks found for this Apple Music album.")
+            return "album", tracks
+
+        raise RuntimeError(
+            "Apple Music playlists require an Apple Developer token — "
+            "paste an album or individual track link instead, or import from Spotify."
+        )
 
 
 class TidalProvider:
