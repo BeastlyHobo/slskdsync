@@ -25,6 +25,7 @@ logger = logging.getLogger("slskdsync")
 logger.info(f"Log level: {_log_level} (override with LOG_LEVEL env var)")
 
 import requests
+import jwt as pyjwt
 from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory
 from werkzeug.security import check_password_hash, generate_password_hash
 from dotenv import load_dotenv
@@ -98,6 +99,7 @@ def init_db():
         ("slskd_search_id", "TEXT"),
         ("slskd_tried_users", "TEXT DEFAULT ''"),
         ("slskd_queued_at", "TEXT DEFAULT NULL"),
+        ("force_overwrite", "INTEGER DEFAULT 0"),
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
@@ -124,6 +126,9 @@ def init_db():
         "replace_existing": "0",
         "folder_template": "{artist}/{album}/{title}{ext}",
         "download_watch_path": "/downloads",
+        "apple_team_id": "",
+        "apple_key_id": "",
+        "apple_private_key": "",
         # auth stored in DB (empty = not configured yet → first-run setup)
         "app_username": "",
         "app_password_hash": "",
@@ -270,6 +275,25 @@ class SpotifyProvider:
         raise RuntimeError("Unsupported Spotify URL type")
 
 
+def _apple_jwt() -> str:
+    team_id = get_setting("apple_team_id").strip()
+    key_id   = get_setting("apple_key_id").strip()
+    private_key = get_setting("apple_private_key").strip()
+    if not (team_id and key_id and private_key):
+        raise RuntimeError(
+            "Apple Music API not configured. Add your Team ID, Key ID, and "
+            "private key (.p8 contents) in Settings → Apple Music."
+        )
+    now = int(time.time())
+    token = pyjwt.encode(
+        {"iss": team_id, "iat": now, "exp": now + 15_777_000},
+        private_key,
+        algorithm="ES256",
+        headers={"kid": key_id},
+    )
+    return token
+
+
 class AppleProvider:
     name = "apple"
 
@@ -277,10 +301,12 @@ class AppleProvider:
         return "music.apple.com" in url
 
     def parse(self, url: str) -> tuple[str, list[TrackMeta]]:
+        # Individual track link: music.apple.com/…/album/…?i=TRACKID
         song_match = re.search(r"[?&]i=(\d+)", url)
         if song_match:
             sid = song_match.group(1)
-            data = requests.get("https://itunes.apple.com/lookup", params={"id": sid}, timeout=20).json()
+            data = requests.get("https://itunes.apple.com/lookup",
+                                params={"id": sid}, timeout=20).json()
             result = (data.get("results") or [{}])[0]
             cover = result.get("artworkUrl100", "").replace("100x100bb", "300x300bb")
             return "track", [TrackMeta(
@@ -291,7 +317,76 @@ class AppleProvider:
                 source_id=str(result.get("trackId", "")),
                 cover_url=cover,
             )]
-        raise RuntimeError("Apple Music album/playlist import requires an Apple Music API token (not configured).")
+
+        # Album link: music.apple.com/…/album/…/ALBUMID
+        # Uses the free iTunes lookup API — no key required.
+        album_match = re.search(r"/album/[^/]+/(\d+)$", url.split("?")[0])
+        if album_match:
+            aid = album_match.group(1)
+            data = requests.get(
+                "https://itunes.apple.com/lookup",
+                params={"id": aid, "entity": "song", "limit": 200},
+                timeout=20,
+            ).json()
+            results = data.get("results") or []
+            # First result is the album collection; rest are tracks
+            collection = next((r for r in results if r.get("wrapperType") == "collection"), {})
+            album_title = collection.get("collectionName", "Unknown Album")
+            album_cover = collection.get("artworkUrl100", "").replace("100x100bb", "300x300bb")
+            tracks = [
+                TrackMeta(
+                    artist=r.get("artistName", "Unknown Artist"),
+                    album=album_title,
+                    title=r.get("trackName", ""),
+                    track_number=r.get("trackNumber", 0),
+                    source_id=str(r.get("trackId", "")),
+                    cover_url=album_cover,
+                )
+                for r in results
+                if r.get("wrapperType") == "track" and r.get("trackName")
+            ]
+            if not tracks:
+                raise RuntimeError("No tracks found for this Apple Music album.")
+            return "album", tracks
+
+        # Playlist link: music.apple.com/{storefront}/playlist/{name}/{pl.ID}
+        playlist_match = re.search(r"music\.apple\.com/([a-z]{2})/playlist/[^/]+/(pl\.[^/?#]+)", url)
+        if playlist_match:
+            storefront = playlist_match.group(1)
+            playlist_id = playlist_match.group(2)
+            token = _apple_jwt()
+            headers = {"Authorization": f"Bearer {token}"}
+            tracks = []
+            next_url: Optional[str] = (
+                f"https://api.music.apple.com/v1/catalog/{storefront}"
+                f"/playlists/{playlist_id}/tracks?limit=100"
+            )
+            while next_url:
+                r = requests.get(next_url, headers=headers, timeout=20)
+                if r.status_code == 401:
+                    raise RuntimeError("Apple Music API: invalid token — check Team ID, Key ID, and private key.")
+                if r.status_code != 200:
+                    raise RuntimeError(f"Apple Music API error {r.status_code}: {r.text[:200]}")
+                page = r.json()
+                for song in page.get("data", []):
+                    attrs = song.get("attributes", {})
+                    art = attrs.get("artwork", {})
+                    cover = art.get("url", "").replace("{w}", "300").replace("{h}", "300") if art else ""
+                    tracks.append(TrackMeta(
+                        artist=attrs.get("artistName", ""),
+                        album=attrs.get("albumName", ""),
+                        title=attrs.get("name", ""),
+                        track_number=attrs.get("trackNumber", 0),
+                        source_id=song.get("id", ""),
+                        cover_url=cover,
+                    ))
+                nxt = page.get("next")
+                next_url = ("https://api.music.apple.com" + nxt) if nxt else None
+            if not tracks:
+                raise RuntimeError("No tracks found in this Apple Music playlist.")
+            return "playlist", tracks
+
+        raise RuntimeError("Could not parse this Apple Music link. Paste an album, track, or playlist URL.")
 
 
 class TidalProvider:
@@ -881,9 +976,9 @@ class Organizer:
         return library / artist / album / filename
 
     @staticmethod
-    def move_file(src: Path, dst: Path) -> tuple[bool, str]:
+    def move_file(src: Path, dst: Path, force_overwrite: bool = False) -> tuple[bool, str]:
         dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists() and get_setting("replace_existing") != "1":
+        if dst.exists() and not force_overwrite and get_setting("replace_existing") != "1":
             return True, str(dst)  # already there — treat as success
         shutil.copyfile(str(src), str(dst))
         try:
@@ -1244,7 +1339,8 @@ def _worker_tick():
             target = Organizer.target_path(t, candidate)
             logger.info(f"[slskd] Moving to library ({library}): {target}")
             try:
-                ok, result = Organizer.move_file(candidate, target)
+                ok, result = Organizer.move_file(candidate, target,
+                                                   force_overwrite=bool(t["force_overwrite"]))
                 logger.info(f"[slskd] Organized to: {result}")
                 tag_file(Path(result), t)
                 conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?",
@@ -1453,42 +1549,24 @@ def search():
 @app.route("/library")
 def library():
     music_path = Path(get_setting("library_path") or "/music")
-    grouped: dict = {}
-    total = 0
+    tracks = []
     if music_path.exists():
+        num_re = re.compile(r"^\d+\s*[-\.]\s*")
         for f in sorted(music_path.rglob("*")):
             if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
                 continue
-            artist, album, title, track_num, cover = "", "", f.stem, 0, ""
-            try:
-                audio = mutagen.File(f, easy=True)
-                if audio and audio.tags:
-                    artist = str(audio.tags.get("artist", [""])[0])
-                    album = str(audio.tags.get("album", [""])[0])
-                    title = str(audio.tags.get("title", [f.stem])[0])
-                    tn = audio.tags.get("tracknumber", ["0"])[0]
-                    track_num = int(str(tn).split("/")[0]) if tn else 0
-            except Exception:
-                pass
-            # Fall back to directory structure if tags empty
-            if not artist:
-                parts = f.relative_to(music_path).parts
-                artist = parts[0] if len(parts) > 2 else "Unknown Artist"
-            if not album:
-                parts = f.relative_to(music_path).parts
-                album = parts[1] if len(parts) > 2 else parts[0] if len(parts) > 1 else "Unknown Album"
-            grouped.setdefault(artist, {}).setdefault(album, []).append({
-                "title": title,
-                "track_number": track_num,
-                "ext": f.suffix[1:].upper(),
-                "path": str(f),
+            parts = f.relative_to(music_path).parts
+            artist = parts[0] if len(parts) >= 3 else ""
+            album  = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
+            title  = num_re.sub("", f.stem)  # strip leading "01 - " etc.
+            tracks.append({
+                "artist": artist,
+                "album":  album,
+                "title":  title,
+                "ext":    f.suffix[1:].upper(),
+                "path":   str(f),
             })
-            total += 1
-    # Sort tracks within each album by track number then title
-    for albums in grouped.values():
-        for trk_list in albums.values():
-            trk_list.sort(key=lambda t: (t["track_number"] or 999, t["title"]))
-    return render_template("library.html", grouped=grouped, total=total, music_path=str(music_path))
+    return render_template("library.html", tracks=tracks, music_path=str(music_path))
 
 
 @app.route("/settings", methods=["GET", "POST"])
@@ -1498,6 +1576,7 @@ def settings():
         "slskd_url", "slskd_user", "slskd_pass", "slskd_api_key",
         "monochrome_url",
         "navidrome_url", "navidrome_user", "navidrome_pass",
+        "apple_team_id", "apple_key_id", "apple_private_key",
         "quality", "replace_existing",
         "app_username", "app_password_hash",
     ]
@@ -1574,6 +1653,31 @@ def api_library_index():
     ])
 
 
+@app.route("/api/library/redownload", methods=["POST"])
+def api_library_redownload():
+    data = request.get_json() or {}
+    artist = (data.get("artist") or "").strip()
+    title  = (data.get("title")  or "").strip()
+    album  = (data.get("album")  or "").strip()
+    if not artist or not title:
+        return jsonify({"ok": False, "error": "artist and title required"}), 400
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
+        ("library", "redownload", "", 0, "queued"),
+    )
+    cur.execute(
+        "INSERT INTO tracks(job_id,artist,album,title,download_source,force_overwrite)"
+        " VALUES(?,?,?,?,?,?)",
+        (cur.lastrowid, artist, album, title, "slskd", 1),
+    )
+    conn.commit()
+    conn.close()
+    logger.info(f"[library] Re-download queued: {artist} — {title}")
+    return jsonify({"ok": True})
+
+
 # ---------------------------------------------------------------------------
 # Connection tests
 # ---------------------------------------------------------------------------
@@ -1582,6 +1686,23 @@ def api_library_index():
 def test_slskd():
     ok, msg = SlskdClient().ping()
     return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/test/apple")
+def test_apple():
+    try:
+        token = _apple_jwt()
+        r = requests.get(
+            "https://api.music.apple.com/v1/catalog/us/search",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"term": "test", "types": "songs", "limit": 1},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return jsonify({"ok": True, "message": "Apple Music API connected"})
+        return jsonify({"ok": False, "message": f"HTTP {r.status_code}: {r.text[:120]}"})
+    except Exception as ex:
+        return jsonify({"ok": False, "message": str(ex)})
 
 
 @app.route("/api/test/monochrome")

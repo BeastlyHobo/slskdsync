@@ -1,109 +1,125 @@
 {% extends 'base.html' %}
 {% block content %}
 
-{% if total == 0 %}
-<div class="empty-state">
-  <div class="empty-icon">🎵</div>
-  <p>No music found in <code>{{ music_path }}</code>.<br>Download some tracks first.</p>
-</div>
-{% else %}
-<div class="lib-header">
-  <span class="lib-count">{{ total }} track{{ 's' if total != 1 }} in library</span>
-  <a href="/library" class="lib-refresh">↺ Refresh</a>
+<div class="lib-search-wrap">
+  <div class="search-inner">
+    <input id="lib-q" class="search-input" type="search"
+      placeholder="Search {{ tracks|length }} tracks in library…"
+      oninput="filterLib(this.value)" autocomplete="off">
+  </div>
+  <div class="lib-meta">
+    <span id="lib-count">{{ tracks|length }} tracks</span>
+    <a href="/library" class="lib-refresh">↺ Rescan</a>
+  </div>
 </div>
 
-{% for artist, albums in grouped.items() | sort %}
-<div class="lib-artist-block">
-  <div class="lib-artist-name">{{ artist }}</div>
-  {% for album, tracks in albums.items() | sort %}
-  <div class="lib-album">
-    <div class="lib-album-header" onclick="toggleAlbum(this)">
-      <div class="lib-album-icon">💿</div>
-      <div class="lib-album-info">
-        <div class="lib-album-title">{{ album }}</div>
-        <div class="lib-album-sub">{{ tracks|length }} track{{ 's' if tracks|length != 1 }} · {{ tracks[0].ext }}</div>
-      </div>
-      <span class="lib-chevron">›</span>
+{% if not tracks %}
+<div class="empty-state">
+  <div class="empty-icon">🎵</div>
+  <p>No music found in <code>{{ music_path }}</code>.</p>
+</div>
+{% else %}
+<div id="lib-list">
+  {% for t in tracks %}
+  <div class="lib-row"
+       data-search="{{ (t.artist ~ ' ' ~ t.album ~ ' ' ~ t.title)|lower }}">
+    <div class="lib-row-info">
+      <div class="lib-row-title">{{ t.title }}</div>
+      <div class="lib-row-sub">{{ t.artist }}{% if t.album %} · {{ t.album }}{% endif %}</div>
     </div>
-    <div class="lib-track-list" style="display:none">
-      {% for t in tracks %}
-      <div class="lib-track">
-        <span class="lib-track-num">{{ '%02d'|format(t.track_number) if t.track_number else '·' }}</span>
-        <span class="lib-track-title">{{ t.title }}</span>
-        <span class="lib-track-ext">{{ t.ext }}</span>
-      </div>
-      {% endfor %}
-    </div>
+    <span class="lib-ext">{{ t.ext }}</span>
+    <button class="lib-redl-btn"
+      data-artist="{{ t.artist|e }}"
+      data-album="{{ t.album|e }}"
+      data-title="{{ t.title|e }}"
+      onclick="redownload(this)">↺</button>
   </div>
   {% endfor %}
 </div>
-{% endfor %}
+<div id="lib-empty" class="empty-state" style="display:none">
+  <div class="empty-icon">🔇</div>
+  <p>No tracks match your search.</p>
+</div>
 {% endif %}
 
 <style>
-.lib-header {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: .75rem;
+.lib-search-wrap {
+  position: sticky; top: 53px; z-index: 50;
+  background: var(--bg); padding: .6rem 0 .3rem;
 }
-.lib-count { font-size: .8rem; color: var(--text-muted); }
-.lib-refresh { font-size: .75rem; color: var(--accent); }
-
-.lib-artist-block { margin-bottom: .9rem; }
-.lib-artist-name {
-  font-size: .68rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .07em; color: var(--text-muted); padding: 0 .1rem .3rem;
+.lib-meta {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: .2rem .1rem 0; font-size: .72rem; color: var(--text-muted);
 }
+.lib-refresh { color: var(--accent); }
 
-.lib-album {
+#lib-list { display: flex; flex-direction: column; gap: .25rem; margin-top: .5rem; }
+
+.lib-row {
+  display: flex; align-items: center; gap: .6rem;
   background: var(--surface); border-radius: var(--radius-sm);
-  border: 1px solid var(--border); margin-bottom: .3rem; overflow: hidden;
+  padding: .5rem .65rem;
 }
-.lib-album-header {
-  display: flex; align-items: center; gap: .6rem; padding: .55rem .75rem;
-  cursor: pointer; user-select: none;
-}
-.lib-album-header:hover { background: var(--surface2); }
-.lib-album-icon { font-size: 1.2rem; flex-shrink: 0; }
-.lib-album-info { flex: 1; min-width: 0; }
-.lib-album-title {
-  font-size: .87rem; font-weight: 600;
+.lib-row-info { flex: 1; min-width: 0; }
+.lib-row-title {
+  font-size: .86rem; font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.lib-album-sub { font-size: .7rem; color: var(--text-muted); margin-top: 1px; }
-.lib-chevron {
-  color: var(--text-muted); font-size: 1rem; flex-shrink: 0;
-  transition: transform .2s; line-height: 1;
-}
-.lib-chevron.open { transform: rotate(90deg); }
-
-.lib-track-list { border-top: 1px solid var(--border); }
-.lib-track {
-  display: flex; align-items: center; gap: .55rem;
-  padding: .3rem .75rem; border-bottom: 1px solid var(--border);
-}
-.lib-track:last-child { border-bottom: none; }
-.lib-track-num {
-  width: 1.5rem; text-align: right; font-size: .7rem;
-  color: var(--text-muted); flex-shrink: 0;
-}
-.lib-track-title {
-  flex: 1; font-size: .82rem;
+.lib-row-sub {
+  font-size: .7rem; color: var(--text-muted); margin-top: 1px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.lib-track-ext {
+.lib-ext {
   font-size: .6rem; font-weight: 700; color: var(--accent);
   background: var(--surface3); border-radius: 3px; padding: 1px 5px;
   flex-shrink: 0; letter-spacing: .02em;
 }
+.lib-redl-btn {
+  flex-shrink: 0; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text-muted);
+  font-size: .85rem; padding: .25rem .5rem; cursor: pointer; transition: all .15s;
+}
+.lib-redl-btn:hover { border-color: var(--accent); color: var(--accent); }
+.lib-redl-btn.queued { color: var(--success-text); border-color: #163020; }
 </style>
 
 <script>
-function toggleAlbum(header) {
-  const list = header.nextElementSibling;
-  const chev = header.querySelector('.lib-chevron');
-  const open = list.style.display !== 'none';
-  list.style.display = open ? 'none' : 'block';
-  chev.classList.toggle('open', !open);
+function filterLib(q) {
+  const term = q.toLowerCase().trim();
+  const rows = document.querySelectorAll('.lib-row');
+  let visible = 0;
+  rows.forEach(r => {
+    const show = !term || r.dataset.search.includes(term);
+    r.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  document.getElementById('lib-count').textContent = visible + ' track' + (visible !== 1 ? 's' : '');
+  document.getElementById('lib-empty').style.display = visible === 0 ? '' : 'none';
+}
+
+function redownload(btn) {
+  btn.textContent = '…';
+  btn.disabled = true;
+  fetch('/api/library/redownload', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      artist: btn.dataset.artist,
+      album:  btn.dataset.album,
+      title:  btn.dataset.title,
+    }),
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.ok) {
+      btn.textContent = '✓';
+      btn.classList.add('queued');
+    } else {
+      btn.textContent = '✗';
+      btn.disabled = false;
+    }
+  })
+  .catch(() => { btn.textContent = '↺'; btn.disabled = false; });
 }
 </script>
 {% endblock %}

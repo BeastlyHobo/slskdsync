@@ -103,6 +103,35 @@
   </div>
 
   <div class="settings-group">
+    <div class="settings-group-title">
+      Apple Music <span class="optional-label">(playlists only)</span>
+      <button type="button" class="test-btn" onclick="testConn('apple', this)">Test</button>
+    </div>
+    <div class="test-result" id="result-apple"></div>
+    <p class="hint">
+      Required for Apple Music <strong>playlist</strong> imports. Albums and tracks work without this.
+      Get these from <a href="https://developer.apple.com/account" target="_blank">developer.apple.com</a>
+      → Certificates, Identifiers &amp; Profiles → Keys → Create a MusicKit key.
+    </p>
+    <div class="field">
+      <label>Team ID</label>
+      <input name="apple_team_id" value="{{ settings.apple_team_id }}" placeholder="XXXXXXXXXX" autocomplete="off">
+      <p class="hint">10-character ID shown in Membership details.</p>
+    </div>
+    <div class="field">
+      <label>Key ID</label>
+      <input name="apple_key_id" value="{{ settings.apple_key_id }}" placeholder="XXXXXXXXXX" autocomplete="off">
+      <p class="hint">Shown when you create the MusicKit key.</p>
+    </div>
+    <div class="field">
+      <label>Private key <span class="optional-label">(.p8 file contents)</span></label>
+      <textarea name="apple_private_key" rows="5" autocomplete="off"
+        placeholder="-----BEGIN PRIVATE KEY-----&#10;…paste the full .p8 file contents here…&#10;-----END PRIVATE KEY-----"
+        style="width:100%;font-family:monospace;font-size:.72rem;resize:vertical;background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius-sm);color:var(--text);padding:.5rem">{{ settings.apple_private_key }}</textarea>
+    </div>
+  </div>
+
+  <div class="settings-group">
     <div class="settings-group-title">Login</div>
     <div class="field">
       <label>Username</label>
