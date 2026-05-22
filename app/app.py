@@ -53,13 +53,14 @@ MONOCHROME_FALLBACK_URLS = [
 # ---------------------------------------------------------------------------
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
     conn = get_conn()
+    conn.execute("PRAGMA journal_mode=WAL")
     cur = conn.cursor()
     cur.executescript("""
         CREATE TABLE IF NOT EXISTS settings (
@@ -1260,7 +1261,9 @@ def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
 def scan_library() -> None:
     """Index the music library into library_index for dedup checks.
     Uses Navidrome's Subsonic API if configured, falls back to filesystem walk."""
-    conn = get_conn()
+    # Write timestamp before we start so even a failed scan resets the 24h cooldown.
+    set_setting("last_library_scan", datetime.utcnow().isoformat(timespec="seconds"))
+
     rows: list[tuple[str, str, str]] = []  # (artist, title, album)
 
     nav_url = (get_setting("navidrome_url") or "").rstrip("/")
@@ -1306,12 +1309,12 @@ def scan_library() -> None:
                 rows.append((artist, title, album))
         source = "filesystem"
 
+    conn = get_conn()
     conn.execute("DELETE FROM library_index")
     conn.executemany(
         "INSERT INTO library_index(artist, title, album, source) VALUES (?,?,?,?)",
         [(a, t, al, source) for a, t, al in rows]
     )
-    set_setting("last_library_scan", datetime.utcnow().isoformat(timespec="seconds"))
     conn.commit()
     conn.close()
     logger.info(f"[library] Indexed {len(rows)} tracks from {source}")
