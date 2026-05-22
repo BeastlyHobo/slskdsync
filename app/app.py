@@ -1352,18 +1352,18 @@ def _worker_tick():
                 " WHERE job_id=? AND slskd_state='album_queued'",
                 (job["id"],)
             )
-        # Clear album search state so we don't re-poll this completed search next tick
+        # Clear album search state so we don't re-poll this completed search next tick.
+        # Do NOT cancel the slskd search — slskd may link queued downloads to it.
         conn.execute(
             "UPDATE import_jobs SET album_search_id=NULL, preferred_username=NULL WHERE id=?",
             (job["id"],)
         )
-        slskd.cancel_search(job["album_search_id"])
         conn.commit()
 
-    # pending slskd → start search
+    # pending slskd → start search (limit 3 per tick to avoid overwhelming slskd)
     for t in conn.execute(
         "SELECT * FROM tracks WHERE slskd_state='pending'"
-        " AND (download_source='slskd' OR download_source IS NULL) LIMIT 10"
+        " AND (download_source='slskd' OR download_source IS NULL) LIMIT 3"
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
                          t["track_number"] or 0, t["source_id"] or "")
@@ -1397,7 +1397,7 @@ def _worker_tick():
 
     # queued slskd → poll results, auto-download best
     for t in conn.execute(
-        "SELECT * FROM tracks WHERE slskd_state='queued' AND slskd_search_id IS NOT NULL LIMIT 10"
+        "SELECT * FROM tracks WHERE slskd_state='queued' AND slskd_search_id IS NOT NULL LIMIT 5"
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
                          t["track_number"] or 0, t["source_id"] or "")
@@ -1832,9 +1832,15 @@ def delete_track(track_id):
     conn.commit()
     if track:
         slskd = SlskdClient()
+        # Only cancel the individual search if no other track shares this search_id
         if track["slskd_search_id"]:
-            slskd.cancel_search(track["slskd_search_id"])
-        # If job has no more tracks, cancel the album-level search too
+            shared = conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE slskd_search_id=? AND id!=?",
+                (track["slskd_search_id"], track_id)
+            ).fetchone()[0]
+            if shared == 0:
+                slskd.cancel_search(track["slskd_search_id"])
+        # Cancel job-level album search only when the entire job is gone
         remaining = conn.execute(
             "SELECT COUNT(*) FROM tracks WHERE job_id=?", (track["job_id"],)
         ).fetchone()[0]
@@ -1850,14 +1856,19 @@ def delete_track(track_id):
 
 @app.route("/api/tracks/<int:track_id>/retry", methods=["POST"])
 def retry_track(track_id):
-    """Reset any track to pending, optionally with a custom search query.
-    Cancels any in-flight slskd search before resetting."""
+    """Reset any track to pending, optionally with a custom search query."""
     data = request.get_json(silent=True) or {}
     query = (data.get("query") or "").strip()
     conn = get_conn()
     track = conn.execute("SELECT slskd_search_id FROM tracks WHERE id=?", (track_id,)).fetchone()
+    # Only cancel the slskd search if no other track is still using it
     if track and track["slskd_search_id"]:
-        SlskdClient().cancel_search(track["slskd_search_id"])
+        shared = conn.execute(
+            "SELECT COUNT(*) FROM tracks WHERE slskd_search_id=? AND id!=?",
+            (track["slskd_search_id"], track_id)
+        ).fetchone()[0]
+        if shared == 0:
+            SlskdClient().cancel_search(track["slskd_search_id"])
     conn.execute(
         "UPDATE tracks SET slskd_state='pending', slskd_search_attempt=0,"
         " custom_search=?, slskd_error=NULL, slskd_search_id=NULL, slskd_tried_users='' WHERE id=?",
