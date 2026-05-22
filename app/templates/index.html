@@ -89,6 +89,9 @@
         {% if t.slskd_error %}<div class="detail-row"><span class="detail-label">Error</span> {{ t.slskd_error }}</div>{% endif %}
         {% if t.local_path %}<div class="detail-row"><span class="detail-label">Path</span> {{ t.local_path }}</div>{% endif %}
         {% if t.slskd_search_id %}<div class="detail-row"><span class="detail-label">Search ID</span> {{ t.slskd_search_id[:16] }}…</div>{% endif %}
+        {% if t.slskd_state != 'completed' %}
+        <button class="detail-retry-btn" onclick="event.stopPropagation();retryTrack({{ t.id }},this)">↻ Retry this track</button>
+        {% endif %}
       </div>
     </div>
     {% if t.slskd_state == 'completed' %}
@@ -107,6 +110,7 @@
     <button class="ns-btn" onclick="submitSearch(this.previousElementSibling,{{ t.id }})">Search</button>
   </div>
   {% endif %}
+  <button class="swipe-retry-btn" onclick="retryTrack({{ t.id }},this)">↻ Retry</button>
   <button class="swipe-del-btn" onclick="deleteTrack(this)">Delete</button>
 </div>
 {% endmacro %}
@@ -156,7 +160,7 @@
 .qa-retry:hover { border-color: #5a9aee; }
 .qa-clear:hover { color: #e05050; border-color: #5c1a1a; }
 
-/* ── Swipe-to-delete ────────────────────────── */
+/* ── Swipe-to-delete / swipe-to-retry ────────── */
 .swipe-row {
   position: relative; overflow: hidden;
   border-radius: var(--radius-sm);
@@ -165,14 +169,30 @@
   transition: transform .18s ease;
   border-radius: var(--radius-sm);
 }
+.swipe-retry-btn {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 76px;
+  background: #1a6a38; color: #fff; border: none;
+  font-size: .78rem; font-weight: 700; cursor: pointer;
+  transform: translateX(-76px); transition: transform .18s ease;
+}
 .swipe-del-btn {
   position: absolute; right: 0; top: 0; bottom: 0; width: 76px;
   background: #c0392b; color: #fff; border: none;
   font-size: .78rem; font-weight: 700; cursor: pointer;
   transform: translateX(76px); transition: transform .18s ease;
 }
-.swipe-row.swiped .track-card { transform: translateX(-76px); }
-.swipe-row.swiped .swipe-del-btn { transform: translateX(0); }
+.swipe-row.swiped-left  .track-card { transform: translateX(-76px); }
+.swipe-row.swiped-left  .swipe-del-btn { transform: translateX(0); }
+.swipe-row.swiped-right .track-card { transform: translateX(76px); }
+.swipe-row.swiped-right .swipe-retry-btn { transform: translateX(0); }
+
+/* Retry button inside expanded card detail panel */
+.detail-retry-btn {
+  margin-top: .5rem; padding: .25rem .6rem;
+  background: var(--surface3); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--accent);
+  font-size: .72rem; font-weight: 600; cursor: pointer;
+}
 
 .track-card.expandable { cursor: pointer; flex-wrap: wrap; }
 .track-card.expandable:hover { background: var(--surface2); }
@@ -217,11 +237,33 @@
 <script>
 function toggleExpand(card) {
   const row = card.closest('.swipe-row');
-  if (row && row.classList.contains('swiped')) {
-    row.classList.remove('swiped');
+  if (row && (row.classList.contains('swiped-left') || row.classList.contains('swiped-right'))) {
+    row.classList.remove('swiped-left', 'swiped-right');
     return;
   }
   card.classList.toggle('expanded');
+}
+
+function retryTrack(trackId, btn) {
+  if (btn) { btn.textContent = '…'; btn.disabled = true; }
+  fetch(`/api/tracks/${trackId}/retry`, { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        const row = document.querySelector(`.swipe-row[data-id="${trackId}"]`);
+        if (row) {
+          row.classList.remove('swiped-right', 'swiped-left');
+          const badge = row.querySelector('.badge');
+          if (badge) { badge.className = 'badge badge-pending'; badge.textContent = 'pending'; }
+          const errEl = row.querySelector('.track-error');
+          if (errEl) errEl.textContent = '';
+          const panel = row.querySelector('.needs-search-panel');
+          if (panel) panel.remove();
+        }
+      }
+      if (btn) { btn.textContent = '↻ Retry'; btn.disabled = false; }
+    })
+    .catch(() => { if (btn) { btn.textContent = '↻ Retry'; btn.disabled = false; } });
 }
 
 function toggleCompleted() {
@@ -267,7 +309,6 @@ function submitSearch(input, trackId) {
       if (badge) { badge.className = 'badge badge-pending'; badge.textContent = 'pending'; }
       const panel = row.querySelector('.needs-search-panel');
       if (panel) panel.remove();
-      setTimeout(() => location.reload(), 2000);
     } else {
       btn.disabled = false; btn.textContent = 'Search';
     }
@@ -275,16 +316,15 @@ function submitSearch(input, trackId) {
   .catch(() => { btn.disabled = false; btn.textContent = 'Search'; });
 }
 
-// ── Swipe gesture ─────────────────────────────
+// ── Swipe gesture (left = delete, right = retry) ──
 (function() {
   let active = null, x0 = 0, dx = 0;
 
   document.addEventListener('touchstart', e => {
     const row = e.target.closest('.swipe-row');
     if (!row) { active = null; return; }
-    // Close any other open rows
-    document.querySelectorAll('.swipe-row.swiped').forEach(r => {
-      if (r !== row) r.classList.remove('swiped');
+    document.querySelectorAll('.swipe-row.swiped-left,.swipe-row.swiped-right').forEach(r => {
+      if (r !== row) r.classList.remove('swiped-left', 'swiped-right');
     });
     active = row; x0 = e.touches[0].clientX; dx = 0;
   }, { passive: true });
@@ -292,31 +332,102 @@ function submitSearch(input, trackId) {
   document.addEventListener('touchmove', e => {
     if (!active) return;
     dx = e.touches[0].clientX - x0;
-    if (dx >= 0) return;
     const travel = Math.min(Math.abs(dx), 76);
-    const card = active.querySelector('.track-card');
-    const btn  = active.querySelector('.swipe-del-btn');
-    if (card) card.style.transform = `translateX(-${travel}px)`;
-    if (btn)  btn.style.transform  = `translateX(${76 - travel}px)`;
+    const card    = active.querySelector('.track-card');
+    const delBtn  = active.querySelector('.swipe-del-btn');
+    const retBtn  = active.querySelector('.swipe-retry-btn');
+    if (dx < 0) {
+      // Left swipe → reveal delete
+      if (card)   card.style.transform   = `translateX(-${travel}px)`;
+      if (delBtn) delBtn.style.transform = `translateX(${76 - travel}px)`;
+      if (retBtn) retBtn.style.transform = `translateX(-76px)`;
+    } else {
+      // Right swipe → reveal retry
+      if (card)   card.style.transform   = `translateX(${travel}px)`;
+      if (retBtn) retBtn.style.transform = `translateX(${travel - 76}px)`;
+      if (delBtn) delBtn.style.transform = `translateX(76px)`;
+    }
   }, { passive: true });
 
   document.addEventListener('touchend', () => {
     if (!active) return;
     const row = active;
-    const card = row.querySelector('.track-card');
-    const btn  = row.querySelector('.swipe-del-btn');
-    // Clear inline transforms — CSS classes take over
-    if (card) card.style.transform = '';
-    if (btn)  btn.style.transform  = '';
-    row.classList.toggle('swiped', dx < -50);
+    const card   = row.querySelector('.track-card');
+    const delBtn = row.querySelector('.swipe-del-btn');
+    const retBtn = row.querySelector('.swipe-retry-btn');
+    if (card)   card.style.transform   = '';
+    if (delBtn) delBtn.style.transform = '';
+    if (retBtn) retBtn.style.transform = '';
+    if (dx < -50) {
+      row.classList.add('swiped-left');
+      row.classList.remove('swiped-right');
+    } else if (dx > 50) {
+      row.classList.add('swiped-right');
+      row.classList.remove('swiped-left');
+    } else {
+      row.classList.remove('swiped-left', 'swiped-right');
+    }
     active = null;
   });
 })();
 
+// ── Live queue polling (replaces full page reload) ──
 (function() {
-  const active = {{ 'true' if (stats.pending + stats.downloading) > 0 else 'false' }};
-  if (active) setTimeout(() => location.reload(), 15000);
-  // Keep needs_search visible in stats strip without reloading constantly
+  const BADGE_LABELS = {
+    pending: 'pending', queued: 'queued', album_queued: 'album_queued',
+    downloading: 'downloading', completed: 'done',
+    failed: 'failed', needs_search: 'fix search',
+  };
+  const knownCount = {{ stats.total }};
+  let hasActive = {{ 'true' if (stats.pending + stats.downloading) > 0 else 'false' }};
+
+  function updateStatChip(selector, value, label) {
+    const el = document.querySelector(selector);
+    if (el) el.querySelector('strong').textContent = value;
+  }
+
+  function poll() {
+    fetch('/api/queue/status')
+      .then(r => r.json())
+      .then(d => {
+        // If track count changed, do one full reload to render new rows
+        if (d.stats.total !== knownCount) { location.reload(); return; }
+
+        // Update each track row in-place
+        d.tracks.forEach(t => {
+          const row = document.querySelector(`.swipe-row[data-id="${t.id}"]`);
+          if (!row) return;
+          const badge = row.querySelector('.badge');
+          if (badge) {
+            const label = BADGE_LABELS[t.state] || t.state;
+            badge.textContent = label;
+            badge.className = `badge badge-${t.state}`;
+          }
+          const errEl = row.querySelector('.track-error');
+          if (errEl) errEl.textContent = t.error || '';
+        });
+
+        // Update stat chips
+        const s = d.stats;
+        document.querySelectorAll('.stat-chip strong').forEach(el => {
+          const chip = el.parentElement;
+          if (chip.textContent.includes('total'))        el.textContent = s.total;
+          if (chip.textContent.includes('downloading'))  el.textContent = s.downloading;
+          if (chip.textContent.includes('pending'))      el.textContent = s.pending;
+          if (chip.textContent.includes('done'))         el.textContent = s.completed;
+          if (chip.textContent.includes('failed'))       el.textContent = s.failed;
+          if (chip.textContent.includes('need search'))  el.textContent = s.needs_search;
+        });
+
+        hasActive = (s.pending + s.downloading) > 0;
+        if (hasActive) setTimeout(poll, 5000);
+        else setTimeout(poll, 20000); // slow down when idle
+      })
+      .catch(() => setTimeout(poll, 15000));
+  }
+
+  // Start polling after a short delay
+  setTimeout(poll, 5000);
 })();
 
 // ── M3U playlist row ──────────────────────────
