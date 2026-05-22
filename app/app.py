@@ -6,6 +6,7 @@ import time
 import shutil
 import logging
 import base64
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -90,6 +91,16 @@ def init_db():
             local_path TEXT,
             FOREIGN KEY(job_id) REFERENCES import_jobs(id)
         );
+        CREATE TABLE IF NOT EXISTS library_index (
+            id INTEGER PRIMARY KEY,
+            artist TEXT,
+            title TEXT,
+            album TEXT,
+            source TEXT DEFAULT 'scan',
+            indexed_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_library_index
+            ON library_index(lower(trim(artist)), lower(trim(title)));
     """)
     # Migrate existing databases
     existing_cols = {row[1] for row in cur.execute("PRAGMA table_info(tracks)")}
@@ -134,6 +145,8 @@ def init_db():
         "apple_team_id": "",
         "apple_key_id": "",
         "apple_private_key": "",
+        "library_scan_interval": "24",
+        "last_library_scan": "",
         # auth stored in DB (empty = not configured yet → first-run setup)
         "app_username": "",
         "app_password_hash": "",
@@ -1181,11 +1194,43 @@ def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
 
 def run_worker(stop_event: threading.Event):
     logger.info("Worker started")
+    _scan_running = False
+
+    def _maybe_scan():
+        nonlocal _scan_running
+        if _scan_running:
+            return
+        try:
+            interval_h = int(get_setting("library_scan_interval") or "24")
+        except ValueError:
+            interval_h = 24
+        if interval_h <= 0:
+            return
+        last = get_setting("last_library_scan") or ""
+        if last:
+            try:
+                elapsed = (datetime.utcnow() - datetime.fromisoformat(last)).total_seconds()
+                if elapsed < interval_h * 3600:
+                    return
+            except ValueError:
+                pass
+        _scan_running = True
+
+        def _run():
+            nonlocal _scan_running
+            try:
+                scan_library()
+            finally:
+                _scan_running = False
+
+        threading.Thread(target=_run, daemon=True).start()
+
     while not stop_event.is_set():
         try:
             _worker_tick()
         except Exception as ex:
             logger.error(f"Worker tick error: {ex}")
+        _maybe_scan()
         time.sleep(20)
 
 
@@ -1210,6 +1255,81 @@ def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
         lines.append(r["local_path"])
     m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     logger.info(f"[m3u] {safe}.m3u updated — {len(rows)} tracks")
+
+
+def scan_library() -> None:
+    """Index the music library into library_index for dedup checks.
+    Uses Navidrome's Subsonic API if configured, falls back to filesystem walk."""
+    conn = get_conn()
+    rows: list[tuple[str, str, str]] = []  # (artist, title, album)
+
+    nav_url = (get_setting("navidrome_url") or "").rstrip("/")
+    nav_user = get_setting("navidrome_user") or ""
+    nav_pass = get_setting("navidrome_pass") or ""
+
+    if nav_url and nav_user:
+        # Path A: Navidrome Subsonic API
+        params_base = {"u": nav_user, "p": nav_pass, "v": "1.16.1",
+                       "c": "slskdsync", "f": "json",
+                       "songCount": 500, "artistCount": 0, "albumCount": 0, "query": ""}
+        offset = 0
+        while True:
+            try:
+                r = requests.get(f"{nav_url}/rest/search3",
+                                 params={**params_base, "songOffset": offset}, timeout=20)
+                data = r.json().get("subsonic-response", {})
+                if data.get("status") != "ok":
+                    logger.warning(f"[library] Navidrome search3 error: {data.get('error')}")
+                    break
+                songs = data.get("searchResult3", {}).get("song", [])
+                for s in songs:
+                    rows.append((s.get("artist", ""), s.get("title", ""), s.get("album", "")))
+                if len(songs) < 500:
+                    break
+                offset += 500
+            except Exception as ex:
+                logger.warning(f"[library] Navidrome scan failed at offset {offset}: {ex}")
+                break
+        source = "navidrome"
+    else:
+        # Path B: filesystem walk (same logic as /library route)
+        music_path = Path(get_setting("library_path") or "/music")
+        num_re = re.compile(r"^\d+\s*[-\.]\s*")
+        if music_path.exists():
+            for f in music_path.rglob("*"):
+                if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
+                    continue
+                parts = f.relative_to(music_path).parts
+                artist = parts[0] if len(parts) >= 3 else ""
+                album = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
+                title = num_re.sub("", f.stem)
+                rows.append((artist, title, album))
+        source = "filesystem"
+
+    conn.execute("DELETE FROM library_index")
+    conn.executemany(
+        "INSERT INTO library_index(artist, title, album, source) VALUES (?,?,?,?)",
+        [(a, t, al, source) for a, t, al in rows]
+    )
+    set_setting("last_library_scan", datetime.utcnow().isoformat(timespec="seconds"))
+    conn.commit()
+    conn.close()
+    logger.info(f"[library] Indexed {len(rows)} tracks from {source}")
+
+
+def _already_in_library(conn, artist: str, title: str) -> bool:
+    """Return True if this artist+title exists in completed downloads or the library index."""
+    if conn.execute(
+        "SELECT 1 FROM tracks WHERE slskd_state='completed'"
+        " AND lower(trim(artist))=lower(trim(?)) AND lower(trim(title))=lower(trim(?))",
+        (artist, title)
+    ).fetchone():
+        return True
+    return bool(conn.execute(
+        "SELECT 1 FROM library_index"
+        " WHERE lower(trim(artist))=lower(trim(?)) AND lower(trim(title))=lower(trim(?))",
+        (artist, title)
+    ).fetchone())
 
 
 def _worker_tick():
@@ -1771,6 +1891,7 @@ def settings():
         "navidrome_url", "navidrome_user", "navidrome_pass",
         "apple_team_id", "apple_key_id", "apple_private_key",
         "quality", "replace_existing",
+        "library_scan_interval",
         "app_username", "app_password_hash",
     ]
     if request.method == "POST":
@@ -1877,6 +1998,12 @@ def retry_track(track_id):
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/api/library/scan", methods=["POST"])
+def api_library_scan():
+    threading.Thread(target=scan_library, daemon=True).start()
+    return jsonify({"ok": True, "message": "Library scan started in background"})
 
 
 @app.route("/api/library/index")
@@ -2114,10 +2241,14 @@ def api_download_album():
     )
     job_id = cur.lastrowid
     count = 0
+    skipped = 0
     for t in tracks:
         title = (t.get("title") or "").strip()
         artist = (t.get("artist") or "").strip()
         if not title or not artist:
+            continue
+        if _already_in_library(conn, artist, title):
+            skipped += 1
             continue
         source_id = "" if source == "monochrome" else (t.get("source_id") or "").strip()
         cur.execute(
@@ -2129,8 +2260,11 @@ def api_download_album():
         count += 1
     conn.commit()
     conn.close()
-    logger.info(f"[queue] Batch queued {count} tracks via {source}")
-    return jsonify({"ok": True, "count": count, "message": f"Queued {count} tracks via {source}"})
+    logger.info(f"[queue] Batch queued {count} tracks via {source} ({skipped} skipped, in library)")
+    msg = f"Queued {count} tracks via {source}"
+    if skipped:
+        msg += f" ({skipped} already in library, skipped)"
+    return jsonify({"ok": True, "count": count, "skipped": skipped, "message": msg})
 
 
 @app.route("/api/download", methods=["POST"])
@@ -2153,6 +2287,10 @@ def api_download():
         source_id = (data.get("source_id") or "").strip()
 
     conn = get_conn()
+    if _already_in_library(conn, artist, title):
+        conn.close()
+        return jsonify({"ok": False, "skipped": True,
+                        "message": f"\"{title}\" is already in your library"})
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
@@ -2199,15 +2337,23 @@ def import_url():
         (provider.name, source_type, url, 0, "queued", playlist_name or None),
     )
     job_id = cur.lastrowid
+    skipped = 0
     for t in tracks:
+        if _already_in_library(conn, t.artist, t.title):
+            skipped += 1
+            continue
         cur.execute(
             "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source)"
             " VALUES(?,?,?,?,?,?,?,?)",
             (job_id, t.artist, t.album, t.title, t.track_number, t.source_id, t.cover_url, dl_source),
         )
+    queued = len(tracks) - skipped
     conn.commit()
     conn.close()
-    flash(f"Queued {len(tracks)} tracks from {provider.name} ({source_type})", "ok")
+    msg = f"Queued {queued} tracks from {provider.name} ({source_type})"
+    if skipped:
+        msg += f" · {skipped} already in library, skipped"
+    flash(msg, "ok")
     return redirect(url_for("index"))
 
 

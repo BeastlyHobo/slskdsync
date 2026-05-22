@@ -37,6 +37,21 @@
         <option value="1" {{ 'selected' if settings.replace_existing == '1' }}>Overwrite existing</option>
       </select>
     </div>
+    <div class="field">
+      <label>Library scan interval (hours, 0 = disabled)</label>
+      <input name="library_scan_interval" value="{{ settings.library_scan_interval }}" placeholder="24" style="width:5rem">
+      <p class="hint">How often to scan your library and index tracks for duplicate detection. Set to 0 to disable automatic scans.</p>
+    </div>
+    <div class="field">
+      <label>Library index</label>
+      <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+        <span style="color:var(--text-muted);font-size:.82rem">
+          Last scan: {{ settings.last_library_scan or 'Never' }}
+        </span>
+        <button type="button" class="test-btn" onclick="triggerScan(this)">Scan now</button>
+      </div>
+      <div class="test-result" id="result-scan"></div>
+    </div>
   </div>
 
   <div class="settings-group">
@@ -230,6 +245,28 @@ function testPaths(btn) {
     })
     .catch(() => {
       btn.textContent = 'Test paths';
+      btn.disabled = false;
+      result.textContent = '✗ Network error';
+      result.className = 'test-result fail';
+    });
+}
+
+function triggerScan(btn) {
+  const result = document.getElementById('result-scan');
+  btn.textContent = '…';
+  btn.disabled = true;
+  result.textContent = '';
+  result.className = 'test-result';
+  fetch('/api/library/scan', { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      btn.textContent = 'Scan now';
+      btn.disabled = false;
+      result.textContent = '✓ ' + d.message;
+      result.className = 'test-result ok';
+    })
+    .catch(() => {
+      btn.textContent = 'Scan now';
       btn.disabled = false;
       result.textContent = '✗ Network error';
       result.className = 'test-result fail';
