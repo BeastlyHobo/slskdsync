@@ -6,7 +6,7 @@ import time
 import shutil
 import logging
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -1263,61 +1263,73 @@ def scan_library() -> None:
     Uses Navidrome's Subsonic API if configured, falls back to filesystem walk."""
     # Write timestamp before we start so even a failed scan resets the 24h cooldown.
     set_setting("last_library_scan", datetime.utcnow().isoformat(timespec="seconds"))
+    with _scan_state_lock:
+        _scan_state.update({"in_progress": True, "count": 0, "source": "", "last_at": ""})
 
     rows: list[tuple[str, str, str]] = []  # (artist, title, album)
+    source = "unknown"
+    try:
+        nav_url = (get_setting("navidrome_url") or "").rstrip("/")
+        nav_user = get_setting("navidrome_user") or ""
+        nav_pass = get_setting("navidrome_pass") or ""
 
-    nav_url = (get_setting("navidrome_url") or "").rstrip("/")
-    nav_user = get_setting("navidrome_user") or ""
-    nav_pass = get_setting("navidrome_pass") or ""
-
-    if nav_url and nav_user:
-        # Path A: Navidrome Subsonic API
-        params_base = {"u": nav_user, "p": nav_pass, "v": "1.16.1",
-                       "c": "slskdsync", "f": "json",
-                       "songCount": 500, "artistCount": 0, "albumCount": 0, "query": ""}
-        offset = 0
-        while True:
-            try:
-                r = requests.get(f"{nav_url}/rest/search3",
-                                 params={**params_base, "songOffset": offset}, timeout=20)
-                data = r.json().get("subsonic-response", {})
-                if data.get("status") != "ok":
-                    logger.warning(f"[library] Navidrome search3 error: {data.get('error')}")
+        if nav_url and nav_user:
+            # Path A: Navidrome Subsonic API
+            params_base = {"u": nav_user, "p": nav_pass, "v": "1.16.1",
+                           "c": "slskdsync", "f": "json",
+                           "songCount": 500, "artistCount": 0, "albumCount": 0, "query": ""}
+            offset = 0
+            while True:
+                try:
+                    r = requests.get(f"{nav_url}/rest/search3",
+                                     params={**params_base, "songOffset": offset}, timeout=20)
+                    data = r.json().get("subsonic-response", {})
+                    if data.get("status") != "ok":
+                        logger.warning(f"[library] Navidrome search3 error: {data.get('error')}")
+                        break
+                    songs = data.get("searchResult3", {}).get("song", [])
+                    for s in songs:
+                        rows.append((s.get("artist", ""), s.get("title", ""), s.get("album", "")))
+                    if len(songs) < 500:
+                        break
+                    offset += 500
+                except Exception as ex:
+                    logger.warning(f"[library] Navidrome scan failed at offset {offset}: {ex}")
                     break
-                songs = data.get("searchResult3", {}).get("song", [])
-                for s in songs:
-                    rows.append((s.get("artist", ""), s.get("title", ""), s.get("album", "")))
-                if len(songs) < 500:
-                    break
-                offset += 500
-            except Exception as ex:
-                logger.warning(f"[library] Navidrome scan failed at offset {offset}: {ex}")
-                break
-        source = "navidrome"
-    else:
-        # Path B: filesystem walk (same logic as /library route)
-        music_path = Path(get_setting("library_path") or "/music")
-        num_re = re.compile(r"^\d+\s*[-\.]\s*")
-        if music_path.exists():
-            for f in music_path.rglob("*"):
-                if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
-                    continue
-                parts = f.relative_to(music_path).parts
-                artist = parts[0] if len(parts) >= 3 else ""
-                album = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
-                title = num_re.sub("", f.stem)
-                rows.append((artist, title, album))
-        source = "filesystem"
+            source = "navidrome"
+        else:
+            # Path B: filesystem walk (same logic as /library route)
+            music_path = Path(get_setting("library_path") or "/music")
+            num_re = re.compile(r"^\d+\s*[-\.]\s*")
+            if music_path.exists():
+                for f in music_path.rglob("*"):
+                    if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
+                        continue
+                    parts = f.relative_to(music_path).parts
+                    artist = parts[0] if len(parts) >= 3 else ""
+                    album = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
+                    title = num_re.sub("", f.stem)
+                    rows.append((artist, title, album))
+            source = "filesystem"
 
-    conn = get_conn()
-    conn.execute("DELETE FROM library_index")
-    conn.executemany(
-        "INSERT INTO library_index(artist, title, album, source) VALUES (?,?,?,?)",
-        [(a, t, al, source) for a, t, al in rows]
-    )
-    conn.commit()
-    conn.close()
-    logger.info(f"[library] Indexed {len(rows)} tracks from {source}")
+        conn = get_conn()
+        conn.execute("DELETE FROM library_index")
+        conn.executemany(
+            "INSERT INTO library_index(artist, title, album, source) VALUES (?,?,?,?)",
+            [(a, t, al, source) for a, t, al in rows]
+        )
+        conn.commit()
+        conn.close()
+        with _scan_state_lock:
+            _scan_state.update({
+                "in_progress": False, "count": len(rows),
+                "source": source, "last_at": datetime.utcnow().isoformat(timespec="seconds"),
+            })
+        logger.info(f"[library] Indexed {len(rows)} tracks from {source}")
+    except Exception as ex:
+        logger.error(f"[library] Scan failed: {ex}")
+        with _scan_state_lock:
+            _scan_state.update({"in_progress": False, "source": source})
 
 
 def _already_in_library(conn, artist: str, title: str) -> bool:
@@ -1353,6 +1365,30 @@ def _worker_tick():
           AND datetime(slskd_queued_at, '+3 minutes') < datetime('now')
     """)
     conn.commit()
+
+    # Reset tracks stuck in 'downloading' for >30 min (stalled transfer).
+    stuck_dl = conn.execute("""
+        SELECT id, slskd_search_id FROM tracks
+        WHERE slskd_state='downloading'
+          AND slskd_queued_at IS NOT NULL
+          AND datetime(slskd_queued_at, '+30 minutes') < datetime('now')
+    """).fetchall()
+    for row in stuck_dl:
+        if row["slskd_search_id"]:
+            try:
+                slskd.cancel_search(row["slskd_search_id"])
+            except Exception:
+                pass
+        conn.execute(
+            "UPDATE tracks SET slskd_state='pending', slskd_search_id=NULL,"
+            " slskd_download_user=NULL, slskd_download_filename=NULL,"
+            " slskd_error='Download stalled after 30 min — retrying'"
+            " WHERE id=?",
+            (row["id"],),
+        )
+        logger.warning(f"[worker] Track {row['id']} stuck downloading >30 min, reset to pending")
+    if stuck_dl:
+        conn.commit()
 
     # ── ALBUM SEARCH: start ────────────────────────────────────────────────
     # Jobs with 3+ pending slskd tracks get one "Artist Album" search instead
@@ -1743,6 +1779,9 @@ def _worker_tick():
 # Flask app
 # ---------------------------------------------------------------------------
 
+_scan_state: dict = {"in_progress": False, "count": 0, "source": "", "last_at": ""}
+_scan_state_lock = threading.Lock()
+
 app = Flask(__name__)
 app.secret_key = os.getenv("APP_SECRET", "change-me")
 
@@ -2007,6 +2046,12 @@ def retry_track(track_id):
 def api_library_scan():
     threading.Thread(target=scan_library, daemon=True).start()
     return jsonify({"ok": True, "message": "Library scan started in background"})
+
+
+@app.route("/api/library/scan/status")
+def api_library_scan_status():
+    with _scan_state_lock:
+        return jsonify(dict(_scan_state))
 
 
 @app.route("/api/library/index")
