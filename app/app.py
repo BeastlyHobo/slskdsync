@@ -928,6 +928,9 @@ class SlskdClient:
             logger.debug(f"[slskd] POST {url} → {r.status_code} body={body!r}")
             if r.status_code < 300:
                 return True, "download queued"
+            if r.status_code == 409:
+                # Already in slskd's download queue — treat as success
+                return True, "already_queued"
             return False, f"HTTP {r.status_code}: {r.text[:200]}"
         except Exception as ex:
             return False, str(ex)
@@ -1174,6 +1177,9 @@ def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
 def _worker_tick():
     conn = get_conn()
     slskd = SlskdClient()
+    # Tracks (username, filename) pairs already requested this tick to avoid
+    # double-requesting the same file from both album and individual search paths.
+    _queued_this_tick: set[tuple[str, str]] = set()
 
     # ── STUCK SEARCH TIMEOUT ────────────────────────────────────────────────
     # Searches have a 15 s timeout; if a track is still 'queued' after 3 min
@@ -1272,9 +1278,17 @@ def _worker_tick():
             for track in album_tracks:
                 best_file = _find_file_for_track(preferred_files, track, slskd)
                 if best_file:
+                    key = (best_username, best_file["filename"])
+                    if key in _queued_this_tick:
+                        logger.info(f"[album] Skipping duplicate request for {track['title']!r}")
+                        conn.execute("UPDATE tracks SET slskd_state='downloading',"
+                                     " slskd_search_id=?, slskd_tried_users=? WHERE id=?",
+                                     (job["album_search_id"], best_username, track["id"]))
+                        continue
                     ok, msg = slskd.download_file(
                         best_username, best_file["filename"], best_file.get("size", 0))
                     if ok:
+                        _queued_this_tick.add(key)
                         conn.execute(
                             "UPDATE tracks SET slskd_state='downloading',"
                             " slskd_search_id=?, slskd_tried_users=? WHERE id=?",
@@ -1296,6 +1310,12 @@ def _worker_tick():
                 " WHERE job_id=? AND slskd_state='album_queued'",
                 (job["id"],)
             )
+        # Clear album search state so we don't re-poll this completed search next tick
+        conn.execute(
+            "UPDATE import_jobs SET album_search_id=NULL, preferred_username=NULL WHERE id=?",
+            (job["id"],)
+        )
+        slskd.cancel_search(job["album_search_id"])
         conn.commit()
 
     # pending slskd → start search
@@ -1353,9 +1373,18 @@ def _worker_tick():
         )
         if scored and scored[0][0] > 0:
             best = scored[0][2]
+            key = (best["username"], best["filename"])
+            if key in _queued_this_tick:
+                # Already requested this file this tick (from album path) — just mark downloading
+                tried.add(best["username"])
+                conn.execute("UPDATE tracks SET slskd_state='downloading', slskd_tried_users=? WHERE id=?",
+                             (",".join(tried), t["id"]))
+                conn.commit()
+                continue
             logger.info(f"[slskd] Downloading from {best['username']}: {best['filename']}")
             ok, msg = slskd.download_file(best["username"], best["filename"], best.get("size", 0))
             if ok:
+                _queued_this_tick.add(key)
                 tried.add(best["username"])
                 conn.execute(
                     "UPDATE tracks SET slskd_state='downloading', slskd_tried_users=? WHERE id=?",
@@ -1736,10 +1765,14 @@ def delete_track(track_id):
 
 @app.route("/api/tracks/<int:track_id>/retry", methods=["POST"])
 def retry_track(track_id):
-    """Reset a needs_search track with an optional custom search query."""
+    """Reset any track to pending, optionally with a custom search query.
+    Cancels any in-flight slskd search before resetting."""
     data = request.get_json(silent=True) or {}
     query = (data.get("query") or "").strip()
     conn = get_conn()
+    track = conn.execute("SELECT slskd_search_id FROM tracks WHERE id=?", (track_id,)).fetchone()
+    if track and track["slskd_search_id"]:
+        SlskdClient().cancel_search(track["slskd_search_id"])
     conn.execute(
         "UPDATE tracks SET slskd_state='pending', slskd_search_attempt=0,"
         " custom_search=?, slskd_error=NULL, slskd_search_id=NULL, slskd_tried_users='' WHERE id=?",
@@ -1912,6 +1945,31 @@ def api_tracks():
     return jsonify(rows)
 
 
+@app.route("/api/queue/status")
+def api_queue_status():
+    """Lightweight polling endpoint — returns only what changes between refreshes."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, slskd_state, slskd_error FROM tracks ORDER BY id DESC LIMIT 100"
+    ).fetchall()
+    conn.close()
+    stats = {"total": 0, "pending": 0, "downloading": 0, "completed": 0,
+             "failed": 0, "needs_search": 0}
+    tracks = []
+    for r in rows:
+        s = r["slskd_state"] or "pending"
+        stats["total"] += 1
+        if s in ("pending", "queued", "album_queued"):
+            stats["pending"] += 1
+        elif s == "needs_search":
+            stats["needs_search"] += 1
+        elif s in stats:
+            stats[s] += 1
+        tracks.append({"id": r["id"], "state": s,
+                        "error": (r["slskd_error"] or "")[:80]})
+    return jsonify({"stats": stats, "tracks": tracks})
+
+
 @app.route("/api/queue/action", methods=["POST"])
 def api_queue_action():
     action = (request.get_json() or {}).get("action", "")
@@ -1923,9 +1981,13 @@ def api_queue_action():
     elif action == "clear_all":
         conn.execute("DELETE FROM tracks WHERE slskd_state IN ('failed','completed')")
     elif action == "retry_failed":
+        # Keep slskd_search_attempt=1 so title-only search is tried next
+        # instead of re-running the exact same artist+title query that already failed.
         conn.execute(
             "UPDATE tracks SET slskd_state='pending', slskd_error=NULL, slskd_search_id=NULL,"
-            " slskd_tried_users='' WHERE slskd_state='failed'"
+            " slskd_tried_users='',"
+            " slskd_search_attempt=CASE WHEN slskd_search_attempt>0 THEN 1 ELSE 0 END"
+            " WHERE slskd_state='failed'"
         )
     elif action == "retry_downloading":
         conn.execute(
