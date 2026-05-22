@@ -102,6 +102,8 @@ def init_db():
         ("force_overwrite", "INTEGER DEFAULT 0"),
         ("slskd_search_attempt", "INTEGER DEFAULT 0"),
         ("custom_search", "TEXT DEFAULT NULL"),
+        ("slskd_download_user", "TEXT DEFAULT NULL"),
+        ("slskd_download_filename", "TEXT DEFAULT NULL"),
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
@@ -832,6 +834,42 @@ class SlskdClient:
             except Exception:
                 pass
 
+    def get_user_transfers(self, username: str) -> dict[str, str]:
+        """Return a mapping of filename → state for all slskd downloads from username.
+        States of interest: 'Errored', 'Cancelled', 'TimedOut', 'Completed', 'InProgress'."""
+        if not username:
+            return {}
+        url = f"{self.base}/api/v0/transfers/downloads/{username}"
+        try:
+            r = requests.get(url, headers=self._headers(), auth=self._auth(), timeout=15)
+            if r.status_code != 200:
+                return {}
+            data = r.json()
+            result: dict[str, str] = {}
+            # slskd v0 returns a list of directory objects each with a "files" array;
+            # some builds return a flat list directly.
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict) and "files" in item:
+                        for f in item["files"]:
+                            fn = f.get("filename", "")
+                            st = f.get("state", "")
+                            if isinstance(st, dict):
+                                st = st.get("name", "")  # {name: "Errored", …}
+                            if fn:
+                                result[fn] = str(st)
+                    elif isinstance(item, dict) and "filename" in item:
+                        fn = item.get("filename", "")
+                        st = item.get("state", "")
+                        if isinstance(st, dict):
+                            st = st.get("name", "")
+                        if fn:
+                            result[fn] = str(st)
+            return result
+        except Exception as ex:
+            logger.debug(f"[slskd] get_user_transfers({username}): {ex}")
+            return {}
+
     def get_search_results(self, search_id: str) -> list[dict] | None:
         """Returns None if the search is still running, [] if complete with no results,
         or a populated list if results are available."""
@@ -1282,8 +1320,10 @@ def _worker_tick():
                     if key in _queued_this_tick:
                         logger.info(f"[album] Skipping duplicate request for {track['title']!r}")
                         conn.execute("UPDATE tracks SET slskd_state='downloading',"
-                                     " slskd_search_id=?, slskd_tried_users=? WHERE id=?",
-                                     (job["album_search_id"], best_username, track["id"]))
+                                     " slskd_search_id=?, slskd_tried_users=?,"
+                                     " slskd_download_user=?, slskd_download_filename=? WHERE id=?",
+                                     (job["album_search_id"], best_username,
+                                      best_username, best_file["filename"], track["id"]))
                         continue
                     ok, msg = slskd.download_file(
                         best_username, best_file["filename"], best_file.get("size", 0))
@@ -1291,8 +1331,10 @@ def _worker_tick():
                         _queued_this_tick.add(key)
                         conn.execute(
                             "UPDATE tracks SET slskd_state='downloading',"
-                            " slskd_search_id=?, slskd_tried_users=? WHERE id=?",
-                            (job["album_search_id"], best_username, track["id"])
+                            " slskd_search_id=?, slskd_tried_users=?,"
+                            " slskd_download_user=?, slskd_download_filename=? WHERE id=?",
+                            (job["album_search_id"], best_username,
+                             best_username, best_file["filename"], track["id"])
                         )
                         logger.info(f"[album] Downloading {track['title']!r} from {best_username}")
                     else:
@@ -1377,8 +1419,10 @@ def _worker_tick():
             if key in _queued_this_tick:
                 # Already requested this file this tick (from album path) — just mark downloading
                 tried.add(best["username"])
-                conn.execute("UPDATE tracks SET slskd_state='downloading', slskd_tried_users=? WHERE id=?",
-                             (",".join(tried), t["id"]))
+                conn.execute(
+                    "UPDATE tracks SET slskd_state='downloading', slskd_tried_users=?,"
+                    " slskd_download_user=?, slskd_download_filename=? WHERE id=?",
+                    (",".join(tried), best["username"], best["filename"], t["id"]))
                 conn.commit()
                 continue
             logger.info(f"[slskd] Downloading from {best['username']}: {best['filename']}")
@@ -1387,8 +1431,9 @@ def _worker_tick():
                 _queued_this_tick.add(key)
                 tried.add(best["username"])
                 conn.execute(
-                    "UPDATE tracks SET slskd_state='downloading', slskd_tried_users=? WHERE id=?",
-                    (",".join(tried), t["id"]),
+                    "UPDATE tracks SET slskd_state='downloading', slskd_tried_users=?,"
+                    " slskd_download_user=?, slskd_download_filename=? WHERE id=?",
+                    (",".join(tried), best["username"], best["filename"], t["id"]),
                 )
             else:
                 logger.warning(f"[slskd] Download request failed for '{meta.title}': {msg}")
@@ -1424,6 +1469,44 @@ def _worker_tick():
                 )
         conn.commit()
 
+    # ── TRANSFER STATUS CHECK ──────────────────────────────────────────────
+    # Ask slskd whether our in-flight downloads errored or were cancelled so we
+    # can immediately retry with a different peer instead of waiting forever.
+    dl_tracks = conn.execute(
+        "SELECT * FROM tracks WHERE slskd_state='downloading'"
+        " AND slskd_download_user IS NOT NULL AND slskd_download_filename IS NOT NULL"
+        " LIMIT 30"
+    ).fetchall()
+    if dl_tracks:
+        # Batch API calls: one per unique user
+        by_user: dict[str, list] = {}
+        for t in dl_tracks:
+            by_user.setdefault(t["slskd_download_user"], []).append(t)
+        for username, user_tracks in by_user.items():
+            transfer_map = slskd.get_user_transfers(username)
+            if not transfer_map:
+                continue  # slskd unreachable or no data yet
+            for t in user_tracks:
+                state = transfer_map.get(t["slskd_download_filename"], "")
+                # Terminal failure states — retry with a different peer
+                if state in ("Errored", "Cancelled", "TimedOut", "Aborted"):
+                    tried = set(u for u in (t["slskd_tried_users"] or "").split(",") if u)
+                    tried.add(username)
+                    logger.info(
+                        f"[slskd] Transfer {state} for '{t['title']}' from {username}"
+                        f" — queuing retry (tried {len(tried)} peer(s))"
+                    )
+                    conn.execute(
+                        "UPDATE tracks SET slskd_state='pending',"
+                        " slskd_tried_users=?, slskd_error=?,"
+                        " slskd_download_user=NULL, slskd_download_filename=NULL,"
+                        " slskd_search_id=NULL WHERE id=?",
+                        (",".join(tried),
+                         f"Transfer {state} from {username}; trying another peer",
+                         t["id"])
+                    )
+        conn.commit()
+
     # downloading → check watch folder, organize
     library = get_setting("library_path") or "/music"
     for t in conn.execute(
@@ -1439,8 +1522,10 @@ def _worker_tick():
                                                    force_overwrite=bool(t["force_overwrite"]))
                 logger.info(f"[slskd] Organized to: {result}")
                 tag_file(Path(result), t)
-                conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?",
-                             (result, t["id"]))
+                conn.execute(
+                    "UPDATE tracks SET slskd_state='completed', local_path=?,"
+                    " slskd_download_user=NULL, slskd_download_filename=NULL WHERE id=?",
+                    (result, t["id"]))
                 conn.commit()
                 job = conn.execute("SELECT playlist_name FROM import_jobs WHERE id=?",
                                    (t["job_id"],)).fetchone()
