@@ -255,15 +255,26 @@ function triggerScan(btn) {
   const result = document.getElementById('result-scan');
   btn.textContent = '…';
   btn.disabled = true;
-  result.textContent = '';
+  result.textContent = 'Scanning…';
   result.className = 'test-result';
   fetch('/api/library/scan', { method: 'POST' })
-    .then(r => r.json())
-    .then(d => {
-      btn.textContent = 'Scan now';
-      btn.disabled = false;
-      result.textContent = '✓ ' + d.message;
-      result.className = 'test-result ok';
+    .then(() => {
+      const poll = setInterval(() => {
+        fetch('/api/library/scan/status')
+          .then(r => r.json())
+          .then(d => {
+            if (!d.in_progress) {
+              clearInterval(poll);
+              btn.textContent = 'Scan now';
+              btn.disabled = false;
+              result.textContent = d.count > 0
+                ? `✓ Indexed ${d.count} tracks from ${d.source}`
+                : '✓ Scan complete (0 tracks found)';
+              result.className = 'test-result ok';
+            }
+          })
+          .catch(() => { clearInterval(poll); btn.textContent = 'Scan now'; btn.disabled = false; });
+      }, 1500);
     })
     .catch(() => {
       btn.textContent = 'Scan now';
