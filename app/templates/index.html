@@ -50,6 +50,9 @@
   {% if stats.downloading > 0 %}
   <button class="qa-btn qa-retry" onclick="queueAction('retry_downloading')">↺ Retry stuck</button>
   {% endif %}
+  {% if stats.needs_search > 0 %}
+  <button class="qa-btn qa-clear" onclick="queueAction('clear_needs_search')">✕ Clear fix search</button>
+  {% endif %}
   {% if stats.failed > 0 %}
   <button class="qa-btn qa-retry" onclick="queueAction('retry_failed')">↺ Retry failed</button>
   <button class="qa-btn qa-clear" onclick="queueAction('clear_failed')">✕ Clear failed</button>
@@ -89,9 +92,12 @@
         {% if t.slskd_error %}<div class="detail-row"><span class="detail-label">Error</span> {{ t.slskd_error }}</div>{% endif %}
         {% if t.local_path %}<div class="detail-row"><span class="detail-label">Path</span> {{ t.local_path }}</div>{% endif %}
         {% if t.slskd_search_id %}<div class="detail-row"><span class="detail-label">Search ID</span> {{ t.slskd_search_id[:16] }}…</div>{% endif %}
-        {% if t.slskd_state != 'completed' %}
-        <button class="detail-retry-btn" onclick="event.stopPropagation();retryTrack({{ t.id }},this)">↻ Retry this track</button>
-        {% endif %}
+        <div style="display:flex;gap:.4rem;margin-top:.5rem;flex-wrap:wrap">
+          {% if t.slskd_state != 'completed' %}
+          <button class="detail-retry-btn" onclick="event.stopPropagation();retryTrack({{ t.id }},this)">↻ Retry this track</button>
+          {% endif %}
+          <button class="detail-retry-btn" style="color:#e05050;border-color:#e05050" onclick="event.stopPropagation();deleteTrack(this)">✕ Delete</button>
+        </div>
       </div>
     </div>
     {% if t.slskd_state == 'completed' %}
@@ -185,6 +191,11 @@
 .swipe-row.swiped-left  .swipe-del-btn { transform: translateX(0); }
 .swipe-row.swiped-right .track-card { transform: translateX(76px); }
 .swipe-row.swiped-right .swipe-retry-btn { transform: translateX(0); }
+/* Reveal delete on hover for mouse users */
+@media (hover: hover) {
+  .swipe-row:hover .swipe-del-btn { transform: translateX(0); }
+  .swipe-row:hover .track-card { transform: translateX(-76px); }
+}
 
 /* Retry button inside expanded card detail panel */
 .detail-retry-btn {

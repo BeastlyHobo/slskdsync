@@ -1901,6 +1901,35 @@ def search():
     return render_template("search.html")
 
 
+@app.route("/playlists")
+def playlists():
+    conn = get_conn()
+    jobs = conn.execute("""
+        SELECT j.id, j.source, j.source_type, j.source_url,
+               j.playlist_name, j.created_at,
+               COUNT(t.id) AS total,
+               SUM(CASE WHEN t.slskd_state='completed' THEN 1 ELSE 0 END) AS done,
+               SUM(CASE WHEN t.slskd_state='needs_search' THEN 1 ELSE 0 END) AS needs_fix,
+               SUM(CASE WHEN t.slskd_state IN ('pending','queued','album_queued','downloading') THEN 1 ELSE 0 END) AS in_progress,
+               SUM(CASE WHEN t.slskd_state='failed' THEN 1 ELSE 0 END) AS failed
+        FROM import_jobs j
+        LEFT JOIN tracks t ON t.job_id = j.id
+        WHERE j.source_url != ''
+        GROUP BY j.id
+        ORDER BY j.created_at DESC
+    """).fetchall()
+    missing = {}
+    for job in jobs:
+        if job["needs_fix"] and job["needs_fix"] > 0:
+            missing[job["id"]] = conn.execute(
+                "SELECT id, artist, title, album, slskd_error FROM tracks"
+                " WHERE job_id=? AND slskd_state='needs_search'",
+                (job["id"],),
+            ).fetchall()
+    conn.close()
+    return render_template("playlists.html", jobs=jobs, missing=missing)
+
+
 @app.route("/library")
 def library():
     music_path = Path(get_setting("library_path") or "/music")
@@ -2265,6 +2294,8 @@ def api_queue_action():
             "UPDATE tracks SET slskd_state='pending', slskd_error=NULL, slskd_search_id=NULL,"
             " slskd_tried_users='' WHERE slskd_state IN ('downloading','queued','album_queued')"
         )
+    elif action == "clear_needs_search":
+        conn.execute("DELETE FROM tracks WHERE slskd_state='needs_search'")
     else:
         conn.close()
         return jsonify({"ok": False, "error": "unknown action"}), 400
