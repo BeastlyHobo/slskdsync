@@ -1,0 +1,156 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<style>
+.pl-list { display: flex; flex-direction: column; gap: .6rem; padding: .75rem 0; }
+.pl-card {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+}
+.pl-header {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .65rem .75rem; cursor: pointer;
+}
+.pl-header:hover { background: var(--surface3); }
+.pl-title { flex: 1; min-width: 0; }
+.pl-name { font-size: .88rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-sub { font-size: .72rem; color: var(--text-muted); margin-top: 1px; }
+.pl-source-badge {
+  font-size: .65rem; font-weight: 700; padding: .15rem .4rem;
+  border-radius: 3px; white-space: nowrap; flex-shrink: 0;
+}
+.src-spotify { background: #1a3a1a; color: #1db954; }
+.src-apple   { background: #3a1a1a; color: #fc3c44; }
+.src-tidal   { background: #1a1a3a; color: #00f; }
+.src-other   { background: var(--surface3); color: var(--text-muted); }
+.pl-progress {
+  display: flex; align-items: center; gap: .5rem;
+  font-size: .72rem; color: var(--text-muted); flex-shrink: 0;
+}
+.pl-bar-wrap { width: 60px; height: 5px; background: var(--surface3); border-radius: 3px; overflow: hidden; }
+.pl-bar { height: 100%; background: #40cc70; border-radius: 3px; transition: width .3s; }
+.pl-counts { font-size: .7rem; white-space: nowrap; }
+.pl-fix-badge {
+  font-size: .65rem; font-weight: 700; padding: .15rem .4rem;
+  background: #4a2e00; color: #e09020; border-radius: 3px; white-space: nowrap;
+}
+.pl-actions { display: flex; gap: .4rem; flex-shrink: 0; }
+.pl-link { font-size: .72rem; color: var(--text-muted); text-decoration: none; flex-shrink: 0; }
+.pl-link:hover { color: var(--accent); }
+
+.pl-missing { display: none; border-top: 1px solid var(--border); }
+.pl-card.open .pl-missing { display: block; }
+.pl-card.open .pl-chevron { transform: rotate(90deg); }
+.pl-chevron { font-size: .8rem; color: var(--text-muted); transition: transform .18s; flex-shrink: 0; }
+
+.missing-row {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .45rem .75rem; border-bottom: 1px solid var(--border);
+}
+.missing-row:last-child { border-bottom: none; }
+.missing-info { flex: 1; min-width: 0; }
+.missing-title { font-size: .82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.missing-sub { font-size: .7rem; color: var(--text-muted); }
+.missing-search { display: flex; gap: .35rem; flex-shrink: 0; }
+.ms-input {
+  width: 160px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text); font-size: .75rem;
+  padding: .25rem .4rem;
+}
+.ms-input:focus { outline: none; border-color: var(--accent); }
+.ms-btn {
+  padding: .25rem .5rem; background: var(--accent); color: #fff;
+  border: none; border-radius: var(--radius-sm); font-size: .72rem;
+  font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.pl-empty { padding: .75rem; font-size: .8rem; color: var(--text-muted); text-align: center; }
+</style>
+
+{% if not jobs %}
+<div class="empty-state">
+  <div class="empty-icon">📋</div>
+  <p>No imported playlists yet. Paste a Spotify, TIDAL, or Apple Music URL in the Queue tab.</p>
+</div>
+{% else %}
+<div class="pl-list">
+{% for job in jobs %}
+{% set pct = ((job.done or 0) / job.total * 100) | int if job.total else 0 %}
+{% set src_class = 'src-spotify' if job.source == 'Spotify' else ('src-apple' if job.source == 'Apple' else ('src-tidal' if job.source == 'TIDAL' else 'src-other')) %}
+<div class="pl-card {% if job.needs_fix %}expandable{% endif %}" id="plcard-{{ job.id }}">
+  <div class="pl-header" onclick="togglePl({{ job.id }}, {{ 'true' if job.needs_fix else 'false' }})">
+    <span class="pl-chevron {% if not job.needs_fix %}" style="visibility:hidden{% endif %}">›</span>
+    <div class="pl-title">
+      <div class="pl-name" title="{{ job.playlist_name or job.source_url }}">
+        {{ job.playlist_name or (job.source_url | truncate(60)) }}
+      </div>
+      <div class="pl-sub">
+        {{ job.source }} · {{ job.source_type }} · {{ job.created_at[:10] if job.created_at else '—' }}
+      </div>
+    </div>
+    <span class="pl-source-badge {{ src_class }}">{{ job.source }}</span>
+    <div class="pl-progress">
+      <div class="pl-bar-wrap"><div class="pl-bar" style="width:{{ pct }}%"></div></div>
+      <span class="pl-counts">{{ job.done or 0 }}/{{ job.total or 0 }}</span>
+    </div>
+    {% if job.needs_fix %}
+    <span class="pl-fix-badge">{{ job.needs_fix }} fix search</span>
+    {% endif %}
+    {% if job.source_url %}
+    <a class="pl-link" href="{{ job.source_url }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open original">↗</a>
+    {% endif %}
+  </div>
+  {% if job.needs_fix and missing.get(job.id) %}
+  <div class="pl-missing" id="plmissing-{{ job.id }}">
+    {% for t in missing[job.id] %}
+    <div class="missing-row" id="mrow-{{ t.id }}">
+      <div class="missing-info">
+        <div class="missing-title">{{ t.title or '—' }}</div>
+        <div class="missing-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
+        {% if t.slskd_error %}<div class="missing-sub" style="color:#e05050">{{ t.slskd_error[:80] }}</div>{% endif %}
+      </div>
+      <div class="missing-search">
+        <input class="ms-input" type="text"
+          value="{{ (t.artist ~ ' ' ~ t.title) | trim }}"
+          placeholder="Search query…"
+          onkeydown="if(event.key==='Enter')plSearch(this,{{ t.id }})">
+        <button class="ms-btn" onclick="plSearch(this.previousElementSibling,{{ t.id }})">Search</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+</div>
+{% endif %}
+
+<script>
+function togglePl(id, hasMissing) {
+  if (!hasMissing) return;
+  document.getElementById('plcard-' + id).classList.toggle('open');
+}
+
+function plSearch(input, trackId) {
+  const query = input.value.trim();
+  if (!query) return;
+  const btn = input.nextElementSibling;
+  btn.disabled = true;
+  btn.textContent = '…';
+  fetch(`/api/tracks/${trackId}/retry`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({query}),
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      const row = document.getElementById('mrow-' + trackId);
+      row.style.opacity = '.4';
+      row.style.pointerEvents = 'none';
+      btn.textContent = '✓';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Search';
+    }
+  }).catch(() => { btn.disabled = false; btn.textContent = 'Search'; });
+}
+</script>
+{% endblock %}
