@@ -1009,10 +1009,18 @@ def _score_user_album_coverage(user_files: list, album_tracks: list) -> int:
 
 def _find_file_for_track(user_files: list, track: sqlite3.Row,
                           slskd_client: "SlskdClient") -> Optional[dict]:
-    """Return the best audio file for a track from a specific user's file list."""
+    """Return the best audio file for a track from a specific user's file list.
+    Title match is required — a bare format score is not sufficient."""
     meta = TrackMeta(track["artist"] or "", track["album"] or "",
                      track["title"] or "", track["track_number"] or 0)
-    candidates = [f for f in user_files if slskd_client.score_result(f, meta) > 0]
+    title_l = meta.title.lower()
+    # Require the title to appear in the filename, same as _score_user_album_coverage
+    candidates = [
+        f for f in user_files
+        if title_l
+        and title_l in f["filename"].replace("\\", "/").rsplit("/", 1)[-1].lower()
+        and slskd_client.score_result(f, meta) > 0
+    ]
     if not candidates:
         return None
     return max(candidates, key=lambda f: slskd_client.score_result(f, meta))
@@ -1477,12 +1485,10 @@ def _worker_tick():
                 if best_file:
                     key = (best_username, best_file["filename"])
                     if key in _queued_this_tick:
-                        logger.info(f"[album] Skipping duplicate request for {track['title']!r}")
-                        conn.execute("UPDATE tracks SET slskd_state='downloading',"
-                                     " slskd_search_id=?, slskd_tried_users=?,"
-                                     " slskd_download_user=?, slskd_download_filename=? WHERE id=?",
-                                     (job["album_search_id"], best_username,
-                                      best_username, best_file["filename"], track["id"]))
+                        # Same file already requested for a different track — fall back to
+                        # individual search so this track gets its own file, not the wrong one.
+                        logger.info(f"[album] {track['title']!r} shares a file with another track; using individual search")
+                        conn.execute("UPDATE tracks SET slskd_state='pending' WHERE id=?", (track["id"],))
                         continue
                     ok, msg = slskd.download_file(
                         best_username, best_file["filename"], best_file.get("size", 0))
