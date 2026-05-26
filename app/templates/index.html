@@ -82,14 +82,16 @@
       <div class="track-title">{{ t.title or '—' }}</div>
       <div class="track-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
       {% if t.slskd_error %}
-      <div class="track-sub track-error">{{ t.slskd_error[:80] }}{% if t.slskd_error|length > 80 %}…{% endif %}</div>
+      <div class="track-sub track-error">{{ t.slskd_error[:120] }}{% if t.slskd_error|length > 120 %}…{% endif %}</div>
       {% endif %}
       {% if t.local_path and t.slskd_state == 'completed' %}
       <div class="track-sub" style="color:#40cc70;margin-top:2px">✓ {{ t.local_path.split('/')[-1] }}</div>
       {% endif %}
       <div class="track-detail">
         <div class="detail-row"><span class="detail-label">Source</span> {{ t.download_source or 'slskd' }}</div>
-        {% if t.slskd_error %}<div class="detail-row"><span class="detail-label">Error</span> {{ t.slskd_error }}</div>{% endif %}
+        {% if t.slskd_download_user %}<div class="detail-row"><span class="detail-label">Peer</span> {{ t.slskd_download_user }}</div>{% endif %}
+        {% if t.slskd_download_filename %}<div class="detail-row"><span class="detail-label">File</span> {{ t.slskd_download_filename.split('\\')[-1] }}</div>{% endif %}
+        {% if t.slskd_error %}<div class="detail-row" style="color:#e05050;white-space:pre-wrap;word-break:break-word"><span class="detail-label" style="color:#e05050">Error</span> {{ t.slskd_error }}</div>{% endif %}
         {% if t.local_path %}<div class="detail-row"><span class="detail-label">Path</span> {{ t.local_path }}</div>{% endif %}
         {% if t.slskd_search_id %}<div class="detail-row"><span class="detail-label">Search ID</span> {{ t.slskd_search_id[:16] }}…</div>{% endif %}
         <div style="display:flex;gap:.4rem;margin-top:.5rem;flex-wrap:wrap">
