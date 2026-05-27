@@ -1312,6 +1312,24 @@ def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
     logger.info(f"[m3u] {safe}.m3u updated — {len(merged)} tracks ({len(rows)} downloads, {len(lib_rows)} library)")
 
 
+def _trigger_navidrome_rescan() -> None:
+    """Tell Navidrome to rescan its library (picks up new/updated M3U files)."""
+    nav_url = (get_setting("navidrome_url") or "").rstrip("/")
+    nav_user = get_setting("navidrome_user") or ""
+    nav_pass = get_setting("navidrome_pass") or ""
+    if not (nav_url and nav_user):
+        return
+    try:
+        requests.get(
+            f"{nav_url}/rest/startScan",
+            params={"u": nav_user, "p": nav_pass, "v": "1.16.1", "c": "slskdsync", "f": "json"},
+            timeout=10,
+        )
+        logger.info("[m3u] Triggered Navidrome library rescan")
+    except Exception as ex:
+        logger.debug(f"[m3u] Navidrome rescan trigger failed (non-fatal): {ex}")
+
+
 def scan_library() -> None:
     """Index the music library into library_index for dedup checks.
     Uses Navidrome's Subsonic API if configured, falls back to filesystem walk."""
@@ -2145,6 +2163,7 @@ def api_regenerate_m3u(job_id):
         f"[m3u] Regenerated {safe}.m3u — {len(merged)} tracks "
         f"({len(dl_rows)} downloads + {len(lib_rows) - fs_count} index + {fs_count} fs-walk, {miss_count} missing)"
     )
+    _trigger_navidrome_rescan()
     return jsonify({"ok": True, "count": len(merged), "path": str(m3u_path), "missing": miss_count})
 
 
