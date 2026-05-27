@@ -98,7 +98,8 @@ def init_db():
             title TEXT,
             album TEXT,
             source TEXT DEFAULT 'scan',
-            indexed_at TEXT DEFAULT (datetime('now'))
+            indexed_at TEXT DEFAULT (datetime('now')),
+            path TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_library_index
             ON library_index(lower(trim(artist)), lower(trim(title)));
@@ -119,6 +120,10 @@ def init_db():
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
+
+    existing_lib_cols = {row[1] for row in cur.execute("PRAGMA table_info(library_index)")}
+    if "path" not in existing_lib_cols:
+        cur.execute("ALTER TABLE library_index ADD COLUMN path TEXT")
 
     existing_job_cols = {row[1] for row in cur.execute("PRAGMA table_info(import_jobs)")}
     for col, ddl in [
@@ -1246,31 +1251,55 @@ def run_worker(stop_event: threading.Event):
 def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
     """Write/update an M3U with all completed tracks for this playlist.
     Matches across all import jobs sharing the same playlist_name OR the same
-    source_url — so re-imports and original imports are all included."""
+    source_url — so re-imports and original imports are all included.
+    Also includes pre-existing library songs found via library_index."""
     library = get_setting("library_path") or "/music"
     safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
     m3u_path = Path(library) / f"{safe}.m3u"
     conn = get_conn()
-    # Look up source_url for this job so we can match the original import too
     job_row = conn.execute("SELECT source_url FROM import_jobs WHERE id=?", (job_id,)).fetchone()
     source_url = (job_row["source_url"] if job_row else "") or ""
     rows = conn.execute(
-        "SELECT DISTINCT t.local_path, t.artist, t.title FROM tracks t"
+        "SELECT DISTINCT t.local_path AS path, t.artist, t.title FROM tracks t"
         " JOIN import_jobs j ON j.id = t.job_id"
         " WHERE t.slskd_state='completed' AND t.local_path IS NOT NULL"
         " AND (j.playlist_name=? OR (? != '' AND j.source_url=?))"
         " ORDER BY t.track_number, t.id",
         (playlist_name, source_url, source_url),
     ).fetchall()
+    lib_rows = conn.execute(
+        "SELECT DISTINCT li.path, li.artist, li.title FROM library_index li"
+        " WHERE li.path IS NOT NULL AND li.path != ''"
+        " AND EXISTS ("
+        "   SELECT 1 FROM tracks t2"
+        "   JOIN import_jobs j2 ON j2.id = t2.job_id"
+        "   WHERE (j2.playlist_name=? OR (? != '' AND j2.source_url=?))"
+        "   AND lower(trim(t2.artist))=lower(trim(li.artist))"
+        "   AND lower(trim(t2.title))=lower(trim(li.title))"
+        " )",
+        (playlist_name, source_url, source_url),
+    ).fetchall()
     conn.close()
-    if not rows:
+    seen: set[tuple[str, str]] = set()
+    merged = []
+    for r in rows:
+        key = (r["artist"].lower().strip(), r["title"].lower().strip())
+        if key not in seen:
+            seen.add(key)
+            merged.append(r)
+    for r in lib_rows:
+        key = (r["artist"].lower().strip(), r["title"].lower().strip())
+        if key not in seen:
+            seen.add(key)
+            merged.append(r)
+    if not merged:
         return
     lines = ["#EXTM3U"]
-    for r in rows:
+    for r in merged:
         lines.append(f"#EXTINF:0,{r['artist'] or ''} - {r['title'] or ''}")
-        lines.append(r["local_path"])
+        lines.append(r["path"])
     m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.info(f"[m3u] {safe}.m3u updated — {len(rows)} tracks")
+    logger.info(f"[m3u] {safe}.m3u updated — {len(merged)} tracks ({len(rows)} downloads, {len(lib_rows)} library)")
 
 
 def scan_library() -> None:
@@ -1281,7 +1310,7 @@ def scan_library() -> None:
     with _scan_state_lock:
         _scan_state.update({"in_progress": True, "count": 0, "source": "", "last_at": ""})
 
-    rows: list[tuple[str, str, str]] = []  # (artist, title, album)
+    rows: list[tuple[str, str, str, str]] = []  # (artist, title, album, path)
     source = "unknown"
     try:
         nav_url = (get_setting("navidrome_url") or "").rstrip("/")
@@ -1290,6 +1319,7 @@ def scan_library() -> None:
 
         if nav_url and nav_user:
             # Path A: Navidrome Subsonic API
+            music_path_str = (get_setting("library_path") or "/music").rstrip("/")
             params_base = {"u": nav_user, "p": nav_pass, "v": "1.16.1",
                            "c": "slskdsync", "f": "json",
                            "songCount": 500, "artistCount": 0, "albumCount": 0, "query": ""}
@@ -1304,7 +1334,11 @@ def scan_library() -> None:
                         break
                     songs = data.get("searchResult3", {}).get("song", [])
                     for s in songs:
-                        rows.append((s.get("artist", ""), s.get("title", ""), s.get("album", "")))
+                        nav_path = s.get("path", "")
+                        # Navidrome returns path relative to music dir; make it absolute
+                        if nav_path and not nav_path.startswith("/"):
+                            nav_path = f"{music_path_str}/{nav_path}"
+                        rows.append((s.get("artist", ""), s.get("title", ""), s.get("album", ""), nav_path))
                     if len(songs) < 500:
                         break
                     offset += 500
@@ -1324,14 +1358,14 @@ def scan_library() -> None:
                     artist = parts[0] if len(parts) >= 3 else ""
                     album = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
                     title = num_re.sub("", f.stem)
-                    rows.append((artist, title, album))
+                    rows.append((artist, title, album, str(f)))
             source = "filesystem"
 
         conn = get_conn()
         conn.execute("DELETE FROM library_index")
         conn.executemany(
-            "INSERT INTO library_index(artist, title, album, source) VALUES (?,?,?,?)",
-            [(a, t, al, source) for a, t, al in rows]
+            "INSERT INTO library_index(artist, title, album, source, path) VALUES (?,?,?,?,?)",
+            [(a, t, al, source, p) for a, t, al, p in rows]
         )
         conn.commit()
         conn.close()
@@ -1928,27 +1962,54 @@ def api_regenerate_m3u(job_id):
         conn.close()
         return jsonify({"ok": False, "error": "No playlist name configured for this import"}), 400
     source_url = job["source_url"] or ""
+    # Collect tracks from app downloads (have local_path)
     rows = conn.execute(
-        "SELECT DISTINCT t.local_path, t.artist, t.title FROM tracks t"
+        "SELECT DISTINCT t.local_path AS path, t.artist, t.title FROM tracks t"
         " JOIN import_jobs j ON j.id = t.job_id"
         " WHERE t.slskd_state='completed' AND t.local_path IS NOT NULL"
-        " AND (j.playlist_name=? OR (? != '' AND j.source_url=?))"
-        " ORDER BY t.track_number, t.id",
+        " AND (j.playlist_name=? OR (? != '' AND j.source_url=?))",
         (playlist_name, source_url, source_url),
     ).fetchall()
+    # Also pull from library_index for songs that exist in Navidrome but weren't
+    # downloaded by this app (pre-existing library, or deduplicated on import).
+    lib_rows = conn.execute(
+        "SELECT DISTINCT li.path, li.artist, li.title FROM library_index li"
+        " WHERE li.path IS NOT NULL AND li.path != ''"
+        " AND EXISTS ("
+        "   SELECT 1 FROM tracks t2"
+        "   JOIN import_jobs j2 ON j2.id = t2.job_id"
+        "   WHERE (j2.playlist_name=? OR (? != '' AND j2.source_url=?))"
+        "   AND lower(trim(t2.artist))=lower(trim(li.artist))"
+        "   AND lower(trim(t2.title))=lower(trim(li.title))"
+        " )",
+        (playlist_name, source_url, source_url),
+    ).fetchall()
+    # Merge: prefer tracks row (has track order info), de-dup by normalised artist+title
+    seen: set[tuple[str, str]] = set()
+    merged = []
+    for r in rows:
+        key = (r["artist"].lower().strip(), r["title"].lower().strip())
+        if key not in seen:
+            seen.add(key)
+            merged.append(r)
+    for r in lib_rows:
+        key = (r["artist"].lower().strip(), r["title"].lower().strip())
+        if key not in seen:
+            seen.add(key)
+            merged.append(r)
     conn.close()
-    if not rows:
+    if not merged:
         return jsonify({"ok": False, "error": "No completed tracks found for this playlist"}), 404
     library = get_setting("library_path") or "/music"
     safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
     m3u_path = Path(library) / f"{safe}.m3u"
     lines = ["#EXTM3U"]
-    for r in rows:
+    for r in merged:
         lines.append(f"#EXTINF:0,{r['artist'] or ''} - {r['title'] or ''}")
-        lines.append(r["local_path"])
+        lines.append(r["path"])
     m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.info(f"[m3u] Regenerated {safe}.m3u — {len(rows)} tracks")
-    return jsonify({"ok": True, "count": len(rows), "path": str(m3u_path)})
+    logger.info(f"[m3u] Regenerated {safe}.m3u — {len(merged)} tracks ({len(rows)} from downloads, {len(lib_rows)} from library index)")
+    return jsonify({"ok": True, "count": len(merged), "path": str(m3u_path)})
 
 
 @app.route("/playlists")
