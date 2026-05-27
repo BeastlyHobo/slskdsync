@@ -1244,19 +1244,23 @@ def run_worker(stop_event: threading.Event):
 
 
 def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
-    """Write/update an M3U file with all completed tracks for this playlist name.
-    Queries across all import jobs with this playlist_name so re-imports and
-    manually retried tracks are all included."""
+    """Write/update an M3U with all completed tracks for this playlist.
+    Matches across all import jobs sharing the same playlist_name OR the same
+    source_url — so re-imports and original imports are all included."""
     library = get_setting("library_path") or "/music"
     safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
     m3u_path = Path(library) / f"{safe}.m3u"
     conn = get_conn()
+    # Look up source_url for this job so we can match the original import too
+    job_row = conn.execute("SELECT source_url FROM import_jobs WHERE id=?", (job_id,)).fetchone()
+    source_url = (job_row["source_url"] if job_row else "") or ""
     rows = conn.execute(
-        "SELECT t.local_path, t.artist, t.title FROM tracks t"
+        "SELECT DISTINCT t.local_path, t.artist, t.title FROM tracks t"
         " JOIN import_jobs j ON j.id = t.job_id"
-        " WHERE j.playlist_name=? AND t.slskd_state='completed' AND t.local_path IS NOT NULL"
+        " WHERE t.slskd_state='completed' AND t.local_path IS NOT NULL"
+        " AND (j.playlist_name=? OR (? != '' AND j.source_url=?))"
         " ORDER BY t.track_number, t.id",
-        (playlist_name,),
+        (playlist_name, source_url, source_url),
     ).fetchall()
     conn.close()
     if not rows:
@@ -1908,6 +1912,41 @@ def index():
 @app.route("/search")
 def search():
     return render_template("search.html")
+
+
+@app.route("/api/playlists/<int:job_id>/regenerate", methods=["POST"])
+def api_regenerate_m3u(job_id):
+    conn = get_conn()
+    job = conn.execute("SELECT * FROM import_jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return jsonify({"ok": False, "error": "Job not found"}), 404
+    playlist_name = (request.get_json() or {}).get("name") or job["playlist_name"] or ""
+    if not playlist_name:
+        conn.close()
+        return jsonify({"ok": False, "error": "No playlist name configured for this import"}), 400
+    source_url = job["source_url"] or ""
+    rows = conn.execute(
+        "SELECT DISTINCT t.local_path, t.artist, t.title FROM tracks t"
+        " JOIN import_jobs j ON j.id = t.job_id"
+        " WHERE t.slskd_state='completed' AND t.local_path IS NOT NULL"
+        " AND (j.playlist_name=? OR (? != '' AND j.source_url=?))"
+        " ORDER BY t.track_number, t.id",
+        (playlist_name, source_url, source_url),
+    ).fetchall()
+    conn.close()
+    if not rows:
+        return jsonify({"ok": False, "error": "No completed tracks found for this playlist"}), 404
+    library = get_setting("library_path") or "/music"
+    safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
+    m3u_path = Path(library) / f"{safe}.m3u"
+    lines = ["#EXTM3U"]
+    for r in rows:
+        lines.append(f"#EXTINF:0,{r['artist'] or ''} - {r['title'] or ''}")
+        lines.append(r["local_path"])
+    m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.info(f"[m3u] Regenerated {safe}.m3u — {len(rows)} tracks")
+    return jsonify({"ok": True, "count": len(rows), "path": str(m3u_path)})
 
 
 @app.route("/playlists")

@@ -64,6 +64,13 @@
   font-weight: 600; cursor: pointer; white-space: nowrap;
 }
 .pl-empty { padding: .75rem; font-size: .8rem; color: var(--text-muted); text-align: center; }
+.pl-regen-btn {
+  flex-shrink: 0; font-size: .65rem; font-weight: 700; padding: .15rem .4rem;
+  background: var(--surface3); border: 1px solid var(--border); border-radius: 3px;
+  color: var(--text-muted); cursor: pointer; white-space: nowrap;
+}
+.pl-regen-btn:hover { border-color: var(--accent); color: var(--accent); }
+.pl-regen-result { font-size: .65rem; white-space: nowrap; }
 </style>
 
 {% if not jobs %}
@@ -94,6 +101,10 @@
     </div>
     {% if job.needs_fix %}
     <span class="pl-fix-badge">{{ job.needs_fix }} fix search</span>
+    {% endif %}
+    {% if job.playlist_name %}
+    <button class="pl-regen-btn" onclick="event.stopPropagation();regenM3u({{ job.id }},'{{ job.playlist_name|e }}',this)" title="Rebuild M3U">♻ M3U</button>
+    <span class="pl-regen-result" id="regen-{{ job.id }}"></span>
     {% endif %}
     {% if job.source_url %}
     <a class="pl-link" href="{{ job.source_url }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open original">↗</a>
@@ -128,6 +139,28 @@
 function togglePl(id, hasMissing) {
   if (!hasMissing) return;
   document.getElementById('plcard-' + id).classList.toggle('open');
+}
+
+function regenM3u(jobId, name, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  const result = document.getElementById('regen-' + jobId);
+  result.textContent = '';
+  fetch(`/api/playlists/${jobId}/regenerate`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name}),
+  }).then(r => r.json()).then(d => {
+    btn.disabled = false;
+    btn.textContent = '♻ M3U';
+    result.textContent = d.ok ? `✓ ${d.count} tracks` : `✗ ${d.error}`;
+    result.style.color = d.ok ? 'var(--success-text)' : '#e05050';
+  }).catch(() => {
+    btn.disabled = false;
+    btn.textContent = '♻ M3U';
+    result.textContent = '✗ Error';
+    result.style.color = '#e05050';
+  });
 }
 
 function plSearch(input, trackId) {
