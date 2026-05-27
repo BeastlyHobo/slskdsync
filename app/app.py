@@ -1797,6 +1797,7 @@ _scan_state_lock = threading.Lock()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("APP_SECRET", "change-me")
+app.permanent_session_lifetime = timedelta(days=30)
 
 init_db()
 
@@ -1861,6 +1862,7 @@ def login():
     if request.method == "POST":
         if (request.form.get("username") == username
                 and check_password_hash(pw_hash, request.form.get("password", ""))):
+            session.permanent = True
             session["authed"] = True
             return redirect(url_for("search"))
         flash("Invalid credentials", "error")
