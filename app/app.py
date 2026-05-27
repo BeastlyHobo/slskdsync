@@ -1244,16 +1244,19 @@ def run_worker(stop_event: threading.Event):
 
 
 def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
-    """Write/update an M3U file in the library with all completed tracks for this job."""
+    """Write/update an M3U file with all completed tracks for this playlist name.
+    Queries across all import jobs with this playlist_name so re-imports and
+    manually retried tracks are all included."""
     library = get_setting("library_path") or "/music"
     safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
     m3u_path = Path(library) / f"{safe}.m3u"
     conn = get_conn()
     rows = conn.execute(
-        "SELECT local_path, artist, title FROM tracks"
-        " WHERE job_id=? AND slskd_state='completed' AND local_path IS NOT NULL"
-        " ORDER BY track_number, id",
-        (job_id,),
+        "SELECT t.local_path, t.artist, t.title FROM tracks t"
+        " JOIN import_jobs j ON j.id = t.job_id"
+        " WHERE j.playlist_name=? AND t.slskd_state='completed' AND t.local_path IS NOT NULL"
+        " ORDER BY t.track_number, t.id",
+        (playlist_name,),
     ).fetchall()
     conn.close()
     if not rows:
