@@ -1981,71 +1981,112 @@ def api_regenerate_m3u(job_id):
         (playlist_name, source_url, source_url),
     ).fetchall()
 
-    # --- All library_index entries with resolved paths ---
+    # --- All library_index entries (may be missing paths for older scans) ---
     lib_all = conn.execute(
-        "SELECT artist, title, path FROM library_index WHERE path IS NOT NULL AND path!=''"
+        "SELECT artist, title, path FROM library_index"
     ).fetchall()
     conn.close()
 
-    # Normalize helper: strip feat./remaster/etc. variants so Spotify ↔ Navidrome tags align
-    _feat_re = re.compile(r'\s*[\(\[](?:feat|ft|featuring|with)\.?\s+[^\)\]]+[\)\]]', re.I)
-    _extra_re = re.compile(r'\s*[\(\[](?:remaster(?:ed)?|live|acoustic|radio\s*edit|version|edit)[^\)\]]*[\)\]]', re.I)
-
+    # Normalize helper: lowercase, strip parenthetical (feat./remastered/live/etc.)
+    _paren_re = re.compile(r'\s*[\(\[][^\)\]]*[\)\]]')
+    _punct_re = re.compile(r"[^\w\s]")
     def _norm(s: str) -> str:
-        s = (s or "").strip()
-        s = _feat_re.sub("", s)
-        s = _extra_re.sub("", s)
-        return s.lower().strip()
+        s = _paren_re.sub("", s or "")
+        s = _punct_re.sub(" ", s)
+        return " ".join(s.lower().split())
 
-    # Build library lookups keyed on normalised values
-    lib_by_key: dict[tuple[str, str], dict] = {}   # (norm_artist, norm_title) -> entry
-    lib_by_title: dict[str, list[dict]] = {}        # norm_title -> [entry, …]
-    for e in lib_all:
+    # Build library lookups: keyed by normalised values
+    lib_with_path = [e for e in lib_all if e["path"]]
+    lib_by_key: dict[tuple[str, str], dict] = {}
+    lib_by_title: dict[str, list[dict]] = {}
+    for e in lib_with_path:
         na = _norm(e["artist"])
         nt = _norm(e["title"])
-        if nt:
-            entry = {"path": e["path"], "artist": e["artist"], "title": e["title"], "_na": na}
-            lib_by_key.setdefault((na, nt), entry)
-            lib_by_title.setdefault(nt, []).append(entry)
+        if not nt:
+            continue
+        entry = {"path": e["path"], "artist": e["artist"], "title": e["title"], "_na": na, "_nt": nt}
+        lib_by_key.setdefault((na, nt), entry)
+        lib_by_title.setdefault(nt, []).append(entry)
 
-    # Keys already covered by direct downloads
+    # --- Filesystem fallback index (only built if needed) ---
+    music_root = Path(get_setting("library_path") or "/music")
+    _fs_files: list[tuple[str, str, str]] = []  # (norm_filename, norm_parent_dirs, full_path)
+    _fs_built = False
+    def _build_fs():
+        nonlocal _fs_built
+        if _fs_built:
+            return
+        _fs_built = True
+        if not music_root.exists():
+            return
+        for f in music_root.rglob("*"):
+            if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
+                stem = re.sub(r"^\d+\s*[-\.]\s*", "", f.stem)  # strip leading track number
+                _fs_files.append((_norm(stem), _norm(str(f.relative_to(music_root).parent)), str(f)))
+
+    def _fs_lookup(artist_n: str, title_n: str) -> str | None:
+        _build_fs()
+        if not title_n:
+            return None
+        # Strategy A: title in filename + artist in path/filename
+        for fn, parent, path in _fs_files:
+            if title_n in fn and (not artist_n or artist_n in fn or artist_n in parent):
+                return path
+        # Strategy B: title in filename alone (last resort)
+        for fn, parent, path in _fs_files:
+            if title_n == fn:
+                return path
+        for fn, parent, path in _fs_files:
+            if title_n and len(title_n) >= 4 and title_n in fn:
+                return path
+        return None
+
     dl_keys = {(_norm(r["artist"]), _norm(r["title"])) for r in dl_rows}
     seen_paths = {r["path"] for r in dl_rows}
 
     lib_rows: list[dict] = []
+    fs_count = 0
+    miss_count = 0
     for t in pl_tracks:
         na = _norm(t["artist"])
+        # Spotify often credits many co-artists — try first artist alone too
+        na_first = _norm(t["artist"].split(",")[0].split("&")[0])
         nt = _norm(t["title"])
         if not nt or (na, nt) in dl_keys:
             continue
 
-        entry = None
-        # Strategy 1: exact normalised artist + title
-        entry = lib_by_key.get((na, nt))
+        entry = lib_by_key.get((na, nt)) or lib_by_key.get((na_first, nt))
 
         if not entry:
-            # Strategy 2: exact normalised title, artist substring match
+            # Title exact, artist substring (handles co-credits)
             for cand in lib_by_title.get(nt, []):
                 ca = cand["_na"]
-                if ca == na or (na and (na in ca or ca in na)):
+                if ca == na or (na and (na in ca or ca in na)) or (na_first and (na_first in ca or ca in na_first)):
                     entry = cand
                     break
-            if not entry and lib_by_title.get(nt):
-                # Title exact but artist differs — take first, log it
-                entry = lib_by_title[nt][0]
 
-        if not entry:
-            # Strategy 3: title substring (min 5 chars) with artist match
+        if not entry and len(nt) >= 5:
+            # Title substring fuzzy match — only when artist also overlaps
             for (ea, et), cand in lib_by_key.items():
-                if len(nt) >= 5 and (nt in et or et in nt):
-                    if ea == na or (na and (na in ea or ea in na)):
+                if nt in et or et in nt:
+                    if ea == na or (na and (na in ea or ea in na)) or (na_first and (na_first in ea or ea in na_first)):
                         entry = cand
                         break
 
-        if entry and entry["path"] not in seen_paths:
-            lib_rows.append({"path": entry["path"], "artist": t["artist"], "title": t["title"]})
-            seen_paths.add(entry["path"])
-        elif not entry:
+        path: str | None = None
+        if entry:
+            path = entry["path"]
+        else:
+            # Final fallback: walk the filesystem
+            path = _fs_lookup(na_first or na, nt)
+            if path:
+                fs_count += 1
+
+        if path and path not in seen_paths:
+            lib_rows.append({"path": path, "artist": t["artist"], "title": t["title"]})
+            seen_paths.add(path)
+        elif not path:
+            miss_count += 1
             logger.info(f"[m3u] No library match for '{t['artist']}' / '{t['title']}'")
 
     merged = list(dl_rows) + lib_rows
@@ -2059,8 +2100,11 @@ def api_regenerate_m3u(job_id):
         lines.append(f"#EXTINF:0,{r['artist'] or ''} - {r['title'] or ''}")
         lines.append(r["path"])
     m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.info(f"[m3u] Regenerated {safe}.m3u — {len(merged)} tracks ({len(dl_rows)} downloads + {len(lib_rows)} library)")
-    return jsonify({"ok": True, "count": len(merged), "path": str(m3u_path)})
+    logger.info(
+        f"[m3u] Regenerated {safe}.m3u — {len(merged)} tracks "
+        f"({len(dl_rows)} downloads + {len(lib_rows) - fs_count} index + {fs_count} fs-walk, {miss_count} missing)"
+    )
+    return jsonify({"ok": True, "count": len(merged), "path": str(m3u_path), "missing": miss_count})
 
 
 @app.route("/playlists")
