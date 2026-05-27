@@ -4,41 +4,28 @@
 <div class="lib-search-wrap">
   <div class="search-inner">
     <input id="lib-q" class="search-input" type="search"
-      placeholder="Search {{ tracks|length }} tracks in library…"
+      placeholder="Search library…"
       oninput="filterLib(this.value)" autocomplete="off">
   </div>
   <div class="lib-meta">
-    <span id="lib-count">{{ tracks|length }} tracks</span>
+    <span id="lib-count"></span>
     <a href="/library" class="lib-refresh">↺ Rescan</a>
   </div>
+</div>
+
+<div id="lib-list"></div>
+<div id="lib-empty" class="empty-state" style="display:none">
+  <div class="empty-icon">🔇</div>
+  <p>No tracks match your search.</p>
+</div>
+<div id="lib-more-wrap" style="text-align:center;padding:.75rem 0;display:none">
+  <button class="qa-btn" id="lib-more-btn" onclick="showMore()">Show more</button>
 </div>
 
 {% if not tracks %}
 <div class="empty-state">
   <div class="empty-icon">🎵</div>
   <p>No music found in <code>{{ music_path }}</code>.</p>
-</div>
-{% else %}
-<div id="lib-list">
-  {% for t in tracks %}
-  <div class="lib-row"
-       data-search="{{ (t.artist ~ ' ' ~ t.album ~ ' ' ~ t.title)|lower }}">
-    <div class="lib-row-info">
-      <div class="lib-row-title">{{ t.title }}</div>
-      <div class="lib-row-sub">{{ t.artist }}{% if t.album %} · {{ t.album }}{% endif %}</div>
-    </div>
-    <span class="lib-ext">{{ t.ext }}</span>
-    <button class="lib-redl-btn"
-      data-artist="{{ t.artist|e }}"
-      data-album="{{ t.album|e }}"
-      data-title="{{ t.title|e }}"
-      onclick="redownload(this)">↺</button>
-  </div>
-  {% endfor %}
-</div>
-<div id="lib-empty" class="empty-state" style="display:none">
-  <div class="empty-icon">🔇</div>
-  <p>No tracks match your search.</p>
 </div>
 {% endif %}
 
@@ -52,9 +39,7 @@
   padding: .2rem .1rem 0; font-size: .72rem; color: var(--text-muted);
 }
 .lib-refresh { color: var(--accent); }
-
 #lib-list { display: flex; flex-direction: column; gap: .25rem; margin-top: .5rem; }
-
 .lib-row {
   display: flex; align-items: center; gap: .6rem;
   background: var(--surface); border-radius: var(--radius-sm);
@@ -84,42 +69,75 @@
 </style>
 
 <script>
-function filterLib(q) {
-  const term = q.toLowerCase().trim();
-  const rows = document.querySelectorAll('.lib-row');
-  let visible = 0;
-  rows.forEach(r => {
-    const show = !term || r.dataset.search.includes(term);
-    r.style.display = show ? '' : 'none';
-    if (show) visible++;
-  });
-  document.getElementById('lib-count').textContent = visible + ' track' + (visible !== 1 ? 's' : '');
-  document.getElementById('lib-empty').style.display = visible === 0 ? '' : 'none';
+const ALL_TRACKS = {{ tracks | tojson }};
+const PAGE_SIZE = 200;
+let filtered = ALL_TRACKS;
+let showing = PAGE_SIZE;
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function redownload(btn) {
+function render() {
+  const slice = filtered.slice(0, showing);
+  const list = document.getElementById('lib-list');
+  list.innerHTML = slice.map(t => `
+    <div class="lib-row">
+      <div class="lib-row-info">
+        <div class="lib-row-title">${esc(t.title)}</div>
+        <div class="lib-row-sub">${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}</div>
+      </div>
+      <span class="lib-ext">${esc(t.ext)}</span>
+      <button class="lib-redl-btn"
+        onclick="redownload(this,'${esc(t.artist)}','${esc(t.album)}','${esc(t.title)}')">↺</button>
+    </div>
+  `).join('');
+
+  const total = filtered.length;
+  document.getElementById('lib-count').textContent =
+    (total === ALL_TRACKS.length ? total : `${total} of ${ALL_TRACKS.length}`) +
+    ' track' + (total !== 1 ? 's' : '');
+  document.getElementById('lib-empty').style.display = total === 0 ? '' : 'none';
+  const moreWrap = document.getElementById('lib-more-wrap');
+  if (filtered.length > showing) {
+    moreWrap.style.display = '';
+    document.getElementById('lib-more-btn').textContent =
+      `Show more (${filtered.length - showing} remaining)`;
+  } else {
+    moreWrap.style.display = 'none';
+  }
+}
+
+function filterLib(q) {
+  const term = q.toLowerCase().trim();
+  filtered = !term ? ALL_TRACKS : ALL_TRACKS.filter(t =>
+    ((t.artist || '') + ' ' + (t.album || '') + ' ' + (t.title || '')).toLowerCase().includes(term)
+  );
+  showing = PAGE_SIZE;
+  render();
+}
+
+function showMore() {
+  showing += PAGE_SIZE;
+  render();
+}
+
+function redownload(btn, artist, album, title) {
   btn.textContent = '…';
   btn.disabled = true;
   fetch('/api/library/redownload', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      artist: btn.dataset.artist,
-      album:  btn.dataset.album,
-      title:  btn.dataset.title,
-    }),
+    body: JSON.stringify({ artist, album, title }),
   })
   .then(r => r.json())
   .then(d => {
-    if (d.ok) {
-      btn.textContent = '✓';
-      btn.classList.add('queued');
-    } else {
-      btn.textContent = '✗';
-      btn.disabled = false;
-    }
+    if (d.ok) { btn.textContent = '✓'; btn.classList.add('queued'); }
+    else { btn.textContent = '✗'; btn.disabled = false; }
   })
   .catch(() => { btn.textContent = '↺'; btn.disabled = false; });
 }
+
+render();
 </script>
 {% endblock %}
