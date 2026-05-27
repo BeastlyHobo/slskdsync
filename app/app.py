@@ -1962,42 +1962,93 @@ def api_regenerate_m3u(job_id):
         conn.close()
         return jsonify({"ok": False, "error": "No playlist name configured for this import"}), 400
     source_url = job["source_url"] or ""
-    # Collect tracks from app downloads (have local_path)
-    rows = conn.execute(
+
+    # --- Downloaded by app (have local_path on disk) ---
+    dl_rows = conn.execute(
         "SELECT DISTINCT t.local_path AS path, t.artist, t.title FROM tracks t"
         " JOIN import_jobs j ON j.id = t.job_id"
         " WHERE t.slskd_state='completed' AND t.local_path IS NOT NULL"
         " AND (j.playlist_name=? OR (? != '' AND j.source_url=?))",
         (playlist_name, source_url, source_url),
     ).fetchall()
-    # Also pull from library_index for songs that exist in Navidrome but weren't
-    # downloaded by this app (pre-existing library, or deduplicated on import).
-    lib_rows = conn.execute(
-        "SELECT DISTINCT li.path, li.artist, li.title FROM library_index li"
-        " WHERE li.path IS NOT NULL AND li.path != ''"
-        " AND EXISTS ("
-        "   SELECT 1 FROM tracks t2"
-        "   JOIN import_jobs j2 ON j2.id = t2.job_id"
-        "   WHERE (j2.playlist_name=? OR (? != '' AND j2.source_url=?))"
-        "   AND lower(trim(t2.artist))=lower(trim(li.artist))"
-        "   AND lower(trim(t2.title))=lower(trim(li.title))"
-        " )",
+
+    # --- All tracks in this playlist (any state) for library matching ---
+    pl_tracks = conn.execute(
+        "SELECT DISTINCT artist, title FROM tracks t"
+        " JOIN import_jobs j ON j.id = t.job_id"
+        " WHERE (j.playlist_name=? OR (? != '' AND j.source_url=?))"
+        " AND artist IS NOT NULL AND title IS NOT NULL AND artist!='' AND title!=''",
         (playlist_name, source_url, source_url),
     ).fetchall()
-    # Merge: prefer tracks row (has track order info), de-dup by normalised artist+title
-    seen: set[tuple[str, str]] = set()
-    merged = []
-    for r in rows:
-        key = (r["artist"].lower().strip(), r["title"].lower().strip())
-        if key not in seen:
-            seen.add(key)
-            merged.append(r)
-    for r in lib_rows:
-        key = (r["artist"].lower().strip(), r["title"].lower().strip())
-        if key not in seen:
-            seen.add(key)
-            merged.append(r)
+
+    # --- All library_index entries with resolved paths ---
+    lib_all = conn.execute(
+        "SELECT artist, title, path FROM library_index WHERE path IS NOT NULL AND path!=''"
+    ).fetchall()
     conn.close()
+
+    # Normalize helper: strip feat./remaster/etc. variants so Spotify ↔ Navidrome tags align
+    _feat_re = re.compile(r'\s*[\(\[](?:feat|ft|featuring|with)\.?\s+[^\)\]]+[\)\]]', re.I)
+    _extra_re = re.compile(r'\s*[\(\[](?:remaster(?:ed)?|live|acoustic|radio\s*edit|version|edit)[^\)\]]*[\)\]]', re.I)
+
+    def _norm(s: str) -> str:
+        s = (s or "").strip()
+        s = _feat_re.sub("", s)
+        s = _extra_re.sub("", s)
+        return s.lower().strip()
+
+    # Build library lookups keyed on normalised values
+    lib_by_key: dict[tuple[str, str], dict] = {}   # (norm_artist, norm_title) -> entry
+    lib_by_title: dict[str, list[dict]] = {}        # norm_title -> [entry, …]
+    for e in lib_all:
+        na = _norm(e["artist"])
+        nt = _norm(e["title"])
+        if nt:
+            entry = {"path": e["path"], "artist": e["artist"], "title": e["title"], "_na": na}
+            lib_by_key.setdefault((na, nt), entry)
+            lib_by_title.setdefault(nt, []).append(entry)
+
+    # Keys already covered by direct downloads
+    dl_keys = {(_norm(r["artist"]), _norm(r["title"])) for r in dl_rows}
+    seen_paths = {r["path"] for r in dl_rows}
+
+    lib_rows: list[dict] = []
+    for t in pl_tracks:
+        na = _norm(t["artist"])
+        nt = _norm(t["title"])
+        if not nt or (na, nt) in dl_keys:
+            continue
+
+        entry = None
+        # Strategy 1: exact normalised artist + title
+        entry = lib_by_key.get((na, nt))
+
+        if not entry:
+            # Strategy 2: exact normalised title, artist substring match
+            for cand in lib_by_title.get(nt, []):
+                ca = cand["_na"]
+                if ca == na or (na and (na in ca or ca in na)):
+                    entry = cand
+                    break
+            if not entry and lib_by_title.get(nt):
+                # Title exact but artist differs — take first, log it
+                entry = lib_by_title[nt][0]
+
+        if not entry:
+            # Strategy 3: title substring (min 5 chars) with artist match
+            for (ea, et), cand in lib_by_key.items():
+                if len(nt) >= 5 and (nt in et or et in nt):
+                    if ea == na or (na and (na in ea or ea in na)):
+                        entry = cand
+                        break
+
+        if entry and entry["path"] not in seen_paths:
+            lib_rows.append({"path": entry["path"], "artist": t["artist"], "title": t["title"]})
+            seen_paths.add(entry["path"])
+        elif not entry:
+            logger.info(f"[m3u] No library match for '{t['artist']}' / '{t['title']}'")
+
+    merged = list(dl_rows) + lib_rows
     if not merged:
         return jsonify({"ok": False, "error": "No completed tracks found for this playlist"}), 404
     library = get_setting("library_path") or "/music"
@@ -2008,7 +2059,7 @@ def api_regenerate_m3u(job_id):
         lines.append(f"#EXTINF:0,{r['artist'] or ''} - {r['title'] or ''}")
         lines.append(r["path"])
     m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.info(f"[m3u] Regenerated {safe}.m3u — {len(merged)} tracks ({len(rows)} from downloads, {len(lib_rows)} from library index)")
+    logger.info(f"[m3u] Regenerated {safe}.m3u — {len(merged)} tracks ({len(dl_rows)} downloads + {len(lib_rows)} library)")
     return jsonify({"ok": True, "count": len(merged), "path": str(m3u_path)})
 
 
