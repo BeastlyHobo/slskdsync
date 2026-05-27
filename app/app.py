@@ -103,6 +103,16 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_library_index
             ON library_index(lower(trim(artist)), lower(trim(title)));
+        CREATE TABLE IF NOT EXISTS playlist_tracks (
+            id INTEGER PRIMARY KEY,
+            job_id INTEGER NOT NULL,
+            artist TEXT,
+            title TEXT,
+            album TEXT,
+            track_number INTEGER DEFAULT 0,
+            FOREIGN KEY(job_id) REFERENCES import_jobs(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_playlist_tracks_job ON playlist_tracks(job_id);
     """)
     # Migrate existing databases
     existing_cols = {row[1] for row in cur.execute("PRAGMA table_info(tracks)")}
@@ -1972,14 +1982,45 @@ def api_regenerate_m3u(job_id):
         (playlist_name, source_url, source_url),
     ).fetchall()
 
-    # --- All tracks in this playlist (any state) for library matching ---
-    pl_tracks = conn.execute(
-        "SELECT DISTINCT artist, title FROM tracks t"
-        " JOIN import_jobs j ON j.id = t.job_id"
-        " WHERE (j.playlist_name=? OR (? != '' AND j.source_url=?))"
-        " AND artist IS NOT NULL AND title IS NOT NULL AND artist!='' AND title!=''",
-        (playlist_name, source_url, source_url),
+    # --- Full track list for this playlist ---
+    # Priority 1: playlist_tracks table (stored at import time, includes dedup-skipped songs)
+    pt_rows = conn.execute(
+        "SELECT artist, title FROM playlist_tracks WHERE job_id=?", (job_id,)
     ).fetchall()
+
+    if pt_rows:
+        pl_tracks = [{"artist": r["artist"], "title": r["title"]} for r in pt_rows]
+        logger.info(f"[m3u] Using {len(pl_tracks)} tracks from stored playlist_tracks")
+    else:
+        # Priority 2: re-fetch from the source URL (handles playlists imported before playlist_tracks existed)
+        pl_tracks = []
+        provider = next((p for p in _providers if p.supports(source_url)), None)
+        if provider and source_url:
+            try:
+                _, fetched = provider.parse(source_url)
+                pl_tracks = [{"artist": t.artist, "title": t.title} for t in fetched]
+                # Cache for future regenerations
+                if fetched:
+                    conn.executemany(
+                        "INSERT INTO playlist_tracks(job_id, artist, title, album, track_number) VALUES(?,?,?,?,?)",
+                        [(job_id, t.artist, t.title, t.album, t.track_number) for t in fetched],
+                    )
+                    conn.commit()
+                    logger.info(f"[m3u] Re-fetched {len(fetched)} tracks from source and cached in playlist_tracks")
+            except Exception as ex:
+                logger.warning(f"[m3u] Could not re-fetch playlist from {source_url}: {ex}")
+
+        if not pl_tracks:
+            # Priority 3: fall back to tracks table (only what was queued for download)
+            fallback = conn.execute(
+                "SELECT DISTINCT artist, title FROM tracks t"
+                " JOIN import_jobs j ON j.id = t.job_id"
+                " WHERE (j.playlist_name=? OR (? != '' AND j.source_url=?))"
+                " AND artist IS NOT NULL AND title IS NOT NULL AND artist!='' AND title!=''",
+                (playlist_name, source_url, source_url),
+            ).fetchall()
+            pl_tracks = [{"artist": r["artist"], "title": r["title"]} for r in fallback]
+            logger.info(f"[m3u] Using {len(pl_tracks)} tracks from tracks table (fallback)")
 
     # --- All library_index entries (may be missing paths for older scans) ---
     lib_all = conn.execute(
@@ -2622,6 +2663,11 @@ def import_url():
         (provider.name, source_type, url, 0, "queued", playlist_name or None),
     )
     job_id = cur.lastrowid
+    # Store the complete track list before dedup so M3U regeneration can use it later
+    cur.executemany(
+        "INSERT INTO playlist_tracks(job_id, artist, title, album, track_number) VALUES(?,?,?,?,?)",
+        [(job_id, t.artist, t.title, t.album, t.track_number) for t in tracks],
+    )
     skipped = 0
     for t in tracks:
         if _already_in_library(conn, t.artist, t.title):
