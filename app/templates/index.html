@@ -36,6 +36,12 @@
   </form>
 </div>
 
+<!-- slskd connection status -->
+<div id="slskd-status-bar" style="display:none;font-size:.72rem;color:var(--text-muted);padding:.2rem 0 .4rem;display:flex;align-items:center;gap:.5rem">
+  <span id="slskd-dot" style="width:7px;height:7px;border-radius:50%;background:#444;flex-shrink:0;display:inline-block"></span>
+  <span id="slskd-status-text">Checking slskd…</span>
+</div>
+
 <!-- Stats + queue actions -->
 {% if stats.total > 0 %}
 <div class="stats-strip">
@@ -287,7 +293,16 @@ function toggleCompleted() {
   chev.classList.toggle('open', !open);
 }
 
+const CONFIRM_ACTIONS = {
+  clear_all:          'Remove ALL tracks from the queue? This cannot be undone.',
+  clear_failed:       'Remove all failed tracks?',
+  clear_needs_search: 'Remove all "fix search" tracks?',
+  clear_completed:    'Remove all completed tracks from the queue? (Files on disk are not deleted.)',
+};
+
 function queueAction(action) {
+  const msg = CONFIRM_ACTIONS[action];
+  if (msg && !confirm(msg)) return;
   fetch('/api/queue/action', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -465,5 +480,36 @@ function toggleM3uName() {
   nameEl.style.display = checked ? '' : 'none';
   if (checked) nameEl.focus();
 }
+
+// ── slskd connection indicator ──
+(function() {
+  const bar  = document.getElementById('slskd-status-bar');
+  const dot  = document.getElementById('slskd-dot');
+  const txt  = document.getElementById('slskd-status-text');
+  function pollSlskd() {
+    fetch('/api/status/slskd')
+      .then(r => r.json())
+      .then(d => {
+        bar.style.display = 'flex';
+        if (d.connected) {
+          dot.style.background = '#40cc70';
+          const parts = ['slskd connected'];
+          if (d.version) parts.push(`v${d.version}`);
+          if (d.active > 0) parts.push(`${d.active} active download${d.active !== 1 ? 's' : ''}`);
+          txt.textContent = parts.join(' · ');
+        } else {
+          dot.style.background = '#e05050';
+          txt.textContent = 'slskd not reachable';
+        }
+      })
+      .catch(() => {
+        bar.style.display = 'flex';
+        dot.style.background = '#888';
+        txt.textContent = 'slskd status unknown';
+      });
+  }
+  pollSlskd();
+  setInterval(pollSlskd, 30000);
+})();
 </script>
 {% endblock %}

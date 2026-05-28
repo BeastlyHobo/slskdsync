@@ -14,6 +14,9 @@
   </div>
 </div>
 
+<!-- search history chips -->
+<div id="search-history" style="display:none;padding:.3rem 0 .1rem;display:flex;flex-wrap:wrap;gap:.3rem"></div>
+
 <!-- breadcrumb shown when drilling into artist/album -->
 <div id="breadcrumb" class="breadcrumb hidden"></div>
 
@@ -97,6 +100,34 @@ let debounce = null;
 let navStack = [];
 
 // Library index: Set of "artist||title" keys for already-downloaded check
+// ── Search history ────────────────────────────────────────────────────────
+const HISTORY_KEY = 'search_history';
+const historyEl = document.getElementById('search-history');
+function loadHistory() { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; } }
+function saveHistory(q) {
+  let h = loadHistory().filter(x => x !== q);
+  h.unshift(q);
+  h = h.slice(0, 10);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
+  renderHistory();
+}
+function renderHistory() {
+  const h = loadHistory();
+  if (!h.length) { historyEl.style.display = 'none'; return; }
+  historyEl.style.display = 'flex';
+  historyEl.innerHTML = h.map(q =>
+    `<button class="hist-chip" onclick="useHistory(this)">${esc(q)}</button>`
+  ).join('');
+}
+function useHistory(btn) {
+  input.value = btn.textContent;
+  clearBtn.classList.add('visible');
+  navStack = [];
+  renderBreadcrumb();
+  triggerSearch(btn.textContent);
+}
+renderHistory();
+
 let libIndex = new Set();
 fetch('/api/library/index').then(r => r.json()).then(items => {
   libIndex = new Set(items.map(i => i.a + '||' + i.t));
@@ -161,6 +192,7 @@ function reset() {
 function triggerSearch(q) {
   sessionStorage.setItem('ss_query', q);
   sessionStorage.setItem('ss_tab', activeTab);
+  saveHistory(q);
   area.innerHTML = '<div class="loading"><span class="spinner"></span>Searching…</div>';
   fetch(`/api/search?q=${encodeURIComponent(q)}&type=${activeTab}`)
     .then(r => r.json())
@@ -504,6 +536,13 @@ function esc(str) {
 </script>
 
 <style>
+.hist-chip {
+  padding: .2rem .55rem; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 99px; color: var(--text-muted); font-size: .72rem; cursor: pointer;
+  white-space: nowrap; transition: all .12s;
+}
+.hist-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--surface3); }
+
 .track-link { color: var(--accent); cursor: pointer; }
 .track-link:hover { text-decoration: underline; }
 

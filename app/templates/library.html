@@ -9,6 +9,7 @@
   </div>
   <div class="lib-meta">
     <span id="lib-count"></span>
+    <button class="lib-view-btn" id="lib-view-toggle" onclick="toggleView()">Group</button>
     <a href="/library" class="lib-refresh">↺ Rescan</a>
   </div>
 </div>
@@ -35,10 +36,35 @@
   background: var(--bg); padding: .6rem 0 .3rem;
 }
 .lib-meta {
-  display: flex; justify-content: space-between; align-items: center;
+  display: flex; justify-content: space-between; align-items: center; gap: .5rem;
   padding: .2rem .1rem 0; font-size: .72rem; color: var(--text-muted);
 }
 .lib-refresh { color: var(--accent); }
+.lib-view-btn {
+  padding: .15rem .45rem; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text-muted); font-size: .68rem;
+  font-weight: 600; cursor: pointer; transition: all .12s; margin-left: auto;
+}
+.lib-view-btn:hover, .lib-view-btn.active { border-color: var(--accent); color: var(--accent); }
+.artist-group { margin-bottom: .5rem; }
+.artist-group summary {
+  font-size: .82rem; font-weight: 700; padding: .4rem .5rem;
+  background: var(--surface2); border-radius: var(--radius-sm);
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: .5rem;
+}
+.artist-group summary:hover { background: var(--surface3); }
+.artist-group summary::before { content: '›'; color: var(--text-muted); transition: transform .15s; }
+.artist-group[open] summary::before { transform: rotate(90deg); }
+.album-group { margin: .2rem 0 .2rem .75rem; }
+.album-group summary {
+  font-size: .75rem; font-weight: 600; padding: .3rem .5rem;
+  background: var(--surface); border-radius: var(--radius-sm);
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: .4rem; color: var(--text-muted);
+}
+.album-group summary:hover { background: var(--surface2); }
+.album-group summary::before { content: '›'; transition: transform .15s; }
+.album-group[open] summary::before { transform: rotate(90deg); }
+.album-tracks { margin: .15rem 0 .15rem 1rem; display: flex; flex-direction: column; gap: .15rem; }
 #lib-list { display: flex; flex-direction: column; gap: .25rem; margin-top: .5rem; }
 .lib-row {
   display: flex; align-items: center; gap: .6rem;
@@ -73,31 +99,67 @@ const ALL_TRACKS = {{ tracks | tojson }};
 const PAGE_SIZE = 200;
 let filtered = ALL_TRACKS;
 let showing = PAGE_SIZE;
+let groupedView = localStorage.getItem('lib_grouped') === '1';
 
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function render() {
-  const slice = filtered.slice(0, showing);
-  const list = document.getElementById('lib-list');
-  list.innerHTML = slice.map(t => `
-    <div class="lib-row">
-      <div class="lib-row-info">
-        <div class="lib-row-title">${esc(t.title)}</div>
-        <div class="lib-row-sub">${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}</div>
-      </div>
-      <span class="lib-ext">${esc(t.ext)}</span>
-      <button class="lib-redl-btn"
-        onclick="redownload(this,'${esc(t.artist)}','${esc(t.album)}','${esc(t.title)}')">↺</button>
+function trackRowHtml(t) {
+  const size = t.size_mb ? `<span style="font-size:.62rem;color:var(--text-muted);flex-shrink:0">${t.size_mb} MB</span>` : '';
+  return `<div class="lib-row">
+    <div class="lib-row-info">
+      <div class="lib-row-title">${esc(t.title)}</div>
+      <div class="lib-row-sub">${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}</div>
     </div>
-  `).join('');
+    ${size}
+    <span class="lib-ext">${esc(t.ext)}</span>
+    <button class="lib-redl-btn"
+      onclick="redownload(this,'${esc(t.artist)}','${esc(t.album)}','${esc(t.title)}')">↺</button>
+  </div>`;
+}
 
+function renderGrouped(tracks) {
+  // Group by artist → album
+  const byArtist = {};
+  for (const t of tracks) {
+    const a = t.artist || '(Unknown Artist)';
+    const al = t.album  || '(Unknown Album)';
+    if (!byArtist[a]) byArtist[a] = {};
+    if (!byArtist[a][al]) byArtist[a][al] = [];
+    byArtist[a][al].push(t);
+  }
+  return Object.entries(byArtist).sort((a,b) => a[0].localeCompare(b[0])).map(([artist, albums]) => {
+    const albumHtml = Object.entries(albums).sort((a,b) => a[0].localeCompare(b[0])).map(([album, ts]) =>
+      `<details class="album-group">
+        <summary>${esc(album)} <span style="font-weight:400;font-size:.68rem">(${ts.length})</span></summary>
+        <div class="album-tracks">${ts.map(trackRowHtml).join('')}</div>
+      </details>`
+    ).join('');
+    const total = Object.values(albums).reduce((n, ts) => n + ts.length, 0);
+    return `<details class="artist-group" open>
+      <summary>${esc(artist)} <span style="font-weight:400;color:var(--text-muted);font-size:.75rem">${total} track${total!==1?'s':''}</span></summary>
+      ${albumHtml}
+    </details>`;
+  }).join('');
+}
+
+function render() {
+  const list = document.getElementById('lib-list');
   const total = filtered.length;
   document.getElementById('lib-count').textContent =
     (total === ALL_TRACKS.length ? total : `${total} of ${ALL_TRACKS.length}`) +
     ' track' + (total !== 1 ? 's' : '');
   document.getElementById('lib-empty').style.display = total === 0 ? '' : 'none';
+
+  if (groupedView) {
+    list.innerHTML = renderGrouped(filtered);
+    document.getElementById('lib-more-wrap').style.display = 'none';
+    return;
+  }
+
+  const slice = filtered.slice(0, showing);
+  list.innerHTML = slice.map(trackRowHtml).join('');
   const moreWrap = document.getElementById('lib-more-wrap');
   if (filtered.length > showing) {
     moreWrap.style.display = '';
@@ -106,6 +168,15 @@ function render() {
   } else {
     moreWrap.style.display = 'none';
   }
+}
+
+function toggleView() {
+  groupedView = !groupedView;
+  localStorage.setItem('lib_grouped', groupedView ? '1' : '0');
+  const btn = document.getElementById('lib-view-toggle');
+  btn.textContent = groupedView ? 'Flat' : 'Group';
+  btn.classList.toggle('active', groupedView);
+  render();
 }
 
 function filterLib(q) {
@@ -138,6 +209,8 @@ function redownload(btn, artist, album, title) {
   .catch(() => { btn.textContent = '↺'; btn.disabled = false; });
 }
 
+const _vbtn = document.getElementById('lib-view-toggle');
+if (_vbtn) { _vbtn.textContent = groupedView ? 'Flat' : 'Group'; _vbtn.classList.toggle('active', groupedView); }
 render();
 </script>
 {% endblock %}
