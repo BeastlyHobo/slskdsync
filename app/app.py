@@ -1402,22 +1402,39 @@ def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
     existing_id: str | None = next((p["id"] for p in playlists if p.get("name") == playlist_name), None)
 
     try:
-        # Delete the existing playlist so we can recreate it cleanly.
-        # Doing delete+create instead of updatePlaylist avoids the ambiguous
-        # mixed songIdToAdd+songIndexToRemove semantics and keeps payloads
-        # in the POST body rather than the URL (no query-string length limits).
         if existing_id:
-            r_del = requests.post(f"{nav_url}/rest/deletePlaylist",
+            # Get current entry count so we know how many to remove from the front.
+            r_get = requests.post(f"{nav_url}/rest/getPlaylist",
                                   data={**base, "id": existing_id}, timeout=10)
-            if not _subsonic_ok(r_del, "deletePlaylist"):
+            if not _subsonic_ok(r_get, "getPlaylist"):
+                return
+            current = r_get.json().get("subsonic-response", {}).get("playlist", {}).get("entry", [])
+            n_existing = len(current) if isinstance(current, list) else (1 if current else 0)
+
+            # Step 1: append all new songs to the end of the existing playlist.
+            r_add = requests.post(f"{nav_url}/rest/updatePlaylist",
+                                  data={**base, "playlistId": existing_id, "songIdToAdd": song_ids},
+                                  timeout=20)
+            if not _subsonic_ok(r_add, "updatePlaylist (add)"):
                 return
 
-        r_create = requests.post(f"{nav_url}/rest/createPlaylist",
-                                 data={**base, "name": playlist_name, "songId": song_ids},
-                                 timeout=20)
-        if _subsonic_ok(r_create, "createPlaylist"):
-            verb = "Recreated" if existing_id else "Created"
-            logger.info(f"[nav] {verb} Navidrome playlist '{playlist_name}' with {len(song_ids)} songs")
+            # Step 2: remove the original entries from the front (indices 0..n_existing-1).
+            # The new songs were appended after them so their indices are unaffected.
+            if n_existing:
+                r_rm = requests.post(f"{nav_url}/rest/updatePlaylist",
+                                     data={**base, "playlistId": existing_id,
+                                           "songIndexToRemove": list(range(n_existing))},
+                                     timeout=20)
+                if not _subsonic_ok(r_rm, "updatePlaylist (remove)"):
+                    return
+
+            logger.info(f"[nav] Updated Navidrome playlist '{playlist_name}' → {len(song_ids)} songs")
+        else:
+            r_create = requests.post(f"{nav_url}/rest/createPlaylist",
+                                     data={**base, "name": playlist_name, "songId": song_ids},
+                                     timeout=20)
+            if _subsonic_ok(r_create, "createPlaylist"):
+                logger.info(f"[nav] Created Navidrome playlist '{playlist_name}' with {len(song_ids)} songs")
     except Exception as ex:
         logger.warning(f"[nav] Failed to update Navidrome playlist '{playlist_name}': {ex}")
 
