@@ -88,13 +88,14 @@
       <label>Monochrome / hifi-api URL</label>
       <input name="monochrome_url" value="{{ settings.monochrome_url }}" placeholder="https://hifi.geeked.wtf">
     </div>
-    <p class="hint">
-      Used for TIDAL URL import and direct TIDAL downloads.
-      Default <code>hifi.geeked.wtf</code> is the official TypeScript rewrite; alternatives
-      include <code>monochrome-api.samidy.com</code>, <code>api.monochrome.tf</code>, and the
-      <a href="https://github.com/monochrome-music/monochrome/blob/main/INSTANCES.md" target="_blank">community instances list</a>.
-      Use quality "lossless" — "hi-res lossless" is DRM-protected and won't download.
-    </p>
+    <div class="field">
+      <label>Additional fallback instances <span class="optional-label">(one URL per line)</span></label>
+      <textarea name="monochrome_fallbacks" rows="3" autocomplete="off"
+        placeholder="https://my-instance.example.com&#10;https://another-instance.example.com"
+        style="width:100%;font-family:monospace;font-size:.78rem;resize:vertical;background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius-sm);color:var(--text);padding:.4rem .5rem">{{ settings.monochrome_fallbacks }}</textarea>
+      <p class="hint">These are tried before the built-in public instances. Useful if you run your own hifi-api.
+        Built-in fallbacks: <code>hifi.geeked.wtf</code>, <code>monochrome-api.samidy.com</code>, <code>api.monochrome.tf</code>.</p>
+    </div>
   </div>
 
   <div class="settings-group">
@@ -160,6 +161,21 @@
 
   <button class="btn-full" type="submit">Save settings</button>
 </form>
+
+<div class="settings-group" style="margin-top:1rem">
+  <div class="settings-group-title">
+    Live logs
+    <button type="button" class="test-btn" id="log-toggle-btn" onclick="toggleLogViewer()">Show</button>
+  </div>
+  <div id="log-viewer" style="display:none;margin-top:.4rem">
+    <div id="log-lines"
+      style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);
+             font-family:monospace;font-size:.68rem;color:var(--text-muted);line-height:1.5;
+             padding:.5rem .6rem;max-height:320px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
+      Loading…
+    </div>
+  </div>
+</div>
 
 <style>
 .settings-group-title {
@@ -249,6 +265,35 @@ function testPaths(btn) {
       result.textContent = '✗ Network error';
       result.className = 'test-result fail';
     });
+}
+
+let _logInterval = null;
+function toggleLogViewer() {
+  const viewer = document.getElementById('log-viewer');
+  const btn    = document.getElementById('log-toggle-btn');
+  const open   = viewer.style.display !== 'none';
+  if (open) {
+    viewer.style.display = 'none';
+    btn.textContent = 'Show';
+    clearInterval(_logInterval);
+    _logInterval = null;
+  } else {
+    viewer.style.display = '';
+    btn.textContent = 'Hide';
+    fetchLogs();
+    _logInterval = setInterval(fetchLogs, 2000);
+  }
+}
+
+function fetchLogs() {
+  fetch('/api/logs')
+    .then(r => r.json())
+    .then(d => {
+      const el = document.getElementById('log-lines');
+      el.textContent = d.lines.join('\n') || '(no log entries yet)';
+      el.scrollTop = el.scrollHeight;
+    })
+    .catch(() => {});
 }
 
 function triggerScan(btn) {

@@ -106,10 +106,16 @@
     <button class="pl-regen-btn" onclick="event.stopPropagation();regenM3u({{ job.id }},'{{ job.playlist_name|e }}',this)" title="Rebuild M3U">♻ M3U</button>
     <span class="pl-regen-result" id="regen-{{ job.id }}"></span>
     {% endif %}
+    {% if job.needs_fix %}
+    <button class="pl-regen-btn" style="color:#5a9aee;border-color:#1a3a5c"
+      onclick="event.stopPropagation();retryAllMissing({{ job.id }},this)" title="Queue all missing for re-search">↻ All</button>
+    {% endif %}
     {% if job.source_url %}
+    <button class="pl-regen-btn" onclick="event.stopPropagation();checkFresh({{ job.id }},this)" title="Check source playlist for new tracks">⟳ New?</button>
     <a class="pl-link" href="{{ job.source_url }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open original">↗</a>
     {% endif %}
   </div>
+  <div class="pl-new-tracks" id="new-tracks-{{ job.id }}" style="display:none;border-top:1px solid var(--border);padding:.5rem .75rem"></div>
   {% if job.needs_fix and missing.get(job.id) %}
   <div class="pl-missing" id="plmissing-{{ job.id }}">
     {% for t in missing[job.id] %}
@@ -161,6 +167,69 @@ function regenM3u(jobId, name, btn) {
     result.textContent = '✗ Error';
     result.style.color = '#e05050';
   });
+}
+
+function retryAllMissing(jobId, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  fetch(`/api/playlists/${jobId}/retry-missing`, { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        btn.textContent = `↻ ${d.queued} queued`;
+        btn.style.color = 'var(--success-text)';
+      } else {
+        btn.textContent = '↻ All';
+        btn.disabled = false;
+      }
+    })
+    .catch(() => { btn.textContent = '↻ All'; btn.disabled = false; });
+}
+
+function checkFresh(jobId, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  const panel = document.getElementById('new-tracks-' + jobId);
+  fetch(`/api/playlists/${jobId}/diff`)
+    .then(r => r.json())
+    .then(d => {
+      btn.textContent = '⟳ New?';
+      btn.disabled = false;
+      if (!d.ok) { panel.style.display=''; panel.innerHTML=`<span style="color:#e05050;font-size:.75rem">✗ ${d.error}</span>`; return; }
+      if (d.new_tracks.length === 0) {
+        panel.style.display='';
+        panel.innerHTML=`<span style="color:var(--text-muted);font-size:.75rem">✓ Up to date (${d.total_source} tracks in source)</span>`;
+        return;
+      }
+      const rows = d.new_tracks.map(t => `
+        <div style="display:flex;align-items:center;gap:.5rem;padding:.3rem 0;border-bottom:1px solid var(--border);font-size:.8rem">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
+            <div style="font-size:.7rem;color:var(--text-muted)">${esc(t.artist)}</div>
+          </div>
+          <button class="pl-regen-btn" style="color:#5a9aee;border-color:#1a3a5c"
+            onclick="queueNewTrack(this,'${esc(t.artist)}','${esc(t.album)}','${esc(t.title)}')">+ Queue</button>
+        </div>`).join('');
+      panel.style.display='';
+      panel.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.4rem">${d.new_tracks.length} new track${d.new_tracks.length!==1?'s':''} in source playlist:</div>${rows}`;
+    })
+    .catch(() => { btn.textContent = '⟳ New?'; btn.disabled = false; });
+}
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function queueNewTrack(btn, artist, album, title) {
+  btn.disabled = true; btn.textContent = '…';
+  fetch('/api/download', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({artist, album, title, source: 'slskd'}),
+  }).then(r => r.json())
+    .then(d => {
+      btn.textContent = d.ok ? '✓' : '✗';
+      if (!d.ok) btn.disabled = false;
+    })
+    .catch(() => { btn.textContent = '✗'; btn.disabled = false; });
 }
 
 function plSearch(input, trackId) {

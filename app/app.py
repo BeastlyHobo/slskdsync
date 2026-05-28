@@ -6,6 +6,7 @@ import time
 import shutil
 import logging
 import base64
+import collections
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,9 +26,26 @@ logging.basicConfig(
 logger = logging.getLogger("slskdsync")
 logger.info(f"Log level: {_log_level} (override with LOG_LEVEL env var)")
 
+# In-memory rolling log buffer — last 200 lines surfaced in Settings log viewer
+_log_buffer: collections.deque = collections.deque(maxlen=200)
+_log_buffer_lock = threading.Lock()
+
+class _BufferHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            line = self.format(record)
+            with _log_buffer_lock:
+                _log_buffer.append(line)
+        except Exception:
+            pass
+
+_buf_handler = _BufferHandler()
+_buf_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
+logging.getLogger().addHandler(_buf_handler)
+
 import requests
 import jwt as pyjwt
-from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory
+from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory, Response, stream_with_context
 from werkzeug.security import check_password_hash, generate_password_hash
 from dotenv import load_dotenv
 
@@ -1310,6 +1328,7 @@ def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
         lines.append(r["path"])
     m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     logger.info(f"[m3u] {safe}.m3u updated — {len(merged)} tracks ({len(rows)} downloads, {len(lib_rows)} library)")
+    _update_navidrome_playlist(playlist_name, merged)
 
 
 def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
@@ -1911,9 +1930,11 @@ def _worker_tick():
         conn.execute("UPDATE tracks SET slskd_state='downloading' WHERE id=?", (t["id"],))
         conn.commit()
 
-        # Build ordered list of instances to try: configured first, then fallbacks
+        # Build ordered list of instances to try: configured first, then user-added fallbacks, then built-in list
         configured = mc.base
-        instances = [configured] + [u.rstrip("/") for u in MONOCHROME_FALLBACK_URLS if u.rstrip("/") != configured]
+        user_fallbacks = [u.strip().rstrip("/") for u in (get_setting("monochrome_fallbacks") or "").splitlines() if u.strip()]
+        all_fallbacks = user_fallbacks + [u.rstrip("/") for u in MONOCHROME_FALLBACK_URLS]
+        instances = [configured] + [u for u in all_fallbacks if u != configured]
 
         ok, result = False, "No instances available"
         for instance_url in instances:
@@ -2276,6 +2297,112 @@ def api_regenerate_m3u(job_id):
     return jsonify({"ok": True, "count": len(merged), "path": str(m3u_path), "missing": miss_count})
 
 
+@app.route("/api/playlists/<int:job_id>/retry-missing", methods=["POST"])
+def api_retry_missing(job_id):
+    """Reset all needs_search tracks for a playlist to pending so the worker re-tries them."""
+    conn = get_conn()
+    job = conn.execute("SELECT id FROM import_jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return jsonify({"ok": False, "error": "Job not found"}), 404
+    conn.execute(
+        "UPDATE tracks SET slskd_state='pending', slskd_search_attempt=0,"
+        " custom_search=NULL, slskd_error=NULL, slskd_search_id=NULL, slskd_tried_users=''"
+        " WHERE job_id=? AND slskd_state='needs_search'",
+        (job_id,),
+    )
+    conn.commit()
+    affected = conn.execute("SELECT changes()").fetchone()[0]
+    conn.close()
+    return jsonify({"ok": True, "queued": affected})
+
+
+@app.route("/api/playlists/<int:job_id>/diff")
+def api_playlist_diff(job_id):
+    """Re-fetch the source playlist and return tracks not yet in this job."""
+    conn = get_conn()
+    job = conn.execute("SELECT * FROM import_jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return jsonify({"ok": False, "error": "Job not found"}), 404
+
+    source_url = job["source_url"] or ""
+    source = (job["source"] or "").lower()
+    if not source_url:
+        conn.close()
+        return jsonify({"ok": False, "error": "No source URL for this playlist"}), 400
+
+    provider = next((p for p in _providers if p.supports(source_url)), None)
+    if not provider:
+        conn.close()
+        return jsonify({"ok": False, "error": "No provider available for this URL"}), 400
+
+    try:
+        _source_type, source_tracks = provider.parse(source_url)
+    except Exception as ex:
+        conn.close()
+        return jsonify({"ok": False, "error": str(ex)}), 500
+
+    # Existing tracks for this job (normalised key)
+    existing = conn.execute(
+        "SELECT lower(trim(artist)) AS a, lower(trim(title)) AS t FROM tracks WHERE job_id=?",
+        (job_id,),
+    ).fetchall()
+    conn.close()
+    existing_set = {(r["a"], r["t"]) for r in existing}
+
+    new_tracks = []
+    for t in source_tracks:
+        key = ((t.artist or "").lower().strip(), (t.title or "").lower().strip())
+        if key not in existing_set:
+            new_tracks.append({"artist": t.artist, "title": t.title,
+                                "album": t.album, "cover_url": t.cover_url})
+
+    return jsonify({"ok": True, "new_tracks": new_tracks, "total_source": len(source_tracks)})
+
+
+@app.route("/api/logs")
+@login_required
+def api_logs():
+    """Return the last N lines from the in-memory log buffer."""
+    with _log_buffer_lock:
+        lines = list(_log_buffer)
+    return jsonify({"lines": lines})
+
+
+@app.route("/api/status/slskd")
+@login_required
+def api_status_slskd():
+    """Proxy a lightweight slskd health check: version + active download count."""
+    slskd = SlskdClient()
+    result = {"connected": False, "version": "", "active": 0, "speed_kbps": 0}
+    try:
+        r = requests.get(f"{slskd.base}/api/v0/application",
+                         headers=slskd._headers(), auth=slskd._auth(), timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            result["connected"] = True
+            result["version"] = data.get("version", "")
+        else:
+            r2 = requests.get(f"{slskd.base}/api/v1/application",
+                              headers=slskd._headers(), auth=slskd._auth(), timeout=5)
+            if r2.status_code == 200:
+                result["connected"] = True
+                result["version"] = r2.json().get("version", "")
+    except Exception:
+        pass
+    # Count active downloads from our DB (cheaper than polling slskd transfers)
+    try:
+        conn = get_conn()
+        result["active"] = conn.execute(
+            "SELECT COUNT(*) FROM tracks WHERE slskd_state='downloading'"
+        ).fetchone()[0]
+        conn.close()
+    except Exception:
+        pass
+    return jsonify(result)
+
+
 @app.route("/playlists")
 def playlists():
     conn = get_conn()
@@ -2318,10 +2445,12 @@ def library():
             artist = parts[0] if len(parts) >= 3 else ""
             album  = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
             title  = num_re.sub("", f.stem)  # strip leading "01 - " etc.
+            size_mb = round(f.stat().st_size / 1_048_576, 1)
             tracks.append({
                 "artist": artist,
                 "album":  album,
                 "title":  title,
+                "size_mb": size_mb,
                 "ext":    f.suffix[1:].upper(),
                 "path":   str(f),
             })
@@ -2333,7 +2462,7 @@ def settings():
     keys = [
         "library_path", "download_watch_path", "folder_template",
         "slskd_url", "slskd_user", "slskd_pass", "slskd_api_key",
-        "monochrome_url",
+        "monochrome_url", "monochrome_fallbacks",
         "navidrome_url", "navidrome_user", "navidrome_pass",
         "apple_team_id", "apple_key_id", "apple_private_key",
         "quality", "replace_existing",
