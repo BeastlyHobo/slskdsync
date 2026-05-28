@@ -1314,8 +1314,9 @@ def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
 
 def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
     """Create or update a Navidrome playlist directly via the Subsonic API.
-    More reliable than M3U scanning because Navidrome only imports M3U files
-    on first discovery and never re-imports them on subsequent scans."""
+    Uses POST (not GET) to avoid URL-length limits with large song-ID lists.
+    Delete-then-create avoids the ambiguous mixed add+remove semantics of
+    updatePlaylist when replacing all songs at once."""
     nav_url = (get_setting("navidrome_url") or "").rstrip("/")
     nav_user = get_setting("navidrome_user") or ""
     nav_pass = get_setting("navidrome_pass") or ""
@@ -1323,6 +1324,17 @@ def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
         return
 
     base = {"u": nav_user, "p": nav_pass, "v": "1.16.1", "c": "slskdsync", "f": "json"}
+
+    def _subsonic_ok(resp, what: str) -> bool:
+        try:
+            body = resp.json().get("subsonic-response", {})
+        except Exception:
+            body = {}
+        if resp.status_code != 200 or body.get("status") != "ok":
+            err = body.get("error", {}).get("message") or resp.text[:200]
+            logger.warning(f"[nav] {what} failed (HTTP {resp.status_code}): {err}")
+            return False
+        return True
 
     # Normaliser shared with the regenerate matching logic
     _paren = re.compile(r'\s*[\(\[][^\)\]]*[\)\]]')
@@ -1332,14 +1344,16 @@ def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
         s = _punct.sub(" ", s)
         return " ".join(s.lower().split())
 
-    # Fetch all songs from Navidrome to build an id lookup
+    # Fetch all songs from Navidrome via POST to build an id lookup
     song_lookup: dict[tuple[str, str], str] = {}  # (norm_artist, norm_title) -> id
     offset = 0
     while True:
         try:
-            r = requests.get(f"{nav_url}/rest/search3",
-                             params={**base, "query": "", "songCount": 500, "songOffset": offset,
-                                     "artistCount": 0, "albumCount": 0}, timeout=20)
+            r = requests.post(f"{nav_url}/rest/search3",
+                              data={**base, "query": "", "songCount": 500, "songOffset": offset,
+                                    "artistCount": 0, "albumCount": 0}, timeout=20)
+            if not _subsonic_ok(r, f"search3 offset={offset}"):
+                break
             songs = r.json().get("subsonic-response", {}).get("searchResult3", {}).get("song", [])
             for s in songs:
                 key = (_n(s.get("artist", "")), _n(s.get("title", "")))
@@ -1375,7 +1389,9 @@ def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
 
     # Find existing Navidrome playlist by name
     try:
-        r = requests.get(f"{nav_url}/rest/getPlaylists", params=base, timeout=10)
+        r = requests.post(f"{nav_url}/rest/getPlaylists", data=base, timeout=10)
+        if not _subsonic_ok(r, "getPlaylists"):
+            return
         playlists = r.json().get("subsonic-response", {}).get("playlists", {}).get("playlist", [])
         if isinstance(playlists, dict):
             playlists = [playlists]
@@ -1386,25 +1402,22 @@ def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
     existing_id: str | None = next((p["id"] for p in playlists if p.get("name") == playlist_name), None)
 
     try:
+        # Delete the existing playlist so we can recreate it cleanly.
+        # Doing delete+create instead of updatePlaylist avoids the ambiguous
+        # mixed songIdToAdd+songIndexToRemove semantics and keeps payloads
+        # in the POST body rather than the URL (no query-string length limits).
         if existing_id:
-            # Get current song count so we know which indices to remove
-            r2 = requests.get(f"{nav_url}/rest/getPlaylist",
-                               params={**base, "id": existing_id}, timeout=10)
-            current = r2.json().get("subsonic-response", {}).get("playlist", {}).get("entry", [])
-            n_existing = len(current) if isinstance(current, list) else (1 if current else 0)
+            r_del = requests.post(f"{nav_url}/rest/deletePlaylist",
+                                  data={**base, "id": existing_id}, timeout=10)
+            if not _subsonic_ok(r_del, "deletePlaylist"):
+                return
 
-            # Replace: add new songs first, then remove old ones by index
-            # (Subsonic updatePlaylist processes additions before removals)
-            params: dict = {**base, "playlistId": existing_id}
-            params["songIdToAdd"] = song_ids
-            if n_existing:
-                params["songIndexToRemove"] = list(range(n_existing))
-            requests.get(f"{nav_url}/rest/updatePlaylist", params=params, timeout=20)
-            logger.info(f"[nav] Updated Navidrome playlist '{playlist_name}' → {len(song_ids)} songs")
-        else:
-            requests.get(f"{nav_url}/rest/createPlaylist",
-                         params={**base, "name": playlist_name, "songId": song_ids}, timeout=20)
-            logger.info(f"[nav] Created Navidrome playlist '{playlist_name}' with {len(song_ids)} songs")
+        r_create = requests.post(f"{nav_url}/rest/createPlaylist",
+                                 data={**base, "name": playlist_name, "songId": song_ids},
+                                 timeout=20)
+        if _subsonic_ok(r_create, "createPlaylist"):
+            verb = "Recreated" if existing_id else "Created"
+            logger.info(f"[nav] {verb} Navidrome playlist '{playlist_name}' with {len(song_ids)} songs")
     except Exception as ex:
         logger.warning(f"[nav] Failed to update Navidrome playlist '{playlist_name}': {ex}")
 
