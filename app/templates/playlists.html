@@ -176,9 +176,10 @@ function plSearch(input, trackId) {
   }).then(r => r.json()).then(d => {
     if (d.ok) {
       const row = document.getElementById('mrow-' + trackId);
-      row.style.opacity = '.4';
-      row.style.pointerEvents = 'none';
-      btn.textContent = '✓';
+      row.style.opacity = '.5';
+      btn.disabled = false;
+      btn.textContent = 'Queued';
+      input.placeholder = 'Try a different query…';
     } else {
       btn.disabled = false;
       btn.textContent = 'Search';
