@@ -1312,22 +1312,101 @@ def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
     logger.info(f"[m3u] {safe}.m3u updated — {len(merged)} tracks ({len(rows)} downloads, {len(lib_rows)} library)")
 
 
-def _trigger_navidrome_rescan() -> None:
-    """Tell Navidrome to rescan its library (picks up new/updated M3U files)."""
+def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
+    """Create or update a Navidrome playlist directly via the Subsonic API.
+    More reliable than M3U scanning because Navidrome only imports M3U files
+    on first discovery and never re-imports them on subsequent scans."""
     nav_url = (get_setting("navidrome_url") or "").rstrip("/")
     nav_user = get_setting("navidrome_user") or ""
     nav_pass = get_setting("navidrome_pass") or ""
-    if not (nav_url and nav_user):
+    if not (nav_url and nav_user and tracks):
         return
+
+    base = {"u": nav_user, "p": nav_pass, "v": "1.16.1", "c": "slskdsync", "f": "json"}
+
+    # Normaliser shared with the regenerate matching logic
+    _paren = re.compile(r'\s*[\(\[][^\)\]]*[\)\]]')
+    _punct = re.compile(r"[^\w\s]")
+    def _n(s: str) -> str:
+        s = _paren.sub("", s or "")
+        s = _punct.sub(" ", s)
+        return " ".join(s.lower().split())
+
+    # Fetch all songs from Navidrome to build an id lookup
+    song_lookup: dict[tuple[str, str], str] = {}  # (norm_artist, norm_title) -> id
+    offset = 0
+    while True:
+        try:
+            r = requests.get(f"{nav_url}/rest/search3",
+                             params={**base, "query": "", "songCount": 500, "songOffset": offset,
+                                     "artistCount": 0, "albumCount": 0}, timeout=20)
+            songs = r.json().get("subsonic-response", {}).get("searchResult3", {}).get("song", [])
+            for s in songs:
+                key = (_n(s.get("artist", "")), _n(s.get("title", "")))
+                song_lookup.setdefault(key, s["id"])
+            if len(songs) < 500:
+                break
+            offset += 500
+        except Exception as ex:
+            logger.warning(f"[nav] search3 failed at offset {offset}: {ex}")
+            break
+
+    # Resolve each playlist track to a Navidrome song ID
+    song_ids: list[str] = []
+    for t in tracks:
+        na = _n(t.get("artist", ""))
+        na1 = _n(t.get("artist", "").split(",")[0].split("&")[0])
+        nt = _n(t.get("title", ""))
+        if not nt:
+            continue
+        sid = song_lookup.get((na, nt)) or song_lookup.get((na1, nt))
+        if not sid:
+            # title-only fallback
+            for (ea, et), s_id in song_lookup.items():
+                if et == nt:
+                    sid = s_id
+                    break
+        if sid:
+            song_ids.append(sid)
+
+    if not song_ids:
+        logger.warning(f"[nav] Could not resolve any Navidrome IDs for '{playlist_name}' — playlist not updated")
+        return
+
+    # Find existing Navidrome playlist by name
     try:
-        requests.get(
-            f"{nav_url}/rest/startScan",
-            params={"u": nav_user, "p": nav_pass, "v": "1.16.1", "c": "slskdsync", "f": "json"},
-            timeout=10,
-        )
-        logger.info("[m3u] Triggered Navidrome library rescan")
+        r = requests.get(f"{nav_url}/rest/getPlaylists", params=base, timeout=10)
+        playlists = r.json().get("subsonic-response", {}).get("playlists", {}).get("playlist", [])
+        if isinstance(playlists, dict):
+            playlists = [playlists]
     except Exception as ex:
-        logger.debug(f"[m3u] Navidrome rescan trigger failed (non-fatal): {ex}")
+        logger.warning(f"[nav] getPlaylists failed: {ex}")
+        return
+
+    existing_id: str | None = next((p["id"] for p in playlists if p.get("name") == playlist_name), None)
+
+    try:
+        if existing_id:
+            # Get current song count so we know which indices to remove
+            r2 = requests.get(f"{nav_url}/rest/getPlaylist",
+                               params={**base, "id": existing_id}, timeout=10)
+            current = r2.json().get("subsonic-response", {}).get("playlist", {}).get("entry", [])
+            n_existing = len(current) if isinstance(current, list) else (1 if current else 0)
+
+            # Replace: add new songs first, then remove old ones by index
+            # (Subsonic updatePlaylist processes additions before removals)
+            params: dict = {**base, "playlistId": existing_id}
+            params["songIdToAdd"] = song_ids
+            if n_existing:
+                params["songIndexToRemove"] = list(range(n_existing))
+            requests.get(f"{nav_url}/rest/updatePlaylist", params=params, timeout=20)
+            logger.info(f"[nav] Updated Navidrome playlist '{playlist_name}' → {len(song_ids)} songs")
+        else:
+            requests.get(f"{nav_url}/rest/createPlaylist",
+                         params={**base, "name": playlist_name, "songId": song_ids}, timeout=20)
+            logger.info(f"[nav] Created Navidrome playlist '{playlist_name}' with {len(song_ids)} songs")
+    except Exception as ex:
+        logger.warning(f"[nav] Failed to update Navidrome playlist '{playlist_name}': {ex}")
 
 
 def scan_library() -> None:
@@ -2163,7 +2242,7 @@ def api_regenerate_m3u(job_id):
         f"[m3u] Regenerated {safe}.m3u — {len(merged)} tracks "
         f"({len(dl_rows)} downloads + {len(lib_rows) - fs_count} index + {fs_count} fs-walk, {miss_count} missing)"
     )
-    _trigger_navidrome_rescan()
+    _update_navidrome_playlist(playlist_name, merged)
     return jsonify({"ok": True, "count": len(merged), "path": str(m3u_path), "missing": miss_count})
 
 
