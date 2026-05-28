@@ -1354,9 +1354,9 @@ def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
     # Resolve each playlist track to a Navidrome song ID
     song_ids: list[str] = []
     for t in tracks:
-        na = _n(t.get("artist", ""))
-        na1 = _n(t.get("artist", "").split(",")[0].split("&")[0])
-        nt = _n(t.get("title", ""))
+        na = _n(t["artist"] or "")
+        na1 = _n((t["artist"] or "").split(",")[0].split("&")[0])
+        nt = _n(t["title"] or "")
         if not nt:
             continue
         sid = song_lookup.get((na, nt)) or song_lookup.get((na1, nt))
