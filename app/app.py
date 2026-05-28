@@ -2380,13 +2380,21 @@ def api_status_slskd():
         if r.status_code == 200:
             data = r.json()
             result["connected"] = True
-            result["version"] = data.get("version", "")
+            v = data.get("version", "")
+            if isinstance(v, dict):
+                result["version"] = f"{v.get('major','')}.{v.get('minor','')}.{v.get('patch','')}".strip(".")
+            else:
+                result["version"] = str(v)
         else:
             r2 = requests.get(f"{slskd.base}/api/v1/application",
                               headers=slskd._headers(), auth=slskd._auth(), timeout=5)
             if r2.status_code == 200:
                 result["connected"] = True
-                result["version"] = r2.json().get("version", "")
+                v2 = r2.json().get("version", "")
+                if isinstance(v2, dict):
+                    result["version"] = f"{v2.get('major','')}.{v2.get('minor','')}.{v2.get('patch','')}".strip(".")
+                else:
+                    result["version"] = str(v2)
     except Exception:
         pass
     # Count active downloads from our DB (cheaper than polling slskd transfers)

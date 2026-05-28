@@ -64,6 +64,12 @@
   font-weight: 600; cursor: pointer; white-space: nowrap;
 }
 .pl-empty { padding: .75rem; font-size: .8rem; color: var(--text-muted); text-align: center; }
+.pl-actions-row {
+  display: flex; gap: .4rem; flex-wrap: wrap;
+  padding: .35rem .75rem .45rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
 .pl-regen-btn {
   flex-shrink: 0; font-size: .65rem; font-weight: 700; padding: .15rem .4rem;
   background: var(--surface3); border: 1px solid var(--border); border-radius: 3px;
@@ -100,21 +106,27 @@
       <span class="pl-counts">{{ job.done or 0 }}/{{ job.total or 0 }}</span>
     </div>
     {% if job.needs_fix %}
-    <span class="pl-fix-badge">{{ job.needs_fix }} fix search</span>
+    <span class="pl-fix-badge">{{ job.needs_fix }} fix</span>
     {% endif %}
+    {% if job.source_url %}
+    <a class="pl-link" href="{{ job.source_url }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open original">↗</a>
+    {% endif %}
+  </div>
+  {% if job.playlist_name or job.needs_fix or job.source_url %}
+  <div class="pl-actions-row">
     {% if job.playlist_name %}
-    <button class="pl-regen-btn" onclick="event.stopPropagation();regenM3u({{ job.id }},'{{ job.playlist_name|e }}',this)" title="Rebuild M3U">♻ M3U</button>
+    <button class="pl-regen-btn" onclick="regenM3u({{ job.id }},'{{ job.playlist_name|e }}',this)" title="Rebuild M3U">♻ M3U</button>
     <span class="pl-regen-result" id="regen-{{ job.id }}"></span>
     {% endif %}
     {% if job.needs_fix %}
     <button class="pl-regen-btn" style="color:#5a9aee;border-color:#1a3a5c"
-      onclick="event.stopPropagation();retryAllMissing({{ job.id }},this)" title="Queue all missing for re-search">↻ All</button>
+      onclick="retryAllMissing({{ job.id }},this)" title="Queue all missing for re-search">↻ All</button>
     {% endif %}
     {% if job.source_url %}
-    <button class="pl-regen-btn" onclick="event.stopPropagation();checkFresh({{ job.id }},this)" title="Check source playlist for new tracks">⟳ New?</button>
-    <a class="pl-link" href="{{ job.source_url }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open original">↗</a>
+    <button class="pl-regen-btn" onclick="checkFresh({{ job.id }},this)" title="Check source playlist for new tracks">⟳ New?</button>
     {% endif %}
   </div>
+  {% endif %}
   <div class="pl-new-tracks" id="new-tracks-{{ job.id }}" style="display:none;border-top:1px solid var(--border);padding:.5rem .75rem"></div>
   {% if job.needs_fix and missing.get(job.id) %}
   <div class="pl-missing" id="plmissing-{{ job.id }}">
