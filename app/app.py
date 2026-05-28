@@ -2362,7 +2362,6 @@ def api_playlist_diff(job_id):
 
 
 @app.route("/api/logs")
-@login_required
 def api_logs():
     """Return the last N lines from the in-memory log buffer."""
     with _log_buffer_lock:
@@ -2371,7 +2370,6 @@ def api_logs():
 
 
 @app.route("/api/status/slskd")
-@login_required
 def api_status_slskd():
     """Proxy a lightweight slskd health check: version + active download count."""
     slskd = SlskdClient()
