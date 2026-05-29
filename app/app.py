@@ -2599,6 +2599,7 @@ def api_library_index():
     conn = get_conn()
     rows = conn.execute(
         "SELECT artist, title FROM tracks WHERE slskd_state='completed'"
+        " UNION SELECT artist, title FROM library_index"
     ).fetchall()
     conn.close()
     return jsonify([
