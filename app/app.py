@@ -1281,18 +1281,21 @@ def run_worker(stop_event: threading.Event):
         time.sleep(20)
 
 
-def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
-    """Write/update an M3U with all completed tracks for this playlist.
-    Matches across all import jobs sharing the same playlist_name OR the same
-    source_url — so re-imports and original imports are all included.
-    Also includes pre-existing library songs found via library_index."""
-    library = get_setting("library_path") or "/music"
-    safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
-    m3u_path = Path(library) / f"{safe}.m3u"
-    conn = get_conn()
-    job_row = conn.execute("SELECT source_url FROM import_jobs WHERE id=?", (job_id,)).fetchone()
-    source_url = (job_row["source_url"] if job_row else "") or ""
-    rows = conn.execute(
+def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: str,
+                            allow_refetch: bool = False) -> tuple[list[dict], int, int, int]:
+    """Build the full ordered list of playlist entries: completed downloads plus
+    every song from the original imported playlist that can be matched to a file
+    in the library (via library_index, then a filesystem-walk fallback).
+
+    Returns (merged, lib_index_count, fs_count, miss_count) where merged is a list
+    of {path, artist, title} dicts.
+
+    allow_refetch: when True (manual regenerate only), re-fetch the track list from
+    the source URL if playlist_tracks is empty. The auto-sync path passes False so
+    the worker never makes provider API calls on every tick.
+    """
+    # --- Downloaded by app (have local_path on disk) ---
+    dl_rows = conn.execute(
         "SELECT DISTINCT t.local_path AS path, t.artist, t.title FROM tracks t"
         " JOIN import_jobs j ON j.id = t.job_id"
         " WHERE t.slskd_state='completed' AND t.local_path IS NOT NULL"
@@ -1300,39 +1303,188 @@ def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
         " ORDER BY t.track_number, t.id",
         (playlist_name, source_url, source_url),
     ).fetchall()
-    lib_rows = conn.execute(
-        "SELECT DISTINCT li.path, li.artist, li.title FROM library_index li"
-        " WHERE li.path IS NOT NULL AND li.path != ''"
-        " AND EXISTS ("
-        "   SELECT 1 FROM tracks t2"
-        "   JOIN import_jobs j2 ON j2.id = t2.job_id"
-        "   WHERE (j2.playlist_name=? OR (? != '' AND j2.source_url=?))"
-        "   AND lower(trim(t2.artist))=lower(trim(li.artist))"
-        "   AND lower(trim(t2.title))=lower(trim(li.title))"
-        " )",
+
+    # --- Full track list for this playlist ---
+    # Priority 1: playlist_tracks table (stored at import time, includes dedup-skipped songs)
+    pt_rows = conn.execute(
+        "SELECT artist, title FROM playlist_tracks WHERE job_id=?", (job_id,)
+    ).fetchall()
+
+    if pt_rows:
+        pl_tracks = [{"artist": r["artist"], "title": r["title"]} for r in pt_rows]
+        logger.info(f"[m3u] Using {len(pl_tracks)} tracks from stored playlist_tracks")
+    elif allow_refetch:
+        # Priority 2: re-fetch from the source URL (handles playlists imported before playlist_tracks existed)
+        pl_tracks = []
+        provider = next((p for p in _providers if p.supports(source_url)), None)
+        if provider and source_url:
+            try:
+                _, fetched = provider.parse(source_url)
+                pl_tracks = [{"artist": t.artist, "title": t.title} for t in fetched]
+                if fetched:
+                    conn.executemany(
+                        "INSERT INTO playlist_tracks(job_id, artist, title, album, track_number) VALUES(?,?,?,?,?)",
+                        [(job_id, t.artist, t.title, t.album, t.track_number) for t in fetched],
+                    )
+                    conn.commit()
+                    logger.info(f"[m3u] Re-fetched {len(fetched)} tracks from source and cached in playlist_tracks")
+            except Exception as ex:
+                logger.warning(f"[m3u] Could not re-fetch playlist from {source_url}: {ex}")
+        if not pl_tracks:
+            pl_tracks = _playlist_tracks_fallback(conn, playlist_name, source_url)
+    else:
+        # Priority 3: fall back to tracks table (only what was queued for download)
+        pl_tracks = _playlist_tracks_fallback(conn, playlist_name, source_url)
+
+    # --- All library_index entries (may be missing paths for older scans) ---
+    lib_all = conn.execute("SELECT artist, title, path FROM library_index").fetchall()
+
+    # Normalize helper: lowercase, strip parenthetical (feat./remastered/live/etc.)
+    _paren_re = re.compile(r'\s*[\(\[][^\)\]]*[\)\]]')
+    _punct_re = re.compile(r"[^\w\s]")
+    def _norm(s: str) -> str:
+        s = _paren_re.sub("", s or "")
+        s = _punct_re.sub(" ", s)
+        return " ".join(s.lower().split())
+
+    # Build library lookups: keyed by normalised values
+    lib_with_path = [e for e in lib_all if e["path"]]
+    lib_by_key: dict[tuple[str, str], dict] = {}
+    lib_by_title: dict[str, list[dict]] = {}
+    for e in lib_with_path:
+        na = _norm(e["artist"])
+        nt = _norm(e["title"])
+        if not nt:
+            continue
+        entry = {"path": e["path"], "artist": e["artist"], "title": e["title"], "_na": na, "_nt": nt}
+        lib_by_key.setdefault((na, nt), entry)
+        lib_by_title.setdefault(nt, []).append(entry)
+
+    # --- Filesystem fallback index (only built if needed) ---
+    music_root = Path(get_setting("library_path") or "/music")
+    _fs_files: list[tuple[str, str, str]] = []  # (norm_filename, norm_parent_dirs, full_path)
+    _fs_built = False
+    def _build_fs():
+        nonlocal _fs_built
+        if _fs_built:
+            return
+        _fs_built = True
+        if not music_root.exists():
+            return
+        for f in music_root.rglob("*"):
+            if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
+                stem = re.sub(r"^\d+\s*[-\.]\s*", "", f.stem)  # strip leading track number
+                _fs_files.append((_norm(stem), _norm(str(f.relative_to(music_root).parent)), str(f)))
+
+    def _fs_lookup(artist_n: str, title_n: str) -> str | None:
+        _build_fs()
+        if not title_n:
+            return None
+        # Strategy A: title in filename + artist in path/filename
+        for fn, parent, path in _fs_files:
+            if title_n in fn and (not artist_n or artist_n in fn or artist_n in parent):
+                return path
+        # Strategy B: title in filename alone (last resort)
+        for fn, parent, path in _fs_files:
+            if title_n == fn:
+                return path
+        for fn, parent, path in _fs_files:
+            if title_n and len(title_n) >= 4 and title_n in fn:
+                return path
+        return None
+
+    dl_keys = {(_norm(r["artist"]), _norm(r["title"])) for r in dl_rows}
+    seen_paths = {r["path"] for r in dl_rows}
+
+    lib_rows: list[dict] = []
+    fs_count = 0
+    miss_count = 0
+    for t in pl_tracks:
+        na = _norm(t["artist"])
+        # Spotify often credits many co-artists — try first artist alone too
+        na_first = _norm((t["artist"] or "").split(",")[0].split("&")[0])
+        nt = _norm(t["title"])
+        if not nt or (na, nt) in dl_keys:
+            continue
+
+        entry = lib_by_key.get((na, nt)) or lib_by_key.get((na_first, nt))
+
+        if not entry:
+            # Title exact, artist substring (handles co-credits)
+            for cand in lib_by_title.get(nt, []):
+                ca = cand["_na"]
+                if ca == na or (na and (na in ca or ca in na)) or (na_first and (na_first in ca or ca in na_first)):
+                    entry = cand
+                    break
+
+        if not entry and len(nt) >= 5:
+            # Title substring fuzzy match — only when artist also overlaps
+            for (ea, et), cand in lib_by_key.items():
+                if nt in et or et in nt:
+                    if ea == na or (na and (na in ea or ea in na)) or (na_first and (na_first in ea or ea in na_first)):
+                        entry = cand
+                        break
+
+        path: str | None = None
+        if entry:
+            path = entry["path"]
+        else:
+            # Final fallback: walk the filesystem
+            path = _fs_lookup(na_first or na, nt)
+            if path:
+                fs_count += 1
+
+        if path and path not in seen_paths:
+            lib_rows.append({"path": path, "artist": t["artist"], "title": t["title"]})
+            seen_paths.add(path)
+        elif not path:
+            miss_count += 1
+            logger.info(f"[m3u] No library match for '{t['artist']}' / '{t['title']}'")
+
+    merged = list(dl_rows) + lib_rows
+    return merged, len(lib_rows) - fs_count, fs_count, miss_count
+
+
+def _playlist_tracks_fallback(conn, playlist_name: str, source_url: str) -> list[dict]:
+    """Last-resort track list from the tracks table (only what was queued)."""
+    fallback = conn.execute(
+        "SELECT DISTINCT artist, title FROM tracks t"
+        " JOIN import_jobs j ON j.id = t.job_id"
+        " WHERE (j.playlist_name=? OR (? != '' AND j.source_url=?))"
+        " AND artist IS NOT NULL AND title IS NOT NULL AND artist!='' AND title!=''",
         (playlist_name, source_url, source_url),
     ).fetchall()
+    tracks = [{"artist": r["artist"], "title": r["title"]} for r in fallback]
+    logger.info(f"[m3u] Using {len(tracks)} tracks from tracks table (fallback)")
+    return tracks
+
+
+def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
+    """Write/update an M3U with the full playlist (completed downloads + already-owned
+    library songs) and sync it to Navidrome. Uses the same list-building logic as the
+    manual regenerate button so the two paths can never diverge."""
+    library = get_setting("library_path") or "/music"
+    safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
+    m3u_path = Path(library) / f"{safe}.m3u"
+    conn = get_conn()
+    job_row = conn.execute("SELECT source_url FROM import_jobs WHERE id=?", (job_id,)).fetchone()
+    source_url = (job_row["source_url"] if job_row else "") or ""
+    merged, idx_count, fs_count, miss_count = _build_playlist_entries(
+        conn, job_id, playlist_name, source_url, allow_refetch=False
+    )
     conn.close()
-    seen: set[tuple[str, str]] = set()
-    merged = []
-    for r in rows:
-        key = (r["artist"].lower().strip(), r["title"].lower().strip())
-        if key not in seen:
-            seen.add(key)
-            merged.append(r)
-    for r in lib_rows:
-        key = (r["artist"].lower().strip(), r["title"].lower().strip())
-        if key not in seen:
-            seen.add(key)
-            merged.append(r)
     if not merged:
         return
+    n_dl = len(merged) - idx_count - fs_count
     lines = ["#EXTM3U"]
     for r in merged:
         lines.append(f"#EXTINF:0,{r['artist'] or ''} - {r['title'] or ''}")
         lines.append(r["path"])
     m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.info(f"[m3u] {safe}.m3u updated — {len(merged)} tracks ({len(rows)} downloads, {len(lib_rows)} library)")
+    logger.info(
+        f"[m3u] {safe}.m3u updated — {len(merged)} tracks "
+        f"({n_dl} downloads + {idx_count} index + {fs_count} fs-walk, {miss_count} missing)"
+    )
     _update_navidrome_playlist(playlist_name, merged)
 
 
@@ -1434,6 +1586,16 @@ def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
                 return
             current = r_get.json().get("subsonic-response", {}).get("playlist", {}).get("entry", [])
             n_existing = len(current) if isinstance(current, list) else (1 if current else 0)
+
+            # Shrink guard: refuse to replace a large playlist with a much smaller one.
+            # This is a backstop against any code path feeding an incomplete list here —
+            # the real fix is that callers build the full list via _build_playlist_entries().
+            if n_existing > 10 and len(song_ids) <= n_existing * 0.5:
+                logger.warning(
+                    f"[nav] Refusing to shrink playlist '{playlist_name}': "
+                    f"{n_existing} existing → {len(song_ids)} resolved. Leaving it unchanged."
+                )
+                return
 
             # Step 1: append all new songs to the end of the existing playlist.
             r_add = requests.post(f"{nav_url}/rest/updatePlaylist",
@@ -1876,6 +2038,9 @@ def _worker_tick():
                     )
         conn.commit()
 
+    # Playlists touched by completions this tick — synced once at the end (debounce)
+    playlists_to_sync: dict[int, str] = {}
+
     # downloading → check watch folder, organize
     library = get_setting("library_path") or "/music"
     for t in conn.execute(
@@ -1899,7 +2064,7 @@ def _worker_tick():
                 job = conn.execute("SELECT playlist_name FROM import_jobs WHERE id=?",
                                    (t["job_id"],)).fetchone()
                 if job and job["playlist_name"]:
-                    write_playlist_m3u(t["job_id"], job["playlist_name"])
+                    playlists_to_sync[t["job_id"]] = job["playlist_name"]
             except Exception as ex:
                 logger.error(f"[slskd] Failed to move '{t['title']}': {ex}")
                 conn.execute("UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
@@ -1982,9 +2147,16 @@ def _worker_tick():
             job = conn.execute("SELECT playlist_name FROM import_jobs WHERE id=?",
                                (t["job_id"],)).fetchone()
             if job and job["playlist_name"]:
-                write_playlist_m3u(t["job_id"], job["playlist_name"])
+                playlists_to_sync[t["job_id"]] = job["playlist_name"]
 
     conn.close()
+
+    # Flush playlist syncs once per affected playlist (debounced from per-track)
+    for sync_job_id, sync_name in playlists_to_sync.items():
+        try:
+            write_playlist_m3u(sync_job_id, sync_name)
+        except Exception as ex:
+            logger.error(f"[m3u] Auto-sync failed for '{sync_name}': {ex}")
 
 
 # ---------------------------------------------------------------------------
@@ -2128,166 +2300,14 @@ def api_regenerate_m3u(job_id):
         return jsonify({"ok": False, "error": "No playlist name configured for this import"}), 400
     source_url = job["source_url"] or ""
 
-    # --- Downloaded by app (have local_path on disk) ---
-    dl_rows = conn.execute(
-        "SELECT DISTINCT t.local_path AS path, t.artist, t.title FROM tracks t"
-        " JOIN import_jobs j ON j.id = t.job_id"
-        " WHERE t.slskd_state='completed' AND t.local_path IS NOT NULL"
-        " AND (j.playlist_name=? OR (? != '' AND j.source_url=?))",
-        (playlist_name, source_url, source_url),
-    ).fetchall()
-
-    # --- Full track list for this playlist ---
-    # Priority 1: playlist_tracks table (stored at import time, includes dedup-skipped songs)
-    pt_rows = conn.execute(
-        "SELECT artist, title FROM playlist_tracks WHERE job_id=?", (job_id,)
-    ).fetchall()
-
-    if pt_rows:
-        pl_tracks = [{"artist": r["artist"], "title": r["title"]} for r in pt_rows]
-        logger.info(f"[m3u] Using {len(pl_tracks)} tracks from stored playlist_tracks")
-    else:
-        # Priority 2: re-fetch from the source URL (handles playlists imported before playlist_tracks existed)
-        pl_tracks = []
-        provider = next((p for p in _providers if p.supports(source_url)), None)
-        if provider and source_url:
-            try:
-                _, fetched = provider.parse(source_url)
-                pl_tracks = [{"artist": t.artist, "title": t.title} for t in fetched]
-                # Cache for future regenerations
-                if fetched:
-                    conn.executemany(
-                        "INSERT INTO playlist_tracks(job_id, artist, title, album, track_number) VALUES(?,?,?,?,?)",
-                        [(job_id, t.artist, t.title, t.album, t.track_number) for t in fetched],
-                    )
-                    conn.commit()
-                    logger.info(f"[m3u] Re-fetched {len(fetched)} tracks from source and cached in playlist_tracks")
-            except Exception as ex:
-                logger.warning(f"[m3u] Could not re-fetch playlist from {source_url}: {ex}")
-
-        if not pl_tracks:
-            # Priority 3: fall back to tracks table (only what was queued for download)
-            fallback = conn.execute(
-                "SELECT DISTINCT artist, title FROM tracks t"
-                " JOIN import_jobs j ON j.id = t.job_id"
-                " WHERE (j.playlist_name=? OR (? != '' AND j.source_url=?))"
-                " AND artist IS NOT NULL AND title IS NOT NULL AND artist!='' AND title!=''",
-                (playlist_name, source_url, source_url),
-            ).fetchall()
-            pl_tracks = [{"artist": r["artist"], "title": r["title"]} for r in fallback]
-            logger.info(f"[m3u] Using {len(pl_tracks)} tracks from tracks table (fallback)")
-
-    # --- All library_index entries (may be missing paths for older scans) ---
-    lib_all = conn.execute(
-        "SELECT artist, title, path FROM library_index"
-    ).fetchall()
+    merged, idx_count, fs_count, miss_count = _build_playlist_entries(
+        conn, job_id, playlist_name, source_url, allow_refetch=True
+    )
     conn.close()
 
-    # Normalize helper: lowercase, strip parenthetical (feat./remastered/live/etc.)
-    _paren_re = re.compile(r'\s*[\(\[][^\)\]]*[\)\]]')
-    _punct_re = re.compile(r"[^\w\s]")
-    def _norm(s: str) -> str:
-        s = _paren_re.sub("", s or "")
-        s = _punct_re.sub(" ", s)
-        return " ".join(s.lower().split())
-
-    # Build library lookups: keyed by normalised values
-    lib_with_path = [e for e in lib_all if e["path"]]
-    lib_by_key: dict[tuple[str, str], dict] = {}
-    lib_by_title: dict[str, list[dict]] = {}
-    for e in lib_with_path:
-        na = _norm(e["artist"])
-        nt = _norm(e["title"])
-        if not nt:
-            continue
-        entry = {"path": e["path"], "artist": e["artist"], "title": e["title"], "_na": na, "_nt": nt}
-        lib_by_key.setdefault((na, nt), entry)
-        lib_by_title.setdefault(nt, []).append(entry)
-
-    # --- Filesystem fallback index (only built if needed) ---
-    music_root = Path(get_setting("library_path") or "/music")
-    _fs_files: list[tuple[str, str, str]] = []  # (norm_filename, norm_parent_dirs, full_path)
-    _fs_built = False
-    def _build_fs():
-        nonlocal _fs_built
-        if _fs_built:
-            return
-        _fs_built = True
-        if not music_root.exists():
-            return
-        for f in music_root.rglob("*"):
-            if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
-                stem = re.sub(r"^\d+\s*[-\.]\s*", "", f.stem)  # strip leading track number
-                _fs_files.append((_norm(stem), _norm(str(f.relative_to(music_root).parent)), str(f)))
-
-    def _fs_lookup(artist_n: str, title_n: str) -> str | None:
-        _build_fs()
-        if not title_n:
-            return None
-        # Strategy A: title in filename + artist in path/filename
-        for fn, parent, path in _fs_files:
-            if title_n in fn and (not artist_n or artist_n in fn or artist_n in parent):
-                return path
-        # Strategy B: title in filename alone (last resort)
-        for fn, parent, path in _fs_files:
-            if title_n == fn:
-                return path
-        for fn, parent, path in _fs_files:
-            if title_n and len(title_n) >= 4 and title_n in fn:
-                return path
-        return None
-
-    dl_keys = {(_norm(r["artist"]), _norm(r["title"])) for r in dl_rows}
-    seen_paths = {r["path"] for r in dl_rows}
-
-    lib_rows: list[dict] = []
-    fs_count = 0
-    miss_count = 0
-    for t in pl_tracks:
-        na = _norm(t["artist"])
-        # Spotify often credits many co-artists — try first artist alone too
-        na_first = _norm(t["artist"].split(",")[0].split("&")[0])
-        nt = _norm(t["title"])
-        if not nt or (na, nt) in dl_keys:
-            continue
-
-        entry = lib_by_key.get((na, nt)) or lib_by_key.get((na_first, nt))
-
-        if not entry:
-            # Title exact, artist substring (handles co-credits)
-            for cand in lib_by_title.get(nt, []):
-                ca = cand["_na"]
-                if ca == na or (na and (na in ca or ca in na)) or (na_first and (na_first in ca or ca in na_first)):
-                    entry = cand
-                    break
-
-        if not entry and len(nt) >= 5:
-            # Title substring fuzzy match — only when artist also overlaps
-            for (ea, et), cand in lib_by_key.items():
-                if nt in et or et in nt:
-                    if ea == na or (na and (na in ea or ea in na)) or (na_first and (na_first in ea or ea in na_first)):
-                        entry = cand
-                        break
-
-        path: str | None = None
-        if entry:
-            path = entry["path"]
-        else:
-            # Final fallback: walk the filesystem
-            path = _fs_lookup(na_first or na, nt)
-            if path:
-                fs_count += 1
-
-        if path and path not in seen_paths:
-            lib_rows.append({"path": path, "artist": t["artist"], "title": t["title"]})
-            seen_paths.add(path)
-        elif not path:
-            miss_count += 1
-            logger.info(f"[m3u] No library match for '{t['artist']}' / '{t['title']}'")
-
-    merged = list(dl_rows) + lib_rows
     if not merged:
         return jsonify({"ok": False, "error": "No completed tracks found for this playlist"}), 404
+    n_dl = len(merged) - idx_count - fs_count
     library = get_setting("library_path") or "/music"
     safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
     m3u_path = Path(library) / f"{safe}.m3u"
@@ -2298,7 +2318,7 @@ def api_regenerate_m3u(job_id):
     m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     logger.info(
         f"[m3u] Regenerated {safe}.m3u — {len(merged)} tracks "
-        f"({len(dl_rows)} downloads + {len(lib_rows) - fs_count} index + {fs_count} fs-walk, {miss_count} missing)"
+        f"({n_dl} downloads + {idx_count} index + {fs_count} fs-walk, {miss_count} missing)"
     )
     _update_navidrome_playlist(playlist_name, merged)
     return jsonify({"ok": True, "count": len(merged), "path": str(m3u_path), "missing": miss_count})
