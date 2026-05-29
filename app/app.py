@@ -150,8 +150,13 @@ def init_db():
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
 
     existing_lib_cols = {row[1] for row in cur.execute("PRAGMA table_info(library_index)")}
-    if "path" not in existing_lib_cols:
-        cur.execute("ALTER TABLE library_index ADD COLUMN path TEXT")
+    for col, ddl in [
+        ("path", "TEXT"),
+        ("user_rating", "INTEGER DEFAULT NULL"),
+        ("cover_art_id", "TEXT DEFAULT NULL"),
+    ]:
+        if col not in existing_lib_cols:
+            cur.execute(f"ALTER TABLE library_index ADD COLUMN {col} {ddl}")
 
     existing_job_cols = {row[1] for row in cur.execute("PRAGMA table_info(import_jobs)")}
     for col, ddl in [
@@ -1494,7 +1499,8 @@ def scan_library() -> None:
                         # Navidrome returns path relative to music dir; make it absolute
                         if nav_path and not nav_path.startswith("/"):
                             nav_path = f"{music_path_str}/{nav_path}"
-                        rows.append((s.get("artist", ""), s.get("title", ""), s.get("album", ""), nav_path))
+                        rows.append((s.get("artist", ""), s.get("title", ""), s.get("album", ""), nav_path,
+                                     s.get("userRating"), s.get("coverArt")))
                     if len(songs) < 500:
                         break
                     offset += 500
@@ -1514,14 +1520,15 @@ def scan_library() -> None:
                     artist = parts[0] if len(parts) >= 3 else ""
                     album = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
                     title = num_re.sub("", f.stem)
-                    rows.append((artist, title, album, str(f)))
+                    rows.append((artist, title, album, str(f), None, None))
             source = "filesystem"
 
         conn = get_conn()
         conn.execute("DELETE FROM library_index")
         conn.executemany(
-            "INSERT INTO library_index(artist, title, album, source, path) VALUES (?,?,?,?,?)",
-            [(a, t, al, source, p) for a, t, al, p in rows]
+            "INSERT INTO library_index(artist, title, album, source, path, user_rating, cover_art_id)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [(a, t, al, source, p, ur, ca) for a, t, al, p, ur, ca in rows]
         )
         conn.commit()
         conn.close()
@@ -2440,27 +2447,79 @@ def playlists():
 
 @app.route("/library")
 def library():
-    music_path = Path(get_setting("library_path") or "/music")
-    tracks = []
-    if music_path.exists():
-        num_re = re.compile(r"^\d+\s*[-\.]\s*")
-        for f in sorted(music_path.rglob("*")):
-            if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
-                continue
-            parts = f.relative_to(music_path).parts
-            artist = parts[0] if len(parts) >= 3 else ""
-            album  = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
-            title  = num_re.sub("", f.stem)  # strip leading "01 - " etc.
-            size_mb = round(f.stat().st_size / 1_048_576, 1)
+    music_path_str = str(get_setting("library_path") or "/music")
+    conn = get_conn()
+    lib_rows = conn.execute(
+        "SELECT artist, title, album, path, user_rating, cover_art_id FROM library_index"
+    ).fetchall()
+    conn.close()
+
+    needs_scan = False
+    if lib_rows:
+        tracks = []
+        for r in lib_rows:
+            p = r["path"] or ""
+            ext = Path(p).suffix[1:].upper() if p else ""
             tracks.append({
-                "artist": artist,
-                "album":  album,
-                "title":  title,
-                "size_mb": size_mb,
-                "ext":    f.suffix[1:].upper(),
-                "path":   str(f),
+                "artist":      r["artist"] or "",
+                "album":       r["album"] or "",
+                "title":       r["title"] or "",
+                "size_mb":     0,
+                "ext":         ext,
+                "path":        p,
+                "user_rating": r["user_rating"],
+                "cover_url":   f"/api/library/cover/{r['cover_art_id']}" if r["cover_art_id"] else "",
             })
-    return render_template("library.html", tracks=tracks, music_path=str(music_path))
+    else:
+        needs_scan = True
+        tracks = []
+        music_path = Path(music_path_str)
+        if music_path.exists():
+            num_re = re.compile(r"^\d+\s*[-\.]\s*")
+            for f in sorted(music_path.rglob("*")):
+                if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
+                    continue
+                parts = f.relative_to(music_path).parts
+                artist = parts[0] if len(parts) >= 3 else ""
+                album  = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
+                title  = num_re.sub("", f.stem)
+                size_mb = round(f.stat().st_size / 1_048_576, 1)
+                tracks.append({
+                    "artist":      artist,
+                    "album":       album,
+                    "title":       title,
+                    "size_mb":     size_mb,
+                    "ext":         f.suffix[1:].upper(),
+                    "path":        str(f),
+                    "user_rating": None,
+                    "cover_url":   "",
+                })
+    return render_template("library.html", tracks=tracks, music_path=music_path_str,
+                           needs_scan=needs_scan)
+
+
+@app.route("/api/library/cover/<path:cover_art_id>")
+def api_library_cover(cover_art_id):
+    nav_url  = (get_setting("navidrome_url") or "").rstrip("/")
+    nav_user = get_setting("navidrome_user") or ""
+    nav_pass = get_setting("navidrome_pass") or ""
+    if not nav_url or not nav_user:
+        return "", 404
+    size = request.args.get("size", "120")
+    try:
+        r = requests.get(
+            f"{nav_url}/rest/getCoverArt",
+            params={"u": nav_user, "p": nav_pass, "v": "1.16.1",
+                    "c": "slskdsync", "id": cover_art_id, "size": size},
+            timeout=5,
+        )
+        if r.status_code != 200:
+            return "", 404
+        resp = Response(r.content, content_type=r.headers.get("content-type", "image/jpeg"))
+        resp.headers["Cache-Control"] = "max-age=86400, public"
+        return resp
+    except Exception:
+        return "", 404
 
 
 @app.route("/settings", methods=["GET", "POST"])
