@@ -1,16 +1,28 @@
 {% extends 'base.html' %}
 {% block content %}
 
+{% if needs_scan %}
+<div class="lib-scan-banner">
+  ℹ Run a <a href="/settings">library scan</a> (Settings → Scan Library) to enable cover art and ratings.
+</div>
+{% endif %}
+
 <div class="lib-search-wrap">
   <div class="search-inner">
     <input id="lib-q" class="search-input" type="search"
       placeholder="Search library…"
-      oninput="filterLib(this.value)" autocomplete="off">
+      oninput="filterLib()" autocomplete="off">
   </div>
   <div class="lib-meta">
     <span id="lib-count"></span>
-    <button class="lib-view-btn" id="lib-view-toggle" onclick="toggleView()">Group</button>
-    <a href="/library" class="lib-refresh">↺ Rescan</a>
+    <div class="lib-chips" id="lib-rating-chips" style="display:none">
+      <button class="lib-chip lib-chip-active" id="chip-all" onclick="setRatingFilter(0)">All</button>
+      <button class="lib-chip lib-chip-flag" id="chip-1star" onclick="setRatingFilter(1)">1★</button>
+    </div>
+    <div class="lib-meta-right">
+      <button class="lib-view-btn" id="lib-view-toggle" onclick="toggleView()">Group</button>
+      <a href="/library" class="lib-refresh" title="Reload library">↺</a>
+    </div>
   </div>
 </div>
 
@@ -31,45 +43,59 @@
 {% endif %}
 
 <style>
+.lib-scan-banner {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: .6rem .85rem;
+  font-size: .78rem; color: var(--text-muted); margin-bottom: .75rem;
+}
+.lib-scan-banner a { color: var(--accent); }
 .lib-search-wrap {
   position: sticky; top: calc(var(--header-h) + var(--inset-top)); z-index: 50;
   background: var(--bg); padding: .6rem 0 .3rem;
 }
 .lib-meta {
-  display: flex; justify-content: space-between; align-items: center; gap: .5rem;
-  padding: .2rem .1rem 0; font-size: .72rem; color: var(--text-muted);
+  display: flex; align-items: center; gap: .4rem;
+  padding: .25rem .05rem 0; font-size: .72rem; color: var(--text-muted);
 }
-.lib-refresh { color: var(--accent); }
+.lib-chips { display: flex; gap: .3rem; }
+.lib-chip {
+  padding: .18rem .52rem; border: 1px solid var(--border);
+  border-radius: 20px; font-size: .68rem; font-weight: 600;
+  background: var(--surface2); color: var(--text-muted);
+  cursor: pointer; transition: all .12s;
+}
+.lib-chip.lib-chip-active { border-color: var(--accent); color: var(--accent); }
+.lib-chip.lib-chip-flag.active { border-color: var(--error-text); color: var(--error-text); background: var(--error-bg); }
+.lib-meta-right { display: flex; gap: .35rem; align-items: center; margin-left: auto; }
+.lib-refresh { color: var(--text-muted); font-size: .8rem; }
+.lib-refresh:hover { color: var(--accent); }
 .lib-view-btn {
   padding: .15rem .45rem; background: var(--surface2); border: 1px solid var(--border);
   border-radius: var(--radius-sm); color: var(--text-muted); font-size: .68rem;
-  font-weight: 600; cursor: pointer; transition: all .12s; margin-left: auto;
+  font-weight: 600; cursor: pointer; transition: all .12s;
 }
 .lib-view-btn:hover, .lib-view-btn.active { border-color: var(--accent); color: var(--accent); }
-.artist-group { margin-bottom: .5rem; }
-.artist-group summary {
-  font-size: .82rem; font-weight: 700; padding: .4rem .5rem;
-  background: var(--surface2); border-radius: var(--radius-sm);
-  cursor: pointer; list-style: none; display: flex; align-items: center; gap: .5rem;
-}
-.artist-group summary:hover { background: var(--surface3); }
-.artist-group summary::before { content: '›'; color: var(--text-muted); transition: transform .15s; }
-.artist-group[open] summary::before { transform: rotate(90deg); }
-.album-group { margin: .2rem 0 .2rem .75rem; }
-.album-group summary {
-  font-size: .75rem; font-weight: 600; padding: .3rem .5rem;
-  background: var(--surface); border-radius: var(--radius-sm);
-  cursor: pointer; list-style: none; display: flex; align-items: center; gap: .4rem; color: var(--text-muted);
-}
-.album-group summary:hover { background: var(--surface2); }
-.album-group summary::before { content: '›'; transition: transform .15s; }
-.album-group[open] summary::before { transform: rotate(90deg); }
-.album-tracks { margin: .15rem 0 .15rem 1rem; display: flex; flex-direction: column; gap: .15rem; }
-#lib-list { display: flex; flex-direction: column; gap: .25rem; margin-top: .5rem; }
+
+/* ── Track row ─────────────────────────────────────────────── */
+#lib-list { display: flex; flex-direction: column; gap: .2rem; margin-top: .5rem; }
 .lib-row {
-  display: flex; align-items: center; gap: .6rem;
+  display: flex; align-items: center; gap: .65rem;
   background: var(--surface); border-radius: var(--radius-sm);
   padding: .5rem .65rem;
+  border-left: 3px solid transparent;
+  transition: background .12s;
+}
+.lib-row:hover { background: var(--surface2); }
+.lib-row--flagged { border-left-color: var(--error-text); }
+.lib-row-cover {
+  width: 44px; height: 44px; border-radius: 5px;
+  object-fit: cover; flex-shrink: 0; background: var(--surface2);
+  display: block;
+}
+.lib-cover-ph {
+  width: 44px; height: 44px; border-radius: 5px; flex-shrink: 0;
+  background: var(--surface2); display: flex; align-items: center;
+  justify-content: center; font-size: 1.15rem; color: var(--text-muted);
 }
 .lib-row-info { flex: 1; min-width: 0; }
 .lib-row-title {
@@ -77,66 +103,140 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .lib-row-sub {
-  font-size: .7rem; color: var(--text-muted); margin-top: 1px;
+  font-size: .7rem; color: var(--text-muted); margin-top: 2px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.lib-stars { font-size: .62rem; letter-spacing: .04em; }
+.lib-stars--low  { color: #cc4444; }
+.lib-stars--mid  { color: #b08800; }
+.lib-stars--high { color: #3a9060; }
+
+/* ── Format badges ─────────────────────────────────────────── */
 .lib-ext {
-  font-size: .6rem; font-weight: 700; color: var(--accent);
-  background: var(--surface3); border-radius: 3px; padding: 1px 5px;
-  flex-shrink: 0; letter-spacing: .02em;
+  font-size: .58rem; font-weight: 700; border-radius: 3px;
+  padding: 2px 5px; flex-shrink: 0; letter-spacing: .03em;
 }
-.lib-redl-btn {
+.lib-ext--lossless { background: #063030; color: #40d0c0; }
+.lib-ext--lossy    { background: #302800; color: #d0b000; }
+.lib-ext--aac      { background: #001840; color: #4090d0; }
+.lib-ext--vorbis   { background: #200030; color: #9060d0; }
+.lib-ext--other    { background: var(--surface3); color: var(--text-muted); }
+
+/* ── Replace button ────────────────────────────────────────── */
+.lib-replace-btn {
   flex-shrink: 0; background: var(--surface2); border: 1px solid var(--border);
   border-radius: var(--radius-sm); color: var(--text-muted);
-  font-size: .85rem; padding: .25rem .5rem; cursor: pointer; transition: all .15s;
+  font-size: .7rem; font-weight: 600; padding: .28rem .52rem;
+  cursor: pointer; transition: all .15s; white-space: nowrap;
 }
-.lib-redl-btn:hover { border-color: var(--accent); color: var(--accent); }
-.lib-redl-btn.queued { color: var(--success-text); border-color: #163020; }
+.lib-replace-btn:hover { border-color: #994444; color: #cc6666; }
+.lib-replace-btn.queued { color: var(--success-text); border-color: #163020; cursor: default; }
+
+/* ── Grouped view ──────────────────────────────────────────── */
+.artist-group { margin-bottom: .5rem; }
+.artist-group summary {
+  font-size: .82rem; font-weight: 700; padding: .4rem .55rem;
+  background: var(--surface2); border-radius: var(--radius-sm);
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: .5rem;
+}
+.artist-group summary:hover { background: var(--surface3); }
+.artist-group summary::before { content: '›'; color: var(--text-muted); transition: transform .15s; flex-shrink: 0; }
+.artist-group[open] summary::before { transform: rotate(90deg); }
+.album-group { margin: .2rem 0 .2rem .75rem; }
+.album-group summary {
+  font-size: .75rem; font-weight: 600; padding: .3rem .55rem;
+  background: var(--surface); border-radius: var(--radius-sm);
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: .4rem;
+  color: var(--text-muted);
+}
+.album-group summary:hover { background: var(--surface2); }
+.album-group summary::before { content: '›'; transition: transform .15s; flex-shrink: 0; }
+.album-group[open] summary::before { transform: rotate(90deg); }
+.album-cover {
+  width: 26px; height: 26px; border-radius: 3px;
+  object-fit: cover; flex-shrink: 0; background: var(--surface3);
+}
+.album-tracks { margin: .15rem 0 .15rem .5rem; display: flex; flex-direction: column; gap: .15rem; }
 </style>
 
 <script>
 const ALL_TRACKS = {{ tracks | tojson }};
+const HAS_RATINGS = ALL_TRACKS.some(t => t.user_rating != null);
 const PAGE_SIZE = 200;
 let filtered = ALL_TRACKS;
 let showing = PAGE_SIZE;
 let groupedView = localStorage.getItem('lib_grouped') === '1';
+let ratingFilter = 0;
 
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+function starsHtml(r) {
+  if (r == null) return '';
+  const cls = r === 1 ? 'lib-stars--low' : r <= 2 ? 'lib-stars--mid' : 'lib-stars--high';
+  return ` <span class="lib-stars ${cls}" title="${r}/5 stars">${'★'.repeat(r)}${'☆'.repeat(5-r)}</span>`;
+}
+
+function extClass(ext) {
+  const e = (ext || '').toUpperCase();
+  if (['FLAC','ALAC','WAV','AIFF','APE','WV'].includes(e)) return 'lib-ext--lossless';
+  if (['MP3'].includes(e)) return 'lib-ext--lossy';
+  if (['AAC','M4A','MP4','ALAC'].includes(e)) return 'lib-ext--aac';
+  if (['OGG','OPUS','VORBIS'].includes(e)) return 'lib-ext--vorbis';
+  return 'lib-ext--other';
+}
+
+function coverHtml(t) {
+  if (t.cover_url) {
+    return `<img class="lib-row-cover" src="${esc(t.cover_url)}" loading="lazy" alt="">`;
+  }
+  return '<div class="lib-cover-ph">🎵</div>';
+}
+
 function trackRowHtml(t) {
-  const size = t.size_mb ? `<span style="font-size:.62rem;color:var(--text-muted);flex-shrink:0">${t.size_mb} MB</span>` : '';
-  return `<div class="lib-row">
+  const flagged = t.user_rating === 1 ? ' lib-row--flagged' : '';
+  const ext = t.ext ? `<span class="lib-ext ${extClass(t.ext)}">${esc(t.ext)}</span>` : '';
+  const sub = [t.artist && esc(t.artist), t.album && esc(t.album)].filter(Boolean).join(' · ')
+    + (HAS_RATINGS ? starsHtml(t.user_rating) : '');
+  return `<div class="lib-row${flagged}">
+    ${coverHtml(t)}
     <div class="lib-row-info">
       <div class="lib-row-title">${esc(t.title)}</div>
-      <div class="lib-row-sub">${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}</div>
+      <div class="lib-row-sub">${sub}</div>
     </div>
-    ${size}
-    <span class="lib-ext">${esc(t.ext)}</span>
-    <button class="lib-redl-btn"
-      onclick="redownload(this,'${esc(t.artist)}','${esc(t.album)}','${esc(t.title)}')">↺</button>
+    ${ext}
+    <button class="lib-replace-btn"
+      data-artist="${esc(t.artist)}" data-album="${esc(t.album)}" data-title="${esc(t.title)}"
+      onclick="redownload(this)">↺ Replace</button>
   </div>`;
 }
 
 function renderGrouped(tracks) {
-  // Group by artist → album
   const byArtist = {};
   for (const t of tracks) {
-    const a = t.artist || '(Unknown Artist)';
+    const a  = t.artist || '(Unknown Artist)';
     const al = t.album  || '(Unknown Album)';
     if (!byArtist[a]) byArtist[a] = {};
     if (!byArtist[a][al]) byArtist[a][al] = [];
     byArtist[a][al].push(t);
   }
-  return Object.entries(byArtist).sort((a,b) => a[0].localeCompare(b[0])).map(([artist, albums]) => {
-    const albumHtml = Object.entries(albums).sort((a,b) => a[0].localeCompare(b[0])).map(([album, ts]) =>
-      `<details class="album-group">
-        <summary>${esc(album)} <span style="font-weight:400;font-size:.68rem">(${ts.length})</span></summary>
+  return Object.entries(byArtist).sort((a,b)=>a[0].localeCompare(b[0])).map(([artist, albums]) => {
+    const albumHtml = Object.entries(albums).sort((a,b)=>a[0].localeCompare(b[0])).map(([album, ts]) => {
+      const firstCover = ts.find(t => t.cover_url);
+      const albumImg = firstCover
+        ? `<img class="album-cover" src="${esc(firstCover.cover_url)}" loading="lazy" alt="">`
+        : '';
+      const flagCount = ts.filter(t => t.user_rating === 1).length;
+      const flagBadge = flagCount
+        ? ` <span style="font-size:.6rem;color:var(--error-text);flex-shrink:0">${flagCount}★</span>`
+        : '';
+      return `<details class="album-group">
+        <summary>${albumImg}<span>${esc(album)}</span> <span style="font-weight:400;font-size:.68rem">(${ts.length})</span>${flagBadge}</summary>
         <div class="album-tracks">${ts.map(trackRowHtml).join('')}</div>
-      </details>`
-    ).join('');
-    const total = Object.values(albums).reduce((n, ts) => n + ts.length, 0);
+      </details>`;
+    }).join('');
+    const total = Object.values(albums).reduce((n,ts)=>n+ts.length,0);
     return `<details class="artist-group" open>
       <summary>${esc(artist)} <span style="font-weight:400;color:var(--text-muted);font-size:.75rem">${total} track${total!==1?'s':''}</span></summary>
       ${albumHtml}
@@ -145,7 +245,7 @@ function renderGrouped(tracks) {
 }
 
 function render() {
-  const list = document.getElementById('lib-list');
+  const list  = document.getElementById('lib-list');
   const total = filtered.length;
   document.getElementById('lib-count').textContent =
     (total === ALL_TRACKS.length ? total : `${total} of ${ALL_TRACKS.length}`) +
@@ -157,7 +257,6 @@ function render() {
     document.getElementById('lib-more-wrap').style.display = 'none';
     return;
   }
-
   const slice = filtered.slice(0, showing);
   list.innerHTML = slice.map(trackRowHtml).join('');
   const moreWrap = document.getElementById('lib-more-wrap');
@@ -170,6 +269,26 @@ function render() {
   }
 }
 
+function applyFilters() {
+  const q = (document.getElementById('lib-q').value || '').toLowerCase().trim();
+  filtered = ALL_TRACKS.filter(t => {
+    if (ratingFilter === 1 && t.user_rating !== 1) return false;
+    if (q && !((t.artist||'')+' '+(t.album||'')+' '+(t.title||'')).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  showing = PAGE_SIZE;
+  render();
+}
+
+function filterLib() { applyFilters(); }
+
+function setRatingFilter(val) {
+  ratingFilter = val;
+  document.getElementById('chip-all').classList.toggle('lib-chip-active', val === 0);
+  document.getElementById('chip-1star').classList.toggle('active', val === 1);
+  applyFilters();
+}
+
 function toggleView() {
   groupedView = !groupedView;
   localStorage.setItem('lib_grouped', groupedView ? '1' : '0');
@@ -179,38 +298,34 @@ function toggleView() {
   render();
 }
 
-function filterLib(q) {
-  const term = q.toLowerCase().trim();
-  filtered = !term ? ALL_TRACKS : ALL_TRACKS.filter(t =>
-    ((t.artist || '') + ' ' + (t.album || '') + ' ' + (t.title || '')).toLowerCase().includes(term)
-  );
-  showing = PAGE_SIZE;
-  render();
-}
+function showMore() { showing += PAGE_SIZE; render(); }
 
-function showMore() {
-  showing += PAGE_SIZE;
-  render();
-}
-
-function redownload(btn, artist, album, title) {
+function redownload(btn) {
+  const artist = btn.dataset.artist || '';
+  const album  = btn.dataset.album  || '';
+  const title  = btn.dataset.title  || '';
   btn.textContent = '…';
   btn.disabled = true;
   fetch('/api/library/redownload', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ artist, album, title }),
+    body: JSON.stringify({artist, album, title}),
   })
   .then(r => r.json())
   .then(d => {
-    if (d.ok) { btn.textContent = '✓'; btn.classList.add('queued'); }
-    else { btn.textContent = '✗'; btn.disabled = false; }
+    if (d.ok) { btn.textContent = '✓ Queued'; btn.classList.add('queued'); }
+    else { btn.textContent = '↺ Replace'; btn.disabled = false; }
   })
-  .catch(() => { btn.textContent = '↺'; btn.disabled = false; });
+  .catch(() => { btn.textContent = '↺ Replace'; btn.disabled = false; });
 }
 
+// Init
+if (HAS_RATINGS) document.getElementById('lib-rating-chips').style.display = '';
 const _vbtn = document.getElementById('lib-view-toggle');
-if (_vbtn) { _vbtn.textContent = groupedView ? 'Flat' : 'Group'; _vbtn.classList.toggle('active', groupedView); }
+if (_vbtn) {
+  _vbtn.textContent = groupedView ? 'Flat' : 'Group';
+  _vbtn.classList.toggle('active', groupedView);
+}
 render();
 </script>
 {% endblock %}
