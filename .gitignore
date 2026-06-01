@@ -1,6 +1,6 @@
 .env
 __pycache__/
 *.pyc
-app/data/*.db
+app/data/
 library/
 downloads/

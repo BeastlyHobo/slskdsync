@@ -2,83 +2,72 @@
 {% block content %}
 
 <style>
-/* ── Discovery page layout ────────────────────────────────────────────── */
-.disc-sections { display:flex; flex-direction:column; gap:.75rem; padding:.5rem 0 1rem; }
+/* ── Discovery page layout — Apple-Music style shelves ────────────────── */
+.disc-sections { display:flex; flex-direction:column; gap:1.1rem; padding:.25rem 0 1rem; }
 
-.disc-section { background:var(--surface); border-radius:var(--radius); overflow:hidden; }
+.disc-section { overflow:hidden; }
 .disc-section-hdr {
   display:flex; align-items:center; justify-content:space-between;
-  padding:.7rem .9rem; cursor:pointer; user-select:none;
-  border-bottom:1px solid var(--border);
+  padding:.2rem .1rem .5rem; cursor:pointer; user-select:none;
 }
-.disc-section-hdr:hover { background:var(--surface2); }
-.disc-section-title { font-weight:700; font-size:.95rem; }
-.disc-section-chevron { color:var(--text-muted); font-size:1.1rem; transition:transform .2s; }
+.disc-section-title { font-weight:800; font-size:var(--fs-title); letter-spacing:-0.01em; }
+.disc-section-chevron { color:var(--text-muted); font-size:1.2rem; transition:transform .2s; }
 .disc-section.open .disc-section-chevron { transform:rotate(90deg); }
 .disc-section-body { display:none; }
 .disc-section.open .disc-section-body { display:block; }
 
 /* ── Genre chips ──────────────────────────────────────────────────────── */
 .genre-chips {
-  display:flex; gap:.4rem; flex-wrap:wrap; padding:.6rem .9rem .4rem;
-  border-bottom:1px solid var(--border);
+  display:flex; gap:.4rem; flex-wrap:wrap; padding:0 0 .6rem;
 }
 .genre-chip {
-  padding:.25rem .65rem; background:var(--surface2); border:1.5px solid var(--border);
-  border-radius:99px; color:var(--text-muted); font-size:.74rem; cursor:pointer;
-  white-space:nowrap; transition:all .12s;
+  padding:.3rem .8rem; background:var(--surface2); border:1.5px solid var(--border);
+  border-radius:var(--radius-pill); color:var(--text-muted); font-size:.74rem; cursor:pointer;
+  white-space:nowrap; transition:all .12s; font-weight:600;
 }
 .genre-chip:hover { border-color:var(--accent); color:var(--accent); }
-.genre-chip.active { background:var(--accent); border-color:var(--accent); color:#000; font-weight:700; }
+.genre-chip.active { background:var(--accent); border-color:var(--accent); color:#0a0a0c; font-weight:700; }
 
 /* ── Sub-tabs (Apple Charts / New Releases) ───────────────────────────── */
 .disc-subtabs {
-  display:flex; gap:.4rem; padding:.6rem .9rem .4rem;
-  border-bottom:1px solid var(--border);
+  display:flex; gap:.4rem; padding:0 0 .6rem;
 }
 .disc-subtab {
-  padding:.3rem .75rem; background:var(--surface2); border:1.5px solid var(--border);
-  border-radius:var(--radius-sm); color:var(--text-muted); font-size:.78rem;
+  padding:.32rem .85rem; background:var(--surface2); border:1.5px solid var(--border);
+  border-radius:var(--radius-pill); color:var(--text-muted); font-size:.78rem;
   cursor:pointer; font-weight:600; transition:all .15s;
 }
-.disc-subtab.active { background:var(--surface2); border-color:var(--accent); color:var(--accent); }
+.disc-subtab.active { border-color:var(--accent); color:var(--accent); }
 
-/* ── Track cards (mirror search page) ────────────────────────────────── */
-.disc-track-list { padding:.5rem .75rem; display:flex; flex-direction:column; gap:.4rem; }
-.track-card { display:flex; align-items:center; gap:.6rem;
-              background:var(--surface2); border-radius:var(--radius-sm); padding:.5rem .6rem; }
+/* ── Track list — inherits elevated .track-card from styles.css ───────── */
+.disc-track-list { display:flex; flex-direction:column; gap:.45rem; }
 .track-card.track-in-lib { border-left:3px solid var(--success-text); }
-.cover { width:42px; height:42px; border-radius:5px; object-fit:cover;
-         flex-shrink:0; background:var(--surface); }
-.cover-placeholder { width:42px; height:42px; border-radius:5px; flex-shrink:0;
-                     background:var(--surface); display:flex; align-items:center;
-                     justify-content:center; font-size:1.2rem; }
-.track-info { flex:1; min-width:0; }
-.track-title { font-size:.85rem; font-weight:600;
-               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.track-sub { font-size:.72rem; color:var(--text-muted); margin-top:1px;
-             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.track-dur { font-size:.72rem; color:var(--text-muted); flex-shrink:0; margin:0 .3rem; }
 .dl-btns { display:flex; gap:.3rem; flex-shrink:0; }
 .in-lib-badge { font-size:.62rem; font-weight:700; color:var(--success-text);
-                background:#163020; border-radius:3px; padding:1px 4px;
+                background:var(--success-bg); border-radius:var(--radius-pill); padding:1px 6px;
                 margin-left:.25rem; vertical-align:middle; }
-.btn { padding:.3rem .6rem; border:none; border-radius:var(--radius-sm);
-       font-size:.72rem; font-weight:700; cursor:pointer; transition:opacity .15s; }
-.btn:hover { opacity:.85; }
-.btn:disabled { opacity:.5; cursor:default; }
-.btn-slsk { background:#e8a020; color:#000; }
-.btn-mono { background:#1db954; color:#000; }
-.btn-queued { background:var(--surface); color:var(--text-muted); border:1px solid var(--border); }
-.btn-radio { background:var(--surface); color:var(--accent); border:1.5px solid var(--border);
-             font-size:.68rem; padding:.25rem .5rem; }
-.btn-radio:hover { border-color:var(--accent); background:var(--surface2); }
+.btn-radio { background:var(--surface2); color:var(--accent); border:1.5px solid var(--border);
+             font-size:.68rem; padding:.3rem .6rem; border-radius:var(--radius-pill);
+             font-weight:700; cursor:pointer; }
+.btn-radio:hover { border-color:var(--accent); background:var(--surface3); }
+
+/* ── New-releases album grid ──────────────────────────────────────────── */
+.disc-album-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.6rem; }
+@media(min-width:600px){ .disc-album-grid { grid-template-columns:repeat(4,1fr); } }
+.disc-album { min-width:0; }
+.disc-album .cover, .disc-album .cover-placeholder {
+  width:100%; height:auto; aspect-ratio:1; border-radius:var(--radius); margin-bottom:.4rem;
+}
+.disc-album-title { font-size:.76rem; font-weight:600; line-height:1.2;
+                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.disc-album-sub { font-size:.66rem; color:var(--text-muted); margin-top:1px;
+                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
 /* ── Radio inline results ─────────────────────────────────────────────── */
-.radio-results { margin-top:.4rem; padding:.4rem .6rem;
-                 background:var(--surface); border-radius:var(--radius-sm);
-                 border-left:3px solid var(--accent); }
-.radio-label { font-size:.72rem; color:var(--text-muted); margin-bottom:.35rem; font-weight:600; }
+.radio-results { margin-top:.45rem; padding:.5rem .6rem;
+                 background:var(--surface); border-radius:var(--radius);
+                 border-left:3px solid var(--accent); box-shadow:var(--shadow-sm); }
+.radio-label { font-size:.72rem; color:var(--text-muted); margin-bottom:.4rem; font-weight:700; }
 
 /* ── Loading / empty states ───────────────────────────────────────────── */
 .disc-loading { display:flex; align-items:center; gap:.5rem; justify-content:center;
@@ -250,6 +239,8 @@ function loadListenBrainz() {
 
 // ── Render helpers ────────────────────────────────────────────────────────
 function renderTrackList(container, tracks) {
+  container.classList.remove('disc-album-grid');
+  container.classList.add('disc-track-list');
   if (!tracks || !tracks.length) {
     container.innerHTML = '<div class="disc-empty">No tracks found.</div>';
     return;
@@ -258,20 +249,20 @@ function renderTrackList(container, tracks) {
 }
 
 function renderAlbumList(container, albums) {
+  container.classList.remove('disc-track-list');
+  container.classList.add('disc-album-grid');
   if (!albums || !albums.length) {
     container.innerHTML = '<div class="disc-empty">No albums found.</div>';
     return;
   }
   const html = albums.map(a => `
-    <div class="track-card">
+    <div class="disc-album">
       ${a.cover
         ? `<img class="cover" src="${esc(a.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
            <div class="cover-placeholder" style="display:none">💿</div>`
         : `<div class="cover-placeholder">💿</div>`}
-      <div class="track-info">
-        <div class="track-title">${esc(a.title)}</div>
-        <div class="track-sub">${esc(a.artist)}</div>
-      </div>
+      <div class="disc-album-title">${esc(a.title)}</div>
+      <div class="disc-album-sub">${esc(a.artist)}</div>
     </div>`).join('');
   container.innerHTML = html;
 }
