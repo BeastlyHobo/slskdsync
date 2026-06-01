@@ -148,6 +148,21 @@
   </div>
 
   <div class="settings-group">
+    <div class="settings-group-title">
+      ListenBrainz <span class="optional-label">(optional — personalised recommendations)</span>
+    </div>
+    <p class="hint">
+      Set your <a href="https://listenbrainz.org" target="_blank">ListenBrainz</a> username to see
+      personalised track recommendations on the Discover page.
+      No account key needed — recommendations are public.
+    </p>
+    <div class="field">
+      <label>ListenBrainz username</label>
+      <input name="listenbrainz_username" value="{{ settings.listenbrainz_username }}" placeholder="your-listenbrainz-username" autocomplete="off">
+    </div>
+  </div>
+
+  <div class="settings-group">
     <div class="settings-group-title">Login</div>
     <div class="field">
       <label>Username</label>

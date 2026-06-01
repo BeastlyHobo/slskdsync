@@ -1,0 +1,404 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<style>
+/* ── Discovery page layout ────────────────────────────────────────────── */
+.disc-sections { display:flex; flex-direction:column; gap:.75rem; padding:.5rem 0 1rem; }
+
+.disc-section { background:var(--surface); border-radius:var(--radius); overflow:hidden; }
+.disc-section-hdr {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:.7rem .9rem; cursor:pointer; user-select:none;
+  border-bottom:1px solid var(--border);
+}
+.disc-section-hdr:hover { background:var(--surface2); }
+.disc-section-title { font-weight:700; font-size:.95rem; }
+.disc-section-chevron { color:var(--text-muted); font-size:1.1rem; transition:transform .2s; }
+.disc-section.open .disc-section-chevron { transform:rotate(90deg); }
+.disc-section-body { display:none; }
+.disc-section.open .disc-section-body { display:block; }
+
+/* ── Genre chips ──────────────────────────────────────────────────────── */
+.genre-chips {
+  display:flex; gap:.4rem; flex-wrap:wrap; padding:.6rem .9rem .4rem;
+  border-bottom:1px solid var(--border);
+}
+.genre-chip {
+  padding:.25rem .65rem; background:var(--surface2); border:1.5px solid var(--border);
+  border-radius:99px; color:var(--text-muted); font-size:.74rem; cursor:pointer;
+  white-space:nowrap; transition:all .12s;
+}
+.genre-chip:hover { border-color:var(--accent); color:var(--accent); }
+.genre-chip.active { background:var(--accent); border-color:var(--accent); color:#000; font-weight:700; }
+
+/* ── Sub-tabs (Apple Charts / New Releases) ───────────────────────────── */
+.disc-subtabs {
+  display:flex; gap:.4rem; padding:.6rem .9rem .4rem;
+  border-bottom:1px solid var(--border);
+}
+.disc-subtab {
+  padding:.3rem .75rem; background:var(--surface2); border:1.5px solid var(--border);
+  border-radius:var(--radius-sm); color:var(--text-muted); font-size:.78rem;
+  cursor:pointer; font-weight:600; transition:all .15s;
+}
+.disc-subtab.active { background:var(--surface2); border-color:var(--accent); color:var(--accent); }
+
+/* ── Track cards (mirror search page) ────────────────────────────────── */
+.disc-track-list { padding:.5rem .75rem; display:flex; flex-direction:column; gap:.4rem; }
+.track-card { display:flex; align-items:center; gap:.6rem;
+              background:var(--surface2); border-radius:var(--radius-sm); padding:.5rem .6rem; }
+.track-card.track-in-lib { border-left:3px solid var(--success-text); }
+.cover { width:42px; height:42px; border-radius:5px; object-fit:cover;
+         flex-shrink:0; background:var(--surface); }
+.cover-placeholder { width:42px; height:42px; border-radius:5px; flex-shrink:0;
+                     background:var(--surface); display:flex; align-items:center;
+                     justify-content:center; font-size:1.2rem; }
+.track-info { flex:1; min-width:0; }
+.track-title { font-size:.85rem; font-weight:600;
+               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.track-sub { font-size:.72rem; color:var(--text-muted); margin-top:1px;
+             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.track-dur { font-size:.72rem; color:var(--text-muted); flex-shrink:0; margin:0 .3rem; }
+.dl-btns { display:flex; gap:.3rem; flex-shrink:0; }
+.in-lib-badge { font-size:.62rem; font-weight:700; color:var(--success-text);
+                background:#163020; border-radius:3px; padding:1px 4px;
+                margin-left:.25rem; vertical-align:middle; }
+.btn { padding:.3rem .6rem; border:none; border-radius:var(--radius-sm);
+       font-size:.72rem; font-weight:700; cursor:pointer; transition:opacity .15s; }
+.btn:hover { opacity:.85; }
+.btn:disabled { opacity:.5; cursor:default; }
+.btn-slsk { background:#e8a020; color:#000; }
+.btn-mono { background:#1db954; color:#000; }
+.btn-queued { background:var(--surface); color:var(--text-muted); border:1px solid var(--border); }
+.btn-radio { background:var(--surface); color:var(--accent); border:1.5px solid var(--border);
+             font-size:.68rem; padding:.25rem .5rem; }
+.btn-radio:hover { border-color:var(--accent); background:var(--surface2); }
+
+/* ── Radio inline results ─────────────────────────────────────────────── */
+.radio-results { margin-top:.4rem; padding:.4rem .6rem;
+                 background:var(--surface); border-radius:var(--radius-sm);
+                 border-left:3px solid var(--accent); }
+.radio-label { font-size:.72rem; color:var(--text-muted); margin-bottom:.35rem; font-weight:600; }
+
+/* ── Loading / empty states ───────────────────────────────────────────── */
+.disc-loading { display:flex; align-items:center; gap:.5rem; justify-content:center;
+                padding:1.5rem; color:var(--text-muted); font-size:.84rem; }
+.disc-empty { text-align:center; padding:1.5rem; color:var(--text-muted); font-size:.84rem; }
+.spinner { width:16px; height:16px; border:2px solid var(--border);
+           border-top-color:var(--accent); border-radius:50%; animation:spin .6s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+</style>
+
+<div class="disc-sections">
+
+  <!-- ── Charts section (always visible) ──────────────────────────────── -->
+  <div class="disc-section open" id="sec-charts">
+    <div class="disc-section-hdr" onclick="toggleSection('sec-charts')">
+      <span class="disc-section-title">✨ Charts</span>
+      <span class="disc-section-chevron">›</span>
+    </div>
+    <div class="disc-section-body">
+      <div class="genre-chips" id="genre-chips">
+        <button class="genre-chip active" data-genre-id="" onclick="selectGenre(this, '')">All</button>
+      </div>
+      <div id="charts-area" class="disc-track-list">
+        <div class="disc-loading"><span class="spinner"></span>Loading charts…</div>
+      </div>
+    </div>
+  </div>
+
+  {% if apple_configured %}
+  <!-- ── Apple Music section ─────────────────────────────────────────── -->
+  <div class="disc-section" id="sec-apple">
+    <div class="disc-section-hdr" onclick="toggleSection('sec-apple')">
+      <span class="disc-section-title"> Apple Music</span>
+      <span class="disc-section-chevron">›</span>
+    </div>
+    <div class="disc-section-body">
+      <div class="disc-subtabs">
+        <button class="disc-subtab active" data-sub="charts" onclick="selectAppleSub(this,'charts')">Top Songs</button>
+        <button class="disc-subtab" data-sub="new" onclick="selectAppleSub(this,'new')">New Releases</button>
+      </div>
+      <div id="apple-area" class="disc-track-list">
+        <div class="disc-loading"><span class="spinner"></span>Loading…</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if lb_username %}
+  <!-- ── For You (ListenBrainz) section ──────────────────────────────── -->
+  <div class="disc-section" id="sec-lb">
+    <div class="disc-section-hdr" onclick="toggleSection('sec-lb')">
+      <span class="disc-section-title">🎧 For You</span>
+      <span class="disc-section-chevron">›</span>
+    </div>
+    <div class="disc-section-body">
+      <div id="lb-area" class="disc-track-list">
+        <div class="disc-loading"><span class="spinner"></span>Loading recommendations…</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+
+<script>
+// ── Library index ─────────────────────────────────────────────────────────
+let libIndex = new Set();
+fetch('/api/library/index').then(r => r.json()).then(items => {
+  libIndex = new Set(items.map(i => i.a + '||' + i.t));
+}).catch(() => {});
+
+// ── Section cache (prevent re-fetching on re-open) ────────────────────────
+const _cache = {};
+
+// ── Section toggle ────────────────────────────────────────────────────────
+function toggleSection(id) {
+  const sec = document.getElementById(id);
+  const wasOpen = sec.classList.contains('open');
+  sec.classList.toggle('open', !wasOpen);
+  if (!wasOpen) loadSection(id);
+}
+
+function loadSection(id) {
+  if (id === 'sec-charts' && !_cache.charts) loadCharts('');
+  if (id === 'sec-apple'  && !_cache.apple)  loadApple('charts');
+  if (id === 'sec-lb'     && !_cache.lb)     loadListenBrainz();
+}
+
+// ── Genre chips ───────────────────────────────────────────────────────────
+let _genresLoaded = false;
+function loadGenres() {
+  if (_genresLoaded) return;
+  _genresLoaded = true;
+  fetch('/api/discover/genres')
+    .then(r => r.json())
+    .then(genres => {
+      const container = document.getElementById('genre-chips');
+      const chips = genres.map(g =>
+        `<button class="genre-chip" data-genre-id="${esc(g.id)}" onclick="selectGenre(this,'${esc(g.id)}')">${esc(g.name)}</button>`
+      ).join('');
+      container.insertAdjacentHTML('beforeend', chips);
+    })
+    .catch(() => {});
+}
+
+function selectGenre(btn, genreId) {
+  document.querySelectorAll('#genre-chips .genre-chip').forEach(c => c.classList.remove('active'));
+  btn.classList.add('active');
+  loadCharts(genreId);
+}
+
+// ── Charts ────────────────────────────────────────────────────────────────
+function loadCharts(genreId) {
+  const area = document.getElementById('charts-area');
+  area.innerHTML = '<div class="disc-loading"><span class="spinner"></span>Loading…</div>';
+  const url = genreId ? `/api/discover/genre/${genreId}` : '/api/discover/charts';
+  fetch(url)
+    .then(r => r.json())
+    .then(data => {
+      const tracks = data.tracks || data;
+      _cache.charts = tracks;
+      renderTrackList(area, tracks);
+    })
+    .catch(() => { area.innerHTML = '<div class="disc-empty">Failed to load charts.</div>'; });
+}
+
+// ── Apple Music ───────────────────────────────────────────────────────────
+let _appleSub = 'charts';
+function loadApple(sub) {
+  _appleSub = sub;
+  const area = document.getElementById('apple-area');
+  area.innerHTML = '<div class="disc-loading"><span class="spinner"></span>Loading…</div>';
+  fetch(`/api/discover/apple?sub=${sub}`)
+    .then(r => r.json())
+    .then(items => {
+      _cache.apple = items;
+      if (sub === 'new') {
+        renderAlbumList(area, items);
+      } else {
+        renderTrackList(area, items);
+      }
+    })
+    .catch(() => { area.innerHTML = '<div class="disc-empty">Failed to load Apple Music data.</div>'; });
+}
+
+function selectAppleSub(btn, sub) {
+  document.querySelectorAll('#sec-apple .disc-subtab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  delete _cache.apple;
+  loadApple(sub);
+}
+
+// ── ListenBrainz ─────────────────────────────────────────────────────────
+function loadListenBrainz() {
+  const area = document.getElementById('lb-area');
+  area.innerHTML = '<div class="disc-loading"><span class="spinner"></span>Loading recommendations…</div>';
+  fetch('/api/discover/listenbrainz')
+    .then(r => r.json())
+    .then(items => {
+      if (items.error) {
+        area.innerHTML = `<div class="disc-empty">${esc(items.error)}</div>`;
+        return;
+      }
+      _cache.lb = items;
+      renderTrackList(area, items);
+    })
+    .catch(() => { area.innerHTML = '<div class="disc-empty">Failed to load recommendations.</div>'; });
+}
+
+// ── Render helpers ────────────────────────────────────────────────────────
+function renderTrackList(container, tracks) {
+  if (!tracks || !tracks.length) {
+    container.innerHTML = '<div class="disc-empty">No tracks found.</div>';
+    return;
+  }
+  container.innerHTML = tracks.map(t => trackCardHtml(t)).join('');
+}
+
+function renderAlbumList(container, albums) {
+  if (!albums || !albums.length) {
+    container.innerHTML = '<div class="disc-empty">No albums found.</div>';
+    return;
+  }
+  const html = albums.map(a => `
+    <div class="track-card">
+      ${a.cover
+        ? `<img class="cover" src="${esc(a.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+           <div class="cover-placeholder" style="display:none">💿</div>`
+        : `<div class="cover-placeholder">💿</div>`}
+      <div class="track-info">
+        <div class="track-title">${esc(a.title)}</div>
+        <div class="track-sub">${esc(a.artist)}</div>
+      </div>
+    </div>`).join('');
+  container.innerHTML = html;
+}
+
+function trackCardHtml(t) {
+  const dur = fmtDur(t.duration);
+  const libKey = (t.artist || '').toLowerCase().trim() + '||' + (t.title || '').toLowerCase().trim();
+  const inLib = libIndex.has(libKey);
+  return `
+  <div class="track-card${inLib ? ' track-in-lib' : ''}">
+    ${t.cover
+      ? `<img class="cover" src="${esc(t.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+         <div class="cover-placeholder" style="display:none">🎵</div>`
+      : `<div class="cover-placeholder">🎵</div>`}
+    <div class="track-info">
+      <div class="track-title">${esc(t.title)}${inLib ? ' <span class="in-lib-badge">✓ Library</span>' : ''}</div>
+      <div class="track-sub">${esc(t.artist || '')}${t.album ? ' · ' + esc(t.album) : ''}</div>
+    </div>
+    ${dur ? `<span class="track-dur">${dur}</span>` : ''}
+    <div class="dl-btns">
+      <button class="btn btn-slsk dl-btn"
+        data-source="slskd"
+        data-title="${esc(t.title)}"
+        data-artist="${esc(t.artist||'')}"
+        data-album="${esc(t.album||'')}"
+        data-cover="${esc(t.cover||'')}">Soulseek</button>
+      <button class="btn btn-mono dl-btn"
+        data-source="monochrome"
+        data-title="${esc(t.title)}"
+        data-artist="${esc(t.artist||'')}"
+        data-album="${esc(t.album||'')}"
+        data-cover="${esc(t.cover||'')}">TIDAL</button>
+      ${t.artist_id
+        ? `<button class="btn btn-radio radio-btn"
+             data-artist-id="${esc(t.artist_id)}"
+             data-artist="${esc(t.artist||'')}">↺ Radio</button>`
+        : ''}
+    </div>
+  </div>`;
+}
+
+// ── Event delegation ──────────────────────────────────────────────────────
+document.addEventListener('click', e => {
+  const dlBtn = e.target.closest('.dl-btn');
+  if (dlBtn) {
+    queueDl(dlBtn, {
+      title:  dlBtn.dataset.title,
+      artist: dlBtn.dataset.artist,
+      album:  dlBtn.dataset.album,
+      cover:  dlBtn.dataset.cover,
+    }, dlBtn.dataset.source);
+    return;
+  }
+  const radioBtn = e.target.closest('.radio-btn');
+  if (radioBtn) {
+    loadArtistRadio(radioBtn);
+    return;
+  }
+});
+
+function loadArtistRadio(btn) {
+  const artistId = btn.dataset.artistId;
+  const artistName = btn.dataset.artist;
+  const card = btn.closest('.track-card');
+  btn.textContent = '…';
+  btn.disabled = true;
+  fetch(`/api/discover/artist-radio/${artistId}`)
+    .then(r => r.json())
+    .then(tracks => {
+      btn.textContent = '↺ Radio';
+      btn.disabled = false;
+      let existing = card.nextElementSibling;
+      if (existing && existing.classList.contains('radio-results')) existing.remove();
+      if (!tracks || !tracks.length) return;
+      const div = document.createElement('div');
+      div.className = 'radio-results';
+      div.innerHTML = `<div class="radio-label">↺ Similar to ${esc(artistName)}</div>` +
+        tracks.slice(0, 10).map(t => trackCardHtml(t)).join('');
+      card.insertAdjacentElement('afterend', div);
+    })
+    .catch(() => {
+      btn.textContent = '↺ Radio';
+      btn.disabled = false;
+    });
+}
+
+// ── Download ──────────────────────────────────────────────────────────────
+function queueDl(btn, item, source) {
+  btn.textContent = '…';
+  btn.disabled = true;
+  fetch('/api/download', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ artist:item.artist, album:item.album, title:item.title, cover:item.cover, source }),
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.ok) {
+      btn.textContent = '✓';
+      btn.classList.add('btn-queued');
+      showToast('Queued: ' + item.title);
+    } else {
+      btn.textContent = '✗';
+      showToast('Error: ' + (d.error || 'Unknown'), 3500);
+      setTimeout(() => { btn.textContent = source === 'slskd' ? 'Soulseek' : 'TIDAL'; btn.disabled = false; }, 2000);
+    }
+  })
+  .catch(() => {
+    btn.textContent = source === 'slskd' ? 'Soulseek' : 'TIDAL';
+    btn.disabled = false;
+    showToast('Network error', 3000);
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function fmtDur(s) {
+  if (!s) return '';
+  return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+}
+
+function esc(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ── Init: load genres and first section ───────────────────────────────────
+loadGenres();
+loadCharts('');
+</script>
+
+{% endblock %}
