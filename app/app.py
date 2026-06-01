@@ -186,6 +186,7 @@ def init_db():
         "apple_private_key": "",
         "library_scan_interval": "24",
         "last_library_scan": "",
+        "listenbrainz_username": "",
         # auth stored in DB (empty = not configured yet → first-run setup)
         "app_username": "",
         "app_password_hash": "",
@@ -658,6 +659,199 @@ class DeezerProvider:
                 for t in tracks_data.get("data", [])
             ],
         }
+
+    def get_charts(self, limit: int = 25) -> dict:
+        try:
+            data = self._get("/chart", limit=limit)
+            tracks = [
+                {
+                    "id": str(t.get("id", "")),
+                    "title": t.get("title", ""),
+                    "artist": t.get("artist", {}).get("name", ""),
+                    "artist_id": str(t.get("artist", {}).get("id", "")),
+                    "album": t.get("album", {}).get("title", ""),
+                    "album_id": str(t.get("album", {}).get("id", "")),
+                    "cover": t.get("album", {}).get("cover_medium", ""),
+                    "duration": t.get("duration", 0),
+                    "type": "track",
+                }
+                for t in (data.get("tracks") or {}).get("data", [])
+            ]
+            return {"tracks": tracks}
+        except Exception:
+            return {"tracks": []}
+
+    def get_genres(self) -> list[dict]:
+        try:
+            data = self._get("/genre")
+            return [
+                {"id": str(g.get("id", "")), "name": g.get("name", "")}
+                for g in data.get("data", [])
+                if g.get("id") != 0  # skip "All" genre
+            ]
+        except Exception:
+            return []
+
+    def get_genre_charts(self, genre_id: str, limit: int = 25) -> dict:
+        try:
+            data = self._get(f"/editorial/{genre_id}/charts", limit=limit)
+            tracks = [
+                {
+                    "id": str(t.get("id", "")),
+                    "title": t.get("title", ""),
+                    "artist": t.get("artist", {}).get("name", ""),
+                    "artist_id": str(t.get("artist", {}).get("id", "")),
+                    "album": t.get("album", {}).get("title", ""),
+                    "album_id": str(t.get("album", {}).get("id", "")),
+                    "cover": t.get("album", {}).get("cover_medium", ""),
+                    "duration": t.get("duration", 0),
+                    "type": "track",
+                }
+                for t in (data.get("tracks") or {}).get("data", [])
+            ]
+            return {"tracks": tracks}
+        except Exception:
+            return {"tracks": []}
+
+    def get_artist_radio(self, artist_id: str, limit: int = 25) -> list[dict]:
+        try:
+            data = self._get(f"/artist/{artist_id}/radio", limit=limit)
+            return [
+                {
+                    "id": str(t.get("id", "")),
+                    "title": t.get("title", ""),
+                    "artist": t.get("artist", {}).get("name", ""),
+                    "artist_id": str(t.get("artist", {}).get("id", "")),
+                    "album": t.get("album", {}).get("title", ""),
+                    "album_id": str(t.get("album", {}).get("id", "")),
+                    "cover": t.get("album", {}).get("cover_medium", ""),
+                    "duration": t.get("duration", 0),
+                    "type": "track",
+                }
+                for t in data.get("data", [])
+            ]
+        except Exception:
+            return []
+
+
+# ---------------------------------------------------------------------------
+# Apple Music catalog client (charts / new releases)
+# ---------------------------------------------------------------------------
+
+class AppleMusicClient:
+    BASE = "https://api.music.apple.com/v1"
+
+    def _token(self) -> Optional[str]:
+        try:
+            return _apple_jwt()
+        except Exception:
+            return None
+
+    def _headers(self, token: str) -> dict:
+        return {"Authorization": f"Bearer {token}"}
+
+    def get_charts(self, storefront: str = "us", limit: int = 25) -> list[dict]:
+        token = self._token()
+        if not token:
+            return []
+        try:
+            r = requests.get(
+                f"{self.BASE}/catalog/{storefront}/charts",
+                headers=self._headers(token),
+                params={"types": "songs", "limit": limit},
+                timeout=12,
+            )
+            if r.status_code != 200:
+                return []
+            charts = r.json().get("results", {}).get("songs", [])
+            songs = charts[0].get("data", []) if charts else []
+            return [self._normalize(s) for s in songs]
+        except Exception:
+            return []
+
+    def get_new_releases(self, storefront: str = "us", limit: int = 25) -> list[dict]:
+        token = self._token()
+        if not token:
+            return []
+        try:
+            r = requests.get(
+                f"{self.BASE}/catalog/{storefront}/charts",
+                headers=self._headers(token),
+                params={"types": "albums", "limit": limit},
+                timeout=12,
+            )
+            if r.status_code != 200:
+                return []
+            charts = r.json().get("results", {}).get("albums", [])
+            albums = charts[0].get("data", []) if charts else []
+            result = []
+            for a in albums:
+                attrs = a.get("attributes", {})
+                art = attrs.get("artwork", {})
+                cover = art.get("url", "").replace("{w}", "300").replace("{h}", "300") if art else ""
+                result.append({
+                    "id": a.get("id", ""),
+                    "title": attrs.get("name", ""),
+                    "artist": attrs.get("artistName", ""),
+                    "cover": cover,
+                    "type": "album",
+                })
+            return result
+        except Exception:
+            return []
+
+    @staticmethod
+    def _normalize(song: dict) -> dict:
+        attrs = song.get("attributes", {})
+        art = attrs.get("artwork", {})
+        cover = art.get("url", "").replace("{w}", "300").replace("{h}", "300") if art else ""
+        return {
+            "id": song.get("id", ""),
+            "title": attrs.get("name", ""),
+            "artist": attrs.get("artistName", ""),
+            "album": attrs.get("albumName", ""),
+            "cover": cover,
+            "duration": round(attrs.get("durationInMillis", 0) / 1000),
+            "type": "track",
+        }
+
+
+# ---------------------------------------------------------------------------
+# ListenBrainz collaborative-filtering recommendations
+# ---------------------------------------------------------------------------
+
+class ListenBrainzClient:
+    BASE = "https://api.listenbrainz.org/1"
+
+    def get_recommendations(self, username: str, limit: int = 25) -> list[dict]:
+        if not username:
+            return []
+        try:
+            r = requests.get(
+                f"{self.BASE}/cf/recommendation/user/{username}/recording",
+                params={"count": limit},
+                timeout=12,
+            )
+            if r.status_code != 200:
+                return []
+            payload = r.json()
+            recs = (payload.get("payload") or {}).get("mbids", [])
+            result = []
+            for rec in recs:
+                artist = rec.get("recording_mbid", "")
+                # LB CF endpoint returns mbids; artist/title from artist_credit_name/recording_name
+                result.append({
+                    "id": rec.get("recording_mbid", ""),
+                    "title": rec.get("recording_name", "") or rec.get("track_metadata", {}).get("track_name", ""),
+                    "artist": rec.get("artist_credit_name", "") or rec.get("track_metadata", {}).get("artist_name", ""),
+                    "album": (rec.get("track_metadata") or {}).get("release_name", ""),
+                    "cover": "",
+                    "duration": 0,
+                    "type": "track",
+                })
+            return [r for r in result if r["title"] and r["artist"]]
+        except Exception:
+            return []
 
 
 # ---------------------------------------------------------------------------
@@ -2178,6 +2372,8 @@ _worker.start()
 
 _providers = [SpotifyProvider(), AppleProvider(), TidalProvider()]
 _deezer = DeezerProvider()
+_apple_music_client = AppleMusicClient()
+_listenbrainz_client = ListenBrainzClient()
 
 
 def is_authed() -> bool:
@@ -2550,6 +2746,7 @@ def settings():
         "monochrome_url", "monochrome_fallbacks",
         "navidrome_url", "navidrome_user", "navidrome_pass",
         "apple_team_id", "apple_key_id", "apple_private_key",
+        "listenbrainz_username",
         "quality", "replace_existing",
         "library_scan_interval",
         "app_username", "app_password_hash",
@@ -2602,6 +2799,59 @@ def api_album(album_id):
         return jsonify(_deezer.get_album(album_id))
     except Exception as ex:
         return jsonify({"error": str(ex)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Discovery page
+# ---------------------------------------------------------------------------
+
+@app.route("/discover")
+def discover():
+    apple_configured = bool(
+        get_setting("apple_team_id").strip()
+        and get_setting("apple_key_id").strip()
+        and get_setting("apple_private_key").strip()
+    )
+    lb_username = get_setting("listenbrainz_username").strip()
+    return render_template("discover.html",
+                           apple_configured=apple_configured,
+                           lb_username=lb_username)
+
+
+@app.route("/api/discover/charts")
+def api_discover_charts():
+    return jsonify(_deezer.get_charts(limit=25))
+
+
+@app.route("/api/discover/genres")
+def api_discover_genres():
+    return jsonify(_deezer.get_genres())
+
+
+@app.route("/api/discover/genre/<genre_id>")
+def api_discover_genre(genre_id):
+    return jsonify(_deezer.get_genre_charts(genre_id, limit=25))
+
+
+@app.route("/api/discover/artist-radio/<artist_id>")
+def api_discover_artist_radio(artist_id):
+    return jsonify(_deezer.get_artist_radio(artist_id, limit=20))
+
+
+@app.route("/api/discover/apple")
+def api_discover_apple():
+    sub = request.args.get("sub", "charts")
+    if sub == "new":
+        return jsonify(_apple_music_client.get_new_releases())
+    return jsonify(_apple_music_client.get_charts())
+
+
+@app.route("/api/discover/listenbrainz")
+def api_discover_listenbrainz():
+    username = get_setting("listenbrainz_username").strip()
+    if not username:
+        return jsonify({"error": "ListenBrainz username not configured"}), 400
+    return jsonify(_listenbrainz_client.get_recommendations(username, limit=25))
 
 
 @app.route("/api/tracks/<int:track_id>", methods=["DELETE"])
