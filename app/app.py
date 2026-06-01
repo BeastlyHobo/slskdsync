@@ -2475,12 +2475,12 @@ def index():
             stats["needs_search"] += 1
         elif s in stats:
             stats[s] += 1
-    return render_template("index.html", tracks=tracks, stats=stats)
+    return render_template("index.html", tracks=tracks, stats=stats, title="Queue")
 
 
 @app.route("/search")
 def search():
-    return render_template("search.html")
+    return render_template("search.html", title="Search")
 
 
 @app.route("/api/playlists/<int:job_id>/regenerate", methods=["POST"])
@@ -2658,7 +2658,7 @@ def playlists():
                 (job["id"],),
             ).fetchall()
     conn.close()
-    return render_template("playlists.html", jobs=jobs, missing=missing)
+    return render_template("playlists.html", jobs=jobs, missing=missing, title="Playlists")
 
 
 @app.route("/library")
@@ -2711,7 +2711,7 @@ def library():
                     "cover_url":   "",
                 })
     return render_template("library.html", tracks=tracks, music_path=music_path_str,
-                           needs_scan=needs_scan)
+                           needs_scan=needs_scan, title="Library")
 
 
 @app.route("/api/library/cover/<path:cover_art_id>")
@@ -2765,7 +2765,7 @@ def settings():
                 set_setting(k, request.form.get(k, ""))
         flash("Settings saved", "ok")
         return redirect(url_for("settings"))
-    return render_template("settings.html", settings={k: get_setting(k) for k in keys})
+    return render_template("settings.html", settings={k: get_setting(k) for k in keys}, title="Settings")
 
 
 # ---------------------------------------------------------------------------
@@ -2815,7 +2815,8 @@ def discover():
     lb_username = get_setting("listenbrainz_username").strip()
     return render_template("discover.html",
                            apple_configured=apple_configured,
-                           lb_username=lb_username)
+                           lb_username=lb_username,
+                           title="Discover")
 
 
 @app.route("/api/discover/charts")

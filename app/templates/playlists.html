@@ -4,20 +4,23 @@
 <style>
 .pl-list { display: flex; flex-direction: column; gap: .6rem; padding: .75rem 0; }
 .pl-card {
-  background: var(--surface2); border: 1px solid var(--border);
+  background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow .12s;
 }
+.pl-card:hover { box-shadow: var(--shadow-md); }
 .pl-header {
   display: flex; align-items: center; gap: .6rem;
-  padding: .65rem .75rem; cursor: pointer;
+  padding: .75rem .85rem; cursor: pointer;
 }
-.pl-header:hover { background: var(--surface3); }
+.pl-header:hover { background: var(--surface2); }
 .pl-title { flex: 1; min-width: 0; }
-.pl-name { font-size: .88rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-name { font-size: var(--fs-headline); font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pl-sub { font-size: .72rem; color: var(--text-muted); margin-top: 1px; }
 .pl-source-badge {
-  font-size: .65rem; font-weight: 700; padding: .15rem .4rem;
-  border-radius: 3px; white-space: nowrap; flex-shrink: 0;
+  font-size: .65rem; font-weight: 700; padding: .15rem .5rem;
+  border-radius: var(--radius-pill); white-space: nowrap; flex-shrink: 0;
 }
 .src-spotify { background: #1a3a1a; color: #1db954; }
 .src-apple   { background: #3a1a1a; color: #fc3c44; }
@@ -27,12 +30,12 @@
   display: flex; align-items: center; gap: .5rem;
   font-size: .72rem; color: var(--text-muted); flex-shrink: 0;
 }
-.pl-bar-wrap { width: 60px; height: 5px; background: var(--surface3); border-radius: 3px; overflow: hidden; }
-.pl-bar { height: 100%; background: #40cc70; border-radius: 3px; transition: width .3s; }
+.pl-bar-wrap { width: 64px; height: 6px; background: var(--surface3); border-radius: var(--radius-pill); overflow: hidden; }
+.pl-bar { height: 100%; background: #40cc70; border-radius: var(--radius-pill); transition: width .3s; }
 .pl-counts { font-size: .7rem; white-space: nowrap; }
 .pl-fix-badge {
-  font-size: .65rem; font-weight: 700; padding: .15rem .4rem;
-  background: #4a2e00; color: #e09020; border-radius: 3px; white-space: nowrap;
+  font-size: .65rem; font-weight: 700; padding: .15rem .5rem;
+  background: #4a2e00; color: #e09020; border-radius: var(--radius-pill); white-space: nowrap;
 }
 .pl-actions { display: flex; gap: .4rem; flex-shrink: 0; }
 .pl-link { font-size: .72rem; color: var(--text-muted); text-decoration: none; flex-shrink: 0; }

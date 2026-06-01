@@ -59,8 +59,8 @@
 }
 .lib-chips { display: flex; gap: .3rem; }
 .lib-chip {
-  padding: .18rem .52rem; border: 1px solid var(--border);
-  border-radius: 20px; font-size: .68rem; font-weight: 600;
+  padding: .22rem .65rem; border: 1px solid var(--border);
+  border-radius: var(--radius-pill); font-size: .68rem; font-weight: 600;
   background: var(--surface2); color: var(--text-muted);
   cursor: pointer; transition: all .12s;
 }
@@ -70,36 +70,37 @@
 .lib-refresh { color: var(--text-muted); font-size: .8rem; }
 .lib-refresh:hover { color: var(--accent); }
 .lib-view-btn {
-  padding: .15rem .45rem; background: var(--surface2); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); color: var(--text-muted); font-size: .68rem;
+  padding: .2rem .6rem; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius-pill); color: var(--text-muted); font-size: .68rem;
   font-weight: 600; cursor: pointer; transition: all .12s;
 }
 .lib-view-btn:hover, .lib-view-btn.active { border-color: var(--accent); color: var(--accent); }
 
 /* ── Track row ─────────────────────────────────────────────── */
-#lib-list { display: flex; flex-direction: column; gap: .2rem; margin-top: .5rem; }
+#lib-list { display: flex; flex-direction: column; gap: .4rem; margin-top: .5rem; }
 .lib-row {
-  display: flex; align-items: center; gap: .65rem;
-  background: var(--surface); border-radius: var(--radius-sm);
-  padding: .5rem .65rem;
+  display: flex; align-items: center; gap: .7rem;
+  background: var(--surface); border-radius: var(--radius);
+  padding: .55rem .7rem;
   border-left: 3px solid transparent;
-  transition: background .12s;
+  box-shadow: var(--shadow-sm);
+  transition: background .12s, transform .12s, box-shadow .12s;
 }
-.lib-row:hover { background: var(--surface2); }
+.lib-row:hover { background: var(--surface2); transform: translateY(-1px); box-shadow: var(--shadow-md); }
 .lib-row--flagged { border-left-color: var(--error-text); }
 .lib-row-cover {
-  width: 44px; height: 44px; border-radius: 5px;
+  width: 52px; height: 52px; border-radius: var(--radius-sm);
   object-fit: cover; flex-shrink: 0; background: var(--surface2);
-  display: block;
+  display: block; box-shadow: var(--shadow-sm);
 }
 .lib-cover-ph {
-  width: 44px; height: 44px; border-radius: 5px; flex-shrink: 0;
+  width: 52px; height: 52px; border-radius: var(--radius-sm); flex-shrink: 0;
   background: var(--surface2); display: flex; align-items: center;
   justify-content: center; font-size: 1.15rem; color: var(--text-muted);
 }
 .lib-row-info { flex: 1; min-width: 0; }
 .lib-row-title {
-  font-size: .86rem; font-weight: 600;
+  font-size: var(--fs-headline); font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .lib-row-sub {
@@ -113,8 +114,8 @@
 
 /* ── Format badges ─────────────────────────────────────────── */
 .lib-ext {
-  font-size: .58rem; font-weight: 700; border-radius: 3px;
-  padding: 2px 5px; flex-shrink: 0; letter-spacing: .03em;
+  font-size: .58rem; font-weight: 700; border-radius: var(--radius-pill);
+  padding: 2px 7px; flex-shrink: 0; letter-spacing: .03em;
 }
 .lib-ext--lossless { background: #063030; color: #40d0c0; }
 .lib-ext--lossy    { background: #302800; color: #d0b000; }
@@ -125,8 +126,8 @@
 /* ── Replace button ────────────────────────────────────────── */
 .lib-replace-btn {
   flex-shrink: 0; background: var(--surface2); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); color: var(--text-muted);
-  font-size: .7rem; font-weight: 600; padding: .28rem .52rem;
+  border-radius: var(--radius-pill); color: var(--text-muted);
+  font-size: .7rem; font-weight: 600; padding: .3rem .65rem;
   cursor: pointer; transition: all .15s; white-space: nowrap;
 }
 .lib-replace-btn:hover { border-color: #994444; color: #cc6666; }
