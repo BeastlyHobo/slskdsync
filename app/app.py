@@ -434,7 +434,7 @@ class AppleProvider:
                 for song in page.get("data", []):
                     attrs = song.get("attributes", {})
                     art = attrs.get("artwork", {})
-                    cover = art.get("url", "").replace("{w}", "300").replace("{h}", "300") if art else ""
+                    cover = art.get("url", "").replace("{w}", "400").replace("{h}", "400") if art else ""
                     tracks.append(TrackMeta(
                         artist=attrs.get("artistName", ""),
                         album=attrs.get("albumName", ""),
@@ -671,7 +671,7 @@ class DeezerProvider:
                     "artist_id": str(t.get("artist", {}).get("id", "")),
                     "album": t.get("album", {}).get("title", ""),
                     "album_id": str(t.get("album", {}).get("id", "")),
-                    "cover": t.get("album", {}).get("cover_medium", ""),
+                    "cover": t.get("album", {}).get("cover_big") or t.get("album", {}).get("cover_medium", ""),
                     "duration": t.get("duration", 0),
                     "type": "track",
                 }
@@ -703,7 +703,7 @@ class DeezerProvider:
                     "artist_id": str(t.get("artist", {}).get("id", "")),
                     "album": t.get("album", {}).get("title", ""),
                     "album_id": str(t.get("album", {}).get("id", "")),
-                    "cover": t.get("album", {}).get("cover_medium", ""),
+                    "cover": t.get("album", {}).get("cover_big") or t.get("album", {}).get("cover_medium", ""),
                     "duration": t.get("duration", 0),
                     "type": "track",
                 }
@@ -724,7 +724,7 @@ class DeezerProvider:
                     "artist_id": str(t.get("artist", {}).get("id", "")),
                     "album": t.get("album", {}).get("title", ""),
                     "album_id": str(t.get("album", {}).get("id", "")),
-                    "cover": t.get("album", {}).get("cover_medium", ""),
+                    "cover": t.get("album", {}).get("cover_big") or t.get("album", {}).get("cover_medium", ""),
                     "duration": t.get("duration", 0),
                     "type": "track",
                 }
@@ -788,7 +788,7 @@ class AppleMusicClient:
             for a in albums:
                 attrs = a.get("attributes", {})
                 art = attrs.get("artwork", {})
-                cover = art.get("url", "").replace("{w}", "300").replace("{h}", "300") if art else ""
+                cover = art.get("url", "").replace("{w}", "400").replace("{h}", "400") if art else ""
                 result.append({
                     "id": a.get("id", ""),
                     "title": attrs.get("name", ""),
@@ -804,7 +804,7 @@ class AppleMusicClient:
     def _normalize(song: dict) -> dict:
         attrs = song.get("attributes", {})
         art = attrs.get("artwork", {})
-        cover = art.get("url", "").replace("{w}", "300").replace("{h}", "300") if art else ""
+        cover = art.get("url", "").replace("{w}", "400").replace("{h}", "400") if art else ""
         return {
             "id": song.get("id", ""),
             "title": attrs.get("name", ""),

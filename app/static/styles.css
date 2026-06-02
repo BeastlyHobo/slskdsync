@@ -1,13 +1,13 @@
 :root {
-  --bg: #0a0a0c;
-  --surface: #18181c;
-  --surface2: #222228;
-  --surface3: #2a2a32;
-  --accent: #7b9fd4;
-  --accent-dim: #3a5070;
+  --bg: #080810;
+  --surface: #121218;
+  --surface2: #1c1c24;
+  --surface3: #252530;
+  --accent: #4d8dff;
+  --accent-dim: #1a4080;
   --text: #e6e6ea;
   --text-muted: #808090;
-  --border: #2e2e38;
+  --border: #272733;
   --success-bg: #163020;
   --success-text: #5dcc88;
   --error-bg: #2e1010;
@@ -30,11 +30,11 @@
   --fs-headline: .95rem;
   --fs-body: .85rem;
   --fs-caption: .72rem;
-  /* Accent gradient (blue family) */
-  --accent-grad: linear-gradient(135deg, #8fb0e0 0%, #6b8fc8 100%);
+  /* Accent gradient (electric blue) */
+  --accent-grad: linear-gradient(135deg, #60a0ff 0%, #3a70e0 100%);
   --blur: saturate(180%) blur(20px);
   /* Translucent surfaces for frosted bars */
-  --surface-trans: rgba(20,20,24,0.72);
+  --surface-trans: rgba(12,12,20,0.80);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -601,6 +601,110 @@ main {
 }
 
 .toast.show { opacity: 1; }
+
+/* ── Discover shelves ───────────────────────────────────── */
+.shelf { margin-bottom: 1.75rem; }
+
+.shelf-hdr {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 0 .55rem;
+}
+.shelf-hdr-title { font-size: var(--fs-title); font-weight: 800; letter-spacing: -.01em; }
+.shelf-hdr-link  { font-size: var(--fs-caption); color: var(--accent); font-weight: 600; cursor: pointer; }
+
+.shelf-scroll {
+  display: flex;
+  gap: .65rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: .25rem;
+}
+.shelf-scroll::-webkit-scrollbar { display: none; }
+
+.shelf-tile {
+  flex-shrink: 0;
+  width: 140px;
+  cursor: pointer;
+  position: relative;
+}
+
+.shelf-tile-art {
+  width: 140px;
+  height: 140px;
+  border-radius: var(--radius);
+  object-fit: cover;
+  display: block;
+  background: var(--surface2);
+  box-shadow: var(--shadow-md);
+  transition: opacity .15s;
+}
+
+.shelf-tile-ph {
+  width: 140px;
+  height: 140px;
+  border-radius: var(--radius);
+  background: var(--surface2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3rem;
+  box-shadow: var(--shadow-md);
+}
+
+.shelf-tile-title {
+  font-size: .75rem;
+  font-weight: 700;
+  margin-top: .4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-tile-sub {
+  font-size: .66rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-tile-lib {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success-text);
+  box-shadow: 0 0 0 2px rgba(8,8,16,.6);
+}
+
+.tile-actions {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius);
+  background: rgba(8,8,16,.62);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .35rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+}
+
+.shelf-tile.active .tile-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.shelf-tile.active .shelf-tile-art {
+  opacity: .55;
+}
 
 /* ── Misc helpers ───────────────────────────────────────── */
 .mt { margin-top: 0.75rem; }
