@@ -2,130 +2,95 @@
 {% block content %}
 
 <style>
-/* ── Discovery page layout — Apple-Music style shelves ────────────────── */
-.disc-sections { display:flex; flex-direction:column; gap:1.1rem; padding:.25rem 0 1rem; }
-
-.disc-section { overflow:hidden; }
-.disc-section-hdr {
-  display:flex; align-items:center; justify-content:space-between;
-  padding:.2rem .1rem .5rem; cursor:pointer; user-select:none;
-}
-.disc-section-title { font-weight:800; font-size:var(--fs-title); letter-spacing:-0.01em; }
-.disc-section-chevron { color:var(--text-muted); font-size:1.2rem; transition:transform .2s; }
-.disc-section.open .disc-section-chevron { transform:rotate(90deg); }
-.disc-section-body { display:none; }
-.disc-section.open .disc-section-body { display:block; }
-
-/* ── Genre chips ──────────────────────────────────────────────────────── */
-.genre-chips {
-  display:flex; gap:.4rem; flex-wrap:wrap; padding:0 0 .6rem;
-}
+/* ── Genre chips ──────────────────────────────────────────── */
 .genre-chip {
-  padding:.3rem .8rem; background:var(--surface2); border:1.5px solid var(--border);
+  padding:.32rem .9rem; background:var(--surface2); border:1.5px solid var(--border);
   border-radius:var(--radius-pill); color:var(--text-muted); font-size:.74rem; cursor:pointer;
-  white-space:nowrap; transition:all .12s; font-weight:600;
+  white-space:nowrap; transition:all .12s; font-weight:600; flex-shrink:0;
 }
 .genre-chip:hover { border-color:var(--accent); color:var(--accent); }
-.genre-chip.active { background:var(--accent); border-color:var(--accent); color:#0a0a0c; font-weight:700; }
+.genre-chip.active { background:var(--accent); border-color:var(--accent); color:#080810; font-weight:700; }
 
-/* ── Sub-tabs (Apple Charts / New Releases) ───────────────────────────── */
-.disc-subtabs {
-  display:flex; gap:.4rem; padding:0 0 .6rem;
-}
-.disc-subtab {
-  padding:.32rem .85rem; background:var(--surface2); border:1.5px solid var(--border);
-  border-radius:var(--radius-pill); color:var(--text-muted); font-size:.78rem;
-  cursor:pointer; font-weight:600; transition:all .15s;
-}
-.disc-subtab.active { border-color:var(--accent); color:var(--accent); }
-
-/* ── Track list — inherits elevated .track-card from styles.css ───────── */
-.disc-track-list { display:flex; flex-direction:column; gap:.45rem; }
+/* ── ListenBrainz compact track list ─────────────────────── */
+.disc-track-list { display:flex; flex-direction:column; gap:.4rem; }
 .track-card.track-in-lib { border-left:3px solid var(--success-text); }
-.dl-btns { display:flex; gap:.3rem; flex-shrink:0; }
 .in-lib-badge { font-size:.62rem; font-weight:700; color:var(--success-text);
                 background:var(--success-bg); border-radius:var(--radius-pill); padding:1px 6px;
                 margin-left:.25rem; vertical-align:middle; }
+
+/* ── Tile action buttons ─────────────────────────────────── */
+.btn-tile-slsk { background:#1e4a78; color:#a8d0ff; font-size:.68rem; font-weight:700;
+                 padding:.28rem .7rem; border:none; border-radius:var(--radius-pill);
+                 cursor:pointer; white-space:nowrap; min-width:80px; }
+.btn-tile-mono { background:#3a1a6e; color:#c8a8ff; font-size:.68rem; font-weight:700;
+                 padding:.28rem .7rem; border:none; border-radius:var(--radius-pill);
+                 cursor:pointer; white-space:nowrap; min-width:80px; }
+.btn-tile-slsk:active, .btn-tile-mono:active { transform:scale(.95); }
+.btn-queued { background:var(--surface3) !important; color:var(--text-muted) !important; cursor:default !important; }
+
+/* ── Radio results ───────────────────────────────────────── */
+.radio-results { margin-top:.45rem; padding:.5rem .6rem;
+                 background:var(--surface); border-radius:var(--radius);
+                 border-left:3px solid var(--accent); box-shadow:var(--shadow-sm); }
+.radio-label { font-size:.72rem; color:var(--text-muted); margin-bottom:.4rem; font-weight:700; }
+.dl-btns { display:flex; gap:.3rem; flex-shrink:0; }
 .btn-radio { background:var(--surface2); color:var(--accent); border:1.5px solid var(--border);
              font-size:.68rem; padding:.3rem .6rem; border-radius:var(--radius-pill);
              font-weight:700; cursor:pointer; }
 .btn-radio:hover { border-color:var(--accent); background:var(--surface3); }
 
-/* ── New-releases album grid ──────────────────────────────────────────── */
-.disc-album-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.6rem; }
-@media(min-width:600px){ .disc-album-grid { grid-template-columns:repeat(4,1fr); } }
-.disc-album { min-width:0; }
-.disc-album .cover, .disc-album .cover-placeholder {
-  width:100%; height:auto; aspect-ratio:1; border-radius:var(--radius); margin-bottom:.4rem;
-}
-.disc-album-title { font-size:.76rem; font-weight:600; line-height:1.2;
-                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.disc-album-sub { font-size:.66rem; color:var(--text-muted); margin-top:1px;
-                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-
-/* ── Radio inline results ─────────────────────────────────────────────── */
-.radio-results { margin-top:.45rem; padding:.5rem .6rem;
-                 background:var(--surface); border-radius:var(--radius);
-                 border-left:3px solid var(--accent); box-shadow:var(--shadow-sm); }
-.radio-label { font-size:.72rem; color:var(--text-muted); margin-bottom:.4rem; font-weight:700; }
-
-/* ── Loading / empty states ───────────────────────────────────────────── */
+/* ── Loading / empty ─────────────────────────────────────── */
 .disc-loading { display:flex; align-items:center; gap:.5rem; justify-content:center;
-                padding:1.5rem; color:var(--text-muted); font-size:.84rem; }
+                padding:2rem 1rem; color:var(--text-muted); font-size:.84rem; }
 .disc-empty { text-align:center; padding:1.5rem; color:var(--text-muted); font-size:.84rem; }
-.spinner { width:16px; height:16px; border:2px solid var(--border);
-           border-top-color:var(--accent); border-radius:50%; animation:spin .6s linear infinite; }
+.shelf-spinner { width:16px; height:16px; border:2px solid var(--border);
+                 border-top-color:var(--accent); border-radius:50%;
+                 animation:spin .6s linear infinite; display:inline-block; }
 @keyframes spin { to { transform:rotate(360deg); } }
+
+/* ── Genre toggle chevron ────────────────────────────────── */
+#genre-toggle-wrap { overflow:hidden; max-height:0; transition:max-height .25s; margin-bottom:0; }
+#genre-toggle-wrap.open { max-height:80px; margin-bottom:.55rem; }
 </style>
 
-<div class="disc-sections">
+<div style="padding:.25rem 0 1rem">
 
-  <!-- ── Charts section (always visible) ──────────────────────────────── -->
-  <div class="disc-section open" id="sec-charts">
-    <div class="disc-section-hdr" onclick="toggleSection('sec-charts')">
-      <span class="disc-section-title">✨ Charts</span>
-      <span class="disc-section-chevron">›</span>
+  <!-- ── Top Charts ──────────────────────────────────────── -->
+  <div class="shelf">
+    <div class="shelf-hdr">
+      <span class="shelf-hdr-title">Top Charts</span>
+      <span class="shelf-hdr-link" id="genre-toggle-btn" onclick="toggleGenres()">Genres ›</span>
     </div>
-    <div class="disc-section-body">
-      <div class="genre-chips" id="genre-chips">
-        <button class="genre-chip active" data-genre-id="" onclick="selectGenre(this, '')">All</button>
+    <div id="genre-toggle-wrap">
+      <div class="shelf-scroll" id="genre-chips">
+        <button class="genre-chip active" data-genre-id="" onclick="selectGenre(this,'')">All</button>
       </div>
-      <div id="charts-area" class="disc-track-list">
-        <div class="disc-loading"><span class="spinner"></span>Loading charts…</div>
-      </div>
+    </div>
+    <div class="shelf-scroll" id="charts-area">
+      <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
     </div>
   </div>
 
   {% if apple_configured %}
-  <!-- ── Apple Music section ─────────────────────────────────────────── -->
-  <div class="disc-section" id="sec-apple">
-    <div class="disc-section-hdr" onclick="toggleSection('sec-apple')">
-      <span class="disc-section-title"> Apple Music</span>
-      <span class="disc-section-chevron">›</span>
+  <!-- ── New Releases ────────────────────────────────────── -->
+  <div class="shelf">
+    <div class="shelf-hdr">
+      <span class="shelf-hdr-title">New Releases</span>
     </div>
-    <div class="disc-section-body">
-      <div class="disc-subtabs">
-        <button class="disc-subtab active" data-sub="charts" onclick="selectAppleSub(this,'charts')">Top Songs</button>
-        <button class="disc-subtab" data-sub="new" onclick="selectAppleSub(this,'new')">New Releases</button>
-      </div>
-      <div id="apple-area" class="disc-track-list">
-        <div class="disc-loading"><span class="spinner"></span>Loading…</div>
-      </div>
+    <div class="shelf-scroll" id="apple-area">
+      <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
     </div>
   </div>
   {% endif %}
 
   {% if lb_username %}
-  <!-- ── For You (ListenBrainz) section ──────────────────────────────── -->
-  <div class="disc-section" id="sec-lb">
-    <div class="disc-section-hdr" onclick="toggleSection('sec-lb')">
-      <span class="disc-section-title">🎧 For You</span>
-      <span class="disc-section-chevron">›</span>
+  <!-- ── For You (ListenBrainz) ──────────────────────────── -->
+  <div class="shelf">
+    <div class="shelf-hdr">
+      <span class="shelf-hdr-title">For You</span>
     </div>
-    <div class="disc-section-body">
-      <div id="lb-area" class="disc-track-list">
-        <div class="disc-loading"><span class="spinner"></span>Loading recommendations…</div>
-      </div>
+    <div class="disc-track-list" id="lb-area">
+      <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading recommendations…</div>
     </div>
   </div>
   {% endif %}
@@ -136,28 +101,23 @@
 // ── Library index ─────────────────────────────────────────────────────────
 let libIndex = new Set();
 fetch('/api/library/index').then(r => r.json()).then(items => {
-  libIndex = new Set(items.map(i => i.a + '||' + i.t));
+  libIndex = new Set(items.map(i => (i.a||'').toLowerCase().trim() + '||' + (i.t||'').toLowerCase().trim()));
 }).catch(() => {});
 
-// ── Section cache (prevent re-fetching on re-open) ────────────────────────
+// ── Cache ─────────────────────────────────────────────────────────────────
 const _cache = {};
 
-// ── Section toggle ────────────────────────────────────────────────────────
-function toggleSection(id) {
-  const sec = document.getElementById(id);
-  const wasOpen = sec.classList.contains('open');
-  sec.classList.toggle('open', !wasOpen);
-  if (!wasOpen) loadSection(id);
-}
-
-function loadSection(id) {
-  if (id === 'sec-charts' && !_cache.charts) loadCharts('');
-  if (id === 'sec-apple'  && !_cache.apple)  loadApple('charts');
-  if (id === 'sec-lb'     && !_cache.lb)     loadListenBrainz();
-}
-
-// ── Genre chips ───────────────────────────────────────────────────────────
+// ── Genre toggle ──────────────────────────────────────────────────────────
+let _genresOpen = false;
 let _genresLoaded = false;
+
+function toggleGenres() {
+  _genresOpen = !_genresOpen;
+  document.getElementById('genre-toggle-wrap').classList.toggle('open', _genresOpen);
+  document.getElementById('genre-toggle-btn').textContent = _genresOpen ? 'Genres ↑' : 'Genres ›';
+  if (!_genresLoaded) loadGenres();
+}
+
 function loadGenres() {
   if (_genresLoaded) return;
   _genresLoaded = true;
@@ -176,54 +136,44 @@ function loadGenres() {
 function selectGenre(btn, genreId) {
   document.querySelectorAll('#genre-chips .genre-chip').forEach(c => c.classList.remove('active'));
   btn.classList.add('active');
+  delete _cache.charts;
   loadCharts(genreId);
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────
 function loadCharts(genreId) {
   const area = document.getElementById('charts-area');
-  area.innerHTML = '<div class="disc-loading"><span class="spinner"></span>Loading…</div>';
+  area.innerHTML = '<div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>';
   const url = genreId ? `/api/discover/genre/${genreId}` : '/api/discover/charts';
   fetch(url)
     .then(r => r.json())
     .then(data => {
       const tracks = data.tracks || data;
       _cache.charts = tracks;
-      renderTrackList(area, tracks);
+      renderShelf(area, tracks);
     })
     .catch(() => { area.innerHTML = '<div class="disc-empty">Failed to load charts.</div>'; });
 }
 
-// ── Apple Music ───────────────────────────────────────────────────────────
-let _appleSub = 'charts';
-function loadApple(sub) {
-  _appleSub = sub;
+// ── Apple Music (New Releases) ────────────────────────────────────────────
+function loadApple() {
   const area = document.getElementById('apple-area');
-  area.innerHTML = '<div class="disc-loading"><span class="spinner"></span>Loading…</div>';
-  fetch(`/api/discover/apple?sub=${sub}`)
+  if (!area) return;
+  area.innerHTML = '<div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>';
+  fetch('/api/discover/apple?sub=new')
     .then(r => r.json())
     .then(items => {
       _cache.apple = items;
-      if (sub === 'new') {
-        renderAlbumList(area, items);
-      } else {
-        renderTrackList(area, items);
-      }
+      renderShelf(area, items);
     })
     .catch(() => { area.innerHTML = '<div class="disc-empty">Failed to load Apple Music data.</div>'; });
 }
 
-function selectAppleSub(btn, sub) {
-  document.querySelectorAll('#sec-apple .disc-subtab').forEach(t => t.classList.remove('active'));
-  btn.classList.add('active');
-  delete _cache.apple;
-  loadApple(sub);
-}
-
-// ── ListenBrainz ─────────────────────────────────────────────────────────
+// ── ListenBrainz ──────────────────────────────────────────────────────────
 function loadListenBrainz() {
   const area = document.getElementById('lb-area');
-  area.innerHTML = '<div class="disc-loading"><span class="spinner"></span>Loading recommendations…</div>';
+  if (!area) return;
+  area.innerHTML = '<div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>';
   fetch('/api/discover/listenbrainz')
     .then(r => r.json())
     .then(items => {
@@ -237,10 +187,56 @@ function loadListenBrainz() {
     .catch(() => { area.innerHTML = '<div class="disc-empty">Failed to load recommendations.</div>'; });
 }
 
-// ── Render helpers ────────────────────────────────────────────────────────
+// ── Render: horizontal shelf of tiles ────────────────────────────────────
+function renderShelf(container, items) {
+  if (!items || !items.length) {
+    container.innerHTML = '<div class="disc-empty">Nothing found.</div>';
+    return;
+  }
+  container.innerHTML = items.map(item => tilHtml(item)).join('');
+}
+
+function tilHtml(t) {
+  const libKey = (t.artist||'').toLowerCase().trim() + '||' + (t.title||'').toLowerCase().trim();
+  const inLib = libIndex.has(libKey);
+  const isAlbum = t.type === 'album';
+  const label = isAlbum ? esc(t.title) : esc(t.title);
+  const sub   = esc(t.artist || '');
+  const artHtml = t.cover
+    ? `<img class="shelf-tile-art" src="${esc(t.cover)}" alt="" loading="lazy"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"
+        ><div class="shelf-tile-ph" style="display:none">${isAlbum ? '💿' : '🎵'}</div>`
+    : `<div class="shelf-tile-ph">${isAlbum ? '💿' : '🎵'}</div>`;
+
+  const radioBtn = (!isAlbum && t.artist_id)
+    ? `<button class="btn-radio radio-btn"
+         data-artist-id="${esc(t.artist_id)}"
+         data-artist="${esc(t.artist||'')}"
+         style="font-size:.62rem;padding:.2rem .55rem;margin-top:.1rem">↺ Radio</button>`
+    : '';
+
+  const dlBtns = isAlbum ? '' : `
+    <button class="btn-tile-slsk dl-btn"
+      data-source="slskd"
+      data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
+      data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">Soulseek</button>
+    <button class="btn-tile-mono dl-btn"
+      data-source="monochrome"
+      data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
+      data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">TIDAL</button>
+    ${radioBtn}`;
+
+  return `<div class="shelf-tile${inLib ? ' track-in-lib' : ''}" onclick="tileClick(this)">
+    ${artHtml}
+    ${inLib ? '<div class="shelf-tile-lib"></div>' : ''}
+    <div class="tile-actions">${dlBtns || '<span style="color:var(--text-muted);font-size:.72rem">Album</span>'}</div>
+    <div class="shelf-tile-title">${label}</div>
+    <div class="shelf-tile-sub">${sub}</div>
+  </div>`;
+}
+
+// ── Render: compact vertical track list (ListenBrainz) ───────────────────
 function renderTrackList(container, tracks) {
-  container.classList.remove('disc-album-grid');
-  container.classList.add('disc-track-list');
   if (!tracks || !tracks.length) {
     container.innerHTML = '<div class="disc-empty">No tracks found.</div>';
     return;
@@ -248,66 +244,55 @@ function renderTrackList(container, tracks) {
   container.innerHTML = tracks.map(t => trackCardHtml(t)).join('');
 }
 
-function renderAlbumList(container, albums) {
-  container.classList.remove('disc-track-list');
-  container.classList.add('disc-album-grid');
-  if (!albums || !albums.length) {
-    container.innerHTML = '<div class="disc-empty">No albums found.</div>';
-    return;
-  }
-  const html = albums.map(a => `
-    <div class="disc-album">
-      ${a.cover
-        ? `<img class="cover" src="${esc(a.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-           <div class="cover-placeholder" style="display:none">💿</div>`
-        : `<div class="cover-placeholder">💿</div>`}
-      <div class="disc-album-title">${esc(a.title)}</div>
-      <div class="disc-album-sub">${esc(a.artist)}</div>
-    </div>`).join('');
-  container.innerHTML = html;
-}
-
 function trackCardHtml(t) {
-  const dur = fmtDur(t.duration);
-  const libKey = (t.artist || '').toLowerCase().trim() + '||' + (t.title || '').toLowerCase().trim();
+  const libKey = (t.artist||'').toLowerCase().trim() + '||' + (t.title||'').toLowerCase().trim();
   const inLib = libIndex.has(libKey);
   return `
   <div class="track-card${inLib ? ' track-in-lib' : ''}">
     ${t.cover
-      ? `<img class="cover" src="${esc(t.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      ? `<img class="cover" src="${esc(t.cover)}" alt="" loading="lazy"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
          <div class="cover-placeholder" style="display:none">🎵</div>`
       : `<div class="cover-placeholder">🎵</div>`}
     <div class="track-info">
       <div class="track-title">${esc(t.title)}${inLib ? ' <span class="in-lib-badge">✓ Library</span>' : ''}</div>
-      <div class="track-sub">${esc(t.artist || '')}${t.album ? ' · ' + esc(t.album) : ''}</div>
+      <div class="track-sub">${esc(t.artist||'')}${t.album ? ' · ' + esc(t.album) : ''}</div>
     </div>
-    ${dur ? `<span class="track-dur">${dur}</span>` : ''}
     <div class="dl-btns">
       <button class="btn btn-slsk dl-btn"
-        data-source="slskd"
-        data-title="${esc(t.title)}"
-        data-artist="${esc(t.artist||'')}"
-        data-album="${esc(t.album||'')}"
+        data-source="slskd" data-title="${esc(t.title)}"
+        data-artist="${esc(t.artist||'')}" data-album="${esc(t.album||'')}"
         data-cover="${esc(t.cover||'')}">Soulseek</button>
       <button class="btn btn-mono dl-btn"
-        data-source="monochrome"
-        data-title="${esc(t.title)}"
-        data-artist="${esc(t.artist||'')}"
-        data-album="${esc(t.album||'')}"
+        data-source="monochrome" data-title="${esc(t.title)}"
+        data-artist="${esc(t.artist||'')}" data-album="${esc(t.album||'')}"
         data-cover="${esc(t.cover||'')}">TIDAL</button>
       ${t.artist_id
         ? `<button class="btn btn-radio radio-btn"
-             data-artist-id="${esc(t.artist_id)}"
-             data-artist="${esc(t.artist||'')}">↺ Radio</button>`
+               data-artist-id="${esc(t.artist_id)}"
+               data-artist="${esc(t.artist||'')}">↺ Radio</button>`
         : ''}
     </div>
   </div>`;
 }
 
-// ── Event delegation ──────────────────────────────────────────────────────
+// ── Tile click: toggle action overlay; close others ───────────────────────
+function tileClick(tile) {
+  const wasActive = tile.classList.contains('active');
+  document.querySelectorAll('.shelf-tile.active').forEach(t => t.classList.remove('active'));
+  if (!wasActive) tile.classList.add('active');
+}
+
 document.addEventListener('click', e => {
+  // Close active tile when clicking outside
+  if (!e.target.closest('.shelf-tile')) {
+    document.querySelectorAll('.shelf-tile.active').forEach(t => t.classList.remove('active'));
+  }
+
+  // Download button
   const dlBtn = e.target.closest('.dl-btn');
-  if (dlBtn) {
+  if (dlBtn && !dlBtn.classList.contains('btn-queued')) {
+    e.stopPropagation();
     queueDl(dlBtn, {
       title:  dlBtn.dataset.title,
       artist: dlBtn.dataset.artist,
@@ -316,41 +301,53 @@ document.addEventListener('click', e => {
     }, dlBtn.dataset.source);
     return;
   }
+
+  // Artist radio
   const radioBtn = e.target.closest('.radio-btn');
   if (radioBtn) {
+    e.stopPropagation();
     loadArtistRadio(radioBtn);
     return;
   }
 });
 
+// ── Artist radio ──────────────────────────────────────────────────────────
 function loadArtistRadio(btn) {
   const artistId = btn.dataset.artistId;
   const artistName = btn.dataset.artist;
-  const card = btn.closest('.track-card');
+  const tile = btn.closest('.shelf-tile');
+  const origText = btn.textContent;
   btn.textContent = '…';
   btn.disabled = true;
   fetch(`/api/discover/artist-radio/${artistId}`)
     .then(r => r.json())
     .then(tracks => {
-      btn.textContent = '↺ Radio';
+      btn.textContent = origText;
       btn.disabled = false;
-      let existing = card.nextElementSibling;
+      // Show radio results below the shelf
+      const shelf = tile ? tile.closest('.shelf') : null;
+      if (!shelf) return;
+      let existing = shelf.nextElementSibling;
       if (existing && existing.classList.contains('radio-results')) existing.remove();
       if (!tracks || !tracks.length) return;
       const div = document.createElement('div');
       div.className = 'radio-results';
-      div.innerHTML = `<div class="radio-label">↺ Similar to ${esc(artistName)}</div>` +
-        tracks.slice(0, 10).map(t => trackCardHtml(t)).join('');
-      card.insertAdjacentElement('afterend', div);
+      div.innerHTML = `<div class="radio-label">↺ Similar to ${esc(artistName)}</div>
+        <div class="disc-track-list">` +
+        tracks.slice(0, 10).map(t => trackCardHtml(t)).join('') +
+        `</div>`;
+      shelf.insertAdjacentElement('afterend', div);
+      document.querySelectorAll('.shelf-tile.active').forEach(t => t.classList.remove('active'));
     })
     .catch(() => {
-      btn.textContent = '↺ Radio';
+      btn.textContent = origText;
       btn.disabled = false;
     });
 }
 
 // ── Download ──────────────────────────────────────────────────────────────
 function queueDl(btn, item, source) {
+  const origText = btn.textContent;
   btn.textContent = '…';
   btn.disabled = true;
   fetch('/api/download', {
@@ -367,11 +364,11 @@ function queueDl(btn, item, source) {
     } else {
       btn.textContent = '✗';
       showToast('Error: ' + (d.error || 'Unknown'), 3500);
-      setTimeout(() => { btn.textContent = source === 'slskd' ? 'Soulseek' : 'TIDAL'; btn.disabled = false; }, 2000);
+      setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
     }
   })
   .catch(() => {
-    btn.textContent = source === 'slskd' ? 'Soulseek' : 'TIDAL';
+    btn.textContent = origText;
     btn.disabled = false;
     showToast('Network error', 3000);
   });
@@ -387,9 +384,10 @@ function esc(str) {
   return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-// ── Init: load genres and first section ───────────────────────────────────
-loadGenres();
+// ── Init ──────────────────────────────────────────────────────────────────
 loadCharts('');
+loadApple();
+loadListenBrainz();
 </script>
 
 {% endblock %}
