@@ -602,6 +602,7 @@ class DeezerProvider:
                     "type": "album",
                 }
                 for i in data.get("data", [])
+                if i.get("record_type", "album") != "single"
             ]
         except Exception:
             return []
@@ -639,6 +640,7 @@ class DeezerProvider:
                     "type": "album",
                 }
                 for a in albums_data.get("data", [])
+                if a.get("record_type", "album") != "single"
             ],
         }
 
