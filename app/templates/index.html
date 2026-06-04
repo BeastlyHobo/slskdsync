@@ -91,7 +91,20 @@
       <div class="track-sub track-error">{{ t.slskd_error[:120] }}{% if t.slskd_error|length > 120 %}…{% endif %}</div>
       {% endif %}
       {% if t.local_path and t.slskd_state == 'completed' %}
-      <div class="track-sub" style="color:#40cc70;margin-top:2px">✓ {{ t.local_path.split('/')[-1] }}</div>
+      <div class="track-sub" style="color:#40cc70;margin-top:2px">
+        ✓ {{ t.local_path.split('/')[-1] }}
+        {% if t.acoustid_score is not none %}
+          {% if t.acoustid_score < 0 %}
+            <span class="aid-badge aid-gray">ID ?</span>
+          {% elif t.acoustid_score < 0.5 %}
+            <span class="aid-badge aid-red">ID {{ (t.acoustid_score * 100) | int }}%</span>
+          {% elif t.acoustid_score < 0.8 %}
+            <span class="aid-badge aid-yellow">ID {{ (t.acoustid_score * 100) | int }}%</span>
+          {% else %}
+            <span class="aid-badge aid-green">ID {{ (t.acoustid_score * 100) | int }}%</span>
+          {% endif %}
+        {% endif %}
+      </div>
       {% endif %}
       <div class="track-detail">
         <div class="detail-row"><span class="detail-label">Source</span> {{ t.download_source or 'slskd' }}</div>
@@ -221,6 +234,14 @@
 .detail-row { font-size: .72rem; color: var(--text-muted); line-height: 1.6; word-break: break-all; }
 .detail-label { font-weight: 600; margin-right: .35rem; }
 .track-error { color: #e05050; margin-top: 3px; font-size: .75rem; }
+
+/* AcoustID confidence badges */
+.aid-badge { font-size:.62rem; font-weight:700; border-radius:var(--radius-pill);
+             padding:1px 6px; margin-left:.3rem; vertical-align:middle; }
+.aid-green  { background:#163020; color:#40cc70; }
+.aid-yellow { background:#2a2000; color:#e09020; }
+.aid-red    { background:#2a0a0a; color:#e05050; }
+.aid-gray   { background:var(--surface3); color:var(--text-muted); }
 
 /* needs_search inline panel */
 .needs-search-panel {
