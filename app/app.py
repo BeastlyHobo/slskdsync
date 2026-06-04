@@ -255,6 +255,12 @@ class TrackMeta:
     cover_url: str = ""
 
 
+_LIVE_RE = re.compile(r'\b(live|unplugged|in concert|acoustic)\b', re.IGNORECASE)
+
+def _is_live(text: str) -> bool:
+    return bool(_LIVE_RE.search(text or ""))
+
+
 # ---------------------------------------------------------------------------
 # Music source providers (URL import)
 # ---------------------------------------------------------------------------
@@ -596,6 +602,7 @@ class DeezerProvider:
                     "type": "album",
                 }
                 for i in data.get("data", [])
+                if i.get("record_type", "album") != "single"
             ]
         except Exception:
             return []
@@ -633,6 +640,7 @@ class DeezerProvider:
                     "type": "album",
                 }
                 for a in albums_data.get("data", [])
+                if a.get("record_type", "album") != "single"
             ],
         }
 
@@ -824,32 +832,72 @@ class ListenBrainzClient:
     BASE = "https://api.listenbrainz.org/1"
 
     def get_recommendations(self, username: str, limit: int = 25) -> list[dict]:
+        """Top recordings for the user this month (falls back to all-time)."""
+        if not username:
+            return []
+        try:
+            for range_ in ("month", "all_time"):
+                r = requests.get(
+                    f"{self.BASE}/stats/user/{username}/recordings",
+                    params={"count": limit, "range": range_},
+                    timeout=12,
+                )
+                if r.status_code == 200:
+                    break
+            else:
+                return []
+            recordings = (r.json().get("payload") or {}).get("recordings", [])
+            result = []
+            for rec in recordings:
+                result.append({
+                    "id": rec.get("recording_mbid", ""),
+                    "title": rec.get("recording_name", ""),
+                    "artist": rec.get("artist_name", ""),
+                    "album": rec.get("release_name", ""),
+                    "cover": "",
+                    "duration": 0,
+                    "type": "track",
+                })
+            return [item for item in result if item["title"] and item["artist"]]
+        except Exception:
+            return []
+
+    def get_recent_listens(self, username: str, limit: int = 30) -> list[dict]:
+        """Most recent scrobbles, deduplicated by (artist, title)."""
         if not username:
             return []
         try:
             r = requests.get(
-                f"{self.BASE}/cf/recommendation/user/{username}/recording",
+                f"{self.BASE}/user/{username}/listens",
                 params={"count": limit},
                 timeout=12,
             )
             if r.status_code != 200:
                 return []
-            payload = r.json()
-            recs = (payload.get("payload") or {}).get("mbids", [])
+            listens = (r.json().get("payload") or {}).get("listens", [])
+            seen: set[tuple[str, str]] = set()
             result = []
-            for rec in recs:
-                artist = rec.get("recording_mbid", "")
-                # LB CF endpoint returns mbids; artist/title from artist_credit_name/recording_name
+            for listen in listens:
+                meta = listen.get("track_metadata") or {}
+                title = meta.get("track_name", "")
+                artist = meta.get("artist_name", "")
+                album = meta.get("release_name", "") or (meta.get("mbid_mapping") or {}).get("release_name", "")
+                if not title or not artist:
+                    continue
+                key = (artist.lower(), title.lower())
+                if key in seen:
+                    continue
+                seen.add(key)
                 result.append({
-                    "id": rec.get("recording_mbid", ""),
-                    "title": rec.get("recording_name", "") or rec.get("track_metadata", {}).get("track_name", ""),
-                    "artist": rec.get("artist_credit_name", "") or rec.get("track_metadata", {}).get("artist_name", ""),
-                    "album": (rec.get("track_metadata") or {}).get("release_name", ""),
+                    "id": (meta.get("mbid_mapping") or {}).get("recording_mbid", ""),
+                    "title": title,
+                    "artist": artist,
+                    "album": album,
                     "cover": "",
                     "duration": 0,
                     "type": "track",
                 })
-            return [r for r in result if r["title"] and r["artist"]]
+            return result
         except Exception:
             return []
 
@@ -1200,6 +1248,14 @@ class SlskdClient:
             score -= 10
         elif queue_len > 5:
             score -= 5
+
+        # Live/studio preference — soft: penalise mismatch so correct type wins
+        want_live = _is_live(track.title) or _is_live(track.album)
+        has_live  = _is_live(basename_l)
+        if want_live and not has_live:
+            score -= 30   # wanted live, got studio
+        elif not want_live and has_live:
+            score -= 50   # wanted studio, got live (stronger — more jarring)
 
         return score
 
@@ -2566,13 +2622,14 @@ def api_playlist_diff(job_id):
         conn.close()
         return jsonify({"ok": False, "error": str(ex)}), 500
 
-    # Existing tracks for this job (normalised key)
-    existing = conn.execute(
-        "SELECT lower(trim(artist)) AS a, lower(trim(title)) AS t FROM tracks WHERE job_id=?",
-        (job_id,),
-    ).fetchall()
+    # All known tracks across every job — so tracks downloaded via any playlist
+    # are not reported as "new" here.
+    existing = conn.execute("SELECT artist, title FROM tracks").fetchall()
     conn.close()
-    existing_set = {(r["a"], r["t"]) for r in existing}
+    existing_set = {(
+        (r["artist"] or "").lower().strip(),
+        (r["title"] or "").lower().strip(),
+    ) for r in existing}
 
     new_tracks = []
     for t in source_tracks:
@@ -2853,6 +2910,14 @@ def api_discover_listenbrainz():
     if not username:
         return jsonify({"error": "ListenBrainz username not configured"}), 400
     return jsonify(_listenbrainz_client.get_recommendations(username, limit=25))
+
+
+@app.route("/api/discover/listenbrainz/history")
+def api_discover_lb_history():
+    username = get_setting("listenbrainz_username").strip()
+    if not username:
+        return jsonify({"error": "ListenBrainz username not configured"}), 400
+    return jsonify(_listenbrainz_client.get_recent_listens(username, limit=30))
 
 
 @app.route("/api/tracks/<int:track_id>", methods=["DELETE"])

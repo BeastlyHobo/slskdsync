@@ -88,9 +88,21 @@
   <div class="shelf">
     <div class="shelf-hdr">
       <span class="shelf-hdr-title">For You</span>
+      <span class="shelf-hdr-sub">Your top tracks this month</span>
     </div>
     <div class="disc-track-list" id="lb-area">
-      <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading recommendations…</div>
+      <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── Listening History (ListenBrainz) ───────────────── -->
+  <div class="shelf">
+    <div class="shelf-hdr">
+      <span class="shelf-hdr-title">Listening History</span>
+      <span class="shelf-hdr-sub">Recently scrobbled</span>
+    </div>
+    <div class="disc-track-list" id="lb-history-area">
+      <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
     </div>
   </div>
   {% endif %}
@@ -185,6 +197,22 @@ function loadListenBrainz() {
       renderTrackList(area, items);
     })
     .catch(() => { area.innerHTML = '<div class="disc-empty">Failed to load recommendations.</div>'; });
+}
+
+function loadLbHistory() {
+  const area = document.getElementById('lb-history-area');
+  if (!area) return;
+  area.innerHTML = '<div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>';
+  fetch('/api/discover/listenbrainz/history')
+    .then(r => r.json())
+    .then(items => {
+      if (items.error) {
+        area.innerHTML = `<div class="disc-empty">${esc(items.error)}</div>`;
+        return;
+      }
+      renderTrackList(area, items);
+    })
+    .catch(() => { area.innerHTML = '<div class="disc-empty">Failed to load history.</div>'; });
 }
 
 // ── Render: horizontal shelf of tiles ────────────────────────────────────
@@ -388,6 +416,7 @@ function esc(str) {
 loadCharts('');
 loadApple();
 loadListenBrainz();
+loadLbHistory();
 </script>
 
 {% endblock %}
