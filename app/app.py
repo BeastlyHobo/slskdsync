@@ -255,6 +255,12 @@ class TrackMeta:
     cover_url: str = ""
 
 
+_LIVE_RE = re.compile(r'\b(live|unplugged|in concert|acoustic)\b', re.IGNORECASE)
+
+def _is_live(text: str) -> bool:
+    return bool(_LIVE_RE.search(text or ""))
+
+
 # ---------------------------------------------------------------------------
 # Music source providers (URL import)
 # ---------------------------------------------------------------------------
@@ -1200,6 +1206,14 @@ class SlskdClient:
             score -= 10
         elif queue_len > 5:
             score -= 5
+
+        # Live/studio preference — soft: penalise mismatch so correct type wins
+        want_live = _is_live(track.title) or _is_live(track.album)
+        has_live  = _is_live(basename_l)
+        if want_live and not has_live:
+            score -= 30   # wanted live, got studio
+        elif not want_live and has_live:
+            score -= 50   # wanted studio, got live (stronger — more jarring)
 
         return score
 
