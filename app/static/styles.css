@@ -613,6 +613,7 @@ main {
 }
 .shelf-hdr-title { font-size: var(--fs-title); font-weight: 800; letter-spacing: -.01em; }
 .shelf-hdr-link  { font-size: var(--fs-caption); color: var(--accent); font-weight: 600; cursor: pointer; }
+.shelf-hdr-sub   { font-size: var(--fs-caption); color: var(--text-muted); }
 
 .shelf-scroll {
   display: flex;
