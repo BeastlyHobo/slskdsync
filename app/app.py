@@ -145,6 +145,7 @@ def init_db():
         ("custom_search", "TEXT DEFAULT NULL"),
         ("slskd_download_user", "TEXT DEFAULT NULL"),
         ("slskd_download_filename", "TEXT DEFAULT NULL"),
+        ("acoustid_score", "REAL DEFAULT NULL"),
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
@@ -900,6 +901,44 @@ class ListenBrainzClient:
             return result
         except Exception:
             return []
+
+
+# ---------------------------------------------------------------------------
+# AcoustID audio fingerprint verification
+# ---------------------------------------------------------------------------
+
+def _acoustid_norm(s: str) -> str:
+    return re.sub(r'[^a-z0-9]', '', (s or "").lower())
+
+
+class AcoustIDClient:
+    def verify(self, path: Path, artist: str, title: str) -> float | None:
+        """
+        Returns:
+          None   — key not configured, or fingerprinting failed (don't store)
+          -1.0   — fingerprinted but recording not found in AcoustID DB
+          0.0    — identified but metadata doesn't match (wrong track)
+          0–1.0  — AcoustID confidence score for a matching recording
+        """
+        api_key = get_setting("acoustid_api_key").strip()
+        if not api_key:
+            return None
+        try:
+            import acoustid
+            na, nt = _acoustid_norm(artist), _acoustid_norm(title)
+            results = list(acoustid.match(api_key, str(path), meta="recordings", parse=True))
+            if not results:
+                return -1.0
+            for score, _rid, rec_title, rec_artist in results:
+                nrt = _acoustid_norm(rec_title or "")
+                nra = _acoustid_norm(rec_artist or "")
+                title_ok = nt and nrt and (nt in nrt or nrt in nt)
+                artist_ok = not na or not nra or (na in nra or nra in na)
+                if title_ok and artist_ok:
+                    return float(score)
+            return 0.0  # fingerprinted but wrong track
+        except Exception:
+            return None
 
 
 # ---------------------------------------------------------------------------
@@ -2306,10 +2345,11 @@ def _worker_tick():
                                                    force_overwrite=bool(t["force_overwrite"]))
                 logger.info(f"[slskd] Organized to: {result}")
                 tag_file(Path(result), t)
+                aid_score = _acoustid.verify(Path(result), t["artist"] or "", t["title"] or "")
                 conn.execute(
-                    "UPDATE tracks SET slskd_state='completed', local_path=?,"
+                    "UPDATE tracks SET slskd_state='completed', local_path=?, acoustid_score=?,"
                     " slskd_download_user=NULL, slskd_download_filename=NULL WHERE id=?",
-                    (result, t["id"]))
+                    (result, aid_score, t["id"]))
                 conn.commit()
                 job = conn.execute("SELECT playlist_name FROM import_jobs WHERE id=?",
                                    (t["job_id"],)).fetchone()
@@ -2382,7 +2422,11 @@ def _worker_tick():
             logger.info(f"[monochrome] Completed: {final}")
             if Path(final).exists():
                 tag_file(Path(final), t)
-            conn.execute("UPDATE tracks SET slskd_state='completed', local_path=? WHERE id=?", (final, t["id"]))
+                aid_score = _acoustid.verify(Path(final), t["artist"] or "", t["title"] or "")
+            else:
+                aid_score = None
+            conn.execute("UPDATE tracks SET slskd_state='completed', local_path=?, acoustid_score=? WHERE id=?",
+                         (final, aid_score, t["id"]))
         else:
             logger.warning(f"[monochrome] All instances failed for '{t['title']}': {result}")
             # Fall back to slskd
@@ -2430,6 +2474,7 @@ _providers = [SpotifyProvider(), AppleProvider(), TidalProvider()]
 _deezer = DeezerProvider()
 _apple_music_client = AppleMusicClient()
 _listenbrainz_client = ListenBrainzClient()
+_acoustid = AcoustIDClient()
 
 
 def is_authed() -> bool:
@@ -2804,6 +2849,7 @@ def settings():
         "navidrome_url", "navidrome_user", "navidrome_pass",
         "apple_team_id", "apple_key_id", "apple_private_key",
         "listenbrainz_username",
+        "acoustid_api_key",
         "quality", "replace_existing",
         "library_scan_interval",
         "app_username", "app_password_hash",

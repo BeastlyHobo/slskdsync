@@ -163,6 +163,24 @@
   </div>
 
   <div class="settings-group">
+    <div class="settings-group-title">
+      AcoustID <span class="optional-label">(optional — audio fingerprint verification)</span>
+    </div>
+    <p class="hint">
+      Register your app at <a href="https://acoustid.biz/applications" target="_blank">acoustid.biz/applications</a>
+      to get a free API key. Requires the <code>fpcalc</code> binary (Chromaprint) in your Docker image —
+      it is included when using the provided Dockerfile.
+      After each download completes the audio fingerprint is checked against AcoustID and a
+      green / yellow / red confidence indicator appears on the track in the Queue tab.
+    </p>
+    <div class="field">
+      <label>AcoustID API key</label>
+      <input name="acoustid_api_key" value="{{ settings.acoustid_api_key }}"
+             placeholder="your-acoustid-api-key" autocomplete="off">
+    </div>
+  </div>
+
+  <div class="settings-group">
     <div class="settings-group-title">Login</div>
     <div class="field">
       <label>Username</label>
