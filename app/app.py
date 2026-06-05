@@ -3202,7 +3202,7 @@ def api_queue_status():
     """Lightweight polling endpoint — returns only what changes between refreshes."""
     conn = get_conn()
     rows = conn.execute(
-        "SELECT id, slskd_state, slskd_error FROM tracks ORDER BY id DESC LIMIT 100"
+        "SELECT id, slskd_state, slskd_error, acoustid_score FROM tracks ORDER BY id DESC LIMIT 100"
     ).fetchall()
     conn.close()
     stats = {"total": 0, "pending": 0, "downloading": 0, "completed": 0,
@@ -3218,7 +3218,8 @@ def api_queue_status():
         elif s in stats:
             stats[s] += 1
         tracks.append({"id": r["id"], "state": s,
-                        "error": (r["slskd_error"] or "")[:80]})
+                        "error": (r["slskd_error"] or "")[:80],
+                        "acoustid_score": r["acoustid_score"]})
     return jsonify({"stats": stats, "tracks": tracks})
 
 
