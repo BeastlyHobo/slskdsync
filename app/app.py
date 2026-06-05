@@ -45,7 +45,7 @@ logging.getLogger().addHandler(_buf_handler)
 
 # Silence Werkzeug access-log spam for the high-frequency polling endpoints
 # (the Settings page hits these every couple of seconds).
-_QUIET_PATHS = ("/api/logs", "/api/queue/status", "/api/library/acoustid/status")
+_QUIET_PATHS = ("/api/logs", "/api/queue/status", "/api/library/acoustid/status", "/api/library/cover/")
 
 class _AccessLogFilter(logging.Filter):
     def filter(self, record):
@@ -2484,6 +2484,7 @@ _lib_acoustid_lock = threading.Lock()
 
 def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
     """Fingerprint-verify a batch of rows from library_index or tracks."""
+    logger.info(f"[AcoustID] starting verification for {len(ids)} tracks in {table}")
     with _lib_acoustid_lock:
         _lib_acoustid_state.update(in_progress=True, done=0, total=len(ids))
     for row_id in ids:
@@ -2492,7 +2493,18 @@ def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
             f"SELECT path, artist, title FROM {table} WHERE id=?", (row_id,)
         ).fetchone()
         conn.close()
-        if not row or not row["path"] or not Path(row["path"]).exists():
+        if not row:
+            logger.warning(f"[AcoustID] {table} id={row_id}: row not found")
+            with _lib_acoustid_lock:
+                _lib_acoustid_state["done"] += 1
+            continue
+        if not row["path"]:
+            logger.warning(f"[AcoustID] {table} id={row_id}: no path stored")
+            with _lib_acoustid_lock:
+                _lib_acoustid_state["done"] += 1
+            continue
+        if not Path(row["path"]).exists():
+            logger.warning(f"[AcoustID] {table} id={row_id}: path not found on disk: {row['path']}")
             with _lib_acoustid_lock:
                 _lib_acoustid_state["done"] += 1
             continue
@@ -2506,6 +2518,7 @@ def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
             _lib_acoustid_state["done"] += 1
     with _lib_acoustid_lock:
         _lib_acoustid_state["in_progress"] = False
+    logger.info(f"[AcoustID] verification complete for {len(ids)} tracks")
 
 app = Flask(__name__)
 app.secret_key = os.getenv("APP_SECRET", "change-me")
