@@ -45,7 +45,7 @@ logging.getLogger().addHandler(_buf_handler)
 
 # Silence Werkzeug access-log spam for the high-frequency polling endpoints
 # (the Settings page hits these every couple of seconds).
-_QUIET_PATHS = ("/api/logs", "/api/queue/status")
+_QUIET_PATHS = ("/api/logs", "/api/queue/status", "/api/library/acoustid/status")
 
 class _AccessLogFilter(logging.Filter):
     def filter(self, record):
@@ -166,6 +166,7 @@ def init_db():
         ("path", "TEXT"),
         ("user_rating", "INTEGER DEFAULT NULL"),
         ("cover_art_id", "TEXT DEFAULT NULL"),
+        ("acoustid_score", "REAL DEFAULT NULL"),
     ]:
         if col not in existing_lib_cols:
             cur.execute(f"ALTER TABLE library_index ADD COLUMN {col} {ddl}")
@@ -2477,6 +2478,35 @@ def _worker_tick():
 _scan_state: dict = {"in_progress": False, "count": 0, "source": "", "last_at": ""}
 _scan_state_lock = threading.Lock()
 
+_lib_acoustid_state: dict = {"in_progress": False, "done": 0, "total": 0}
+_lib_acoustid_lock = threading.Lock()
+
+
+def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
+    """Fingerprint-verify a batch of rows from library_index or tracks."""
+    with _lib_acoustid_lock:
+        _lib_acoustid_state.update(in_progress=True, done=0, total=len(ids))
+    for row_id in ids:
+        conn = get_conn()
+        row = conn.execute(
+            f"SELECT path, artist, title FROM {table} WHERE id=?", (row_id,)
+        ).fetchone()
+        conn.close()
+        if not row or not row["path"] or not Path(row["path"]).exists():
+            with _lib_acoustid_lock:
+                _lib_acoustid_state["done"] += 1
+            continue
+        score = _acoustid.verify(Path(row["path"]), row["artist"] or "", row["title"] or "")
+        if score is not None:
+            conn = get_conn()
+            conn.execute(f"UPDATE {table} SET acoustid_score=? WHERE id=?", (score, row_id))
+            conn.commit()
+            conn.close()
+        with _lib_acoustid_lock:
+            _lib_acoustid_state["done"] += 1
+    with _lib_acoustid_lock:
+        _lib_acoustid_state["in_progress"] = False
+
 app = Flask(__name__)
 app.secret_key = os.getenv("APP_SECRET", "change-me")
 app.permanent_session_lifetime = timedelta(days=30)
@@ -2785,8 +2815,18 @@ def library():
     music_path_str = str(get_setting("library_path") or "/music")
     conn = get_conn()
     lib_rows = conn.execute(
-        "SELECT artist, title, album, path, user_rating, cover_art_id FROM library_index"
+        "SELECT id, artist, title, album, path, user_rating, cover_art_id, acoustid_score"
+        " FROM library_index"
     ).fetchall()
+    playlist_rows = conn.execute("""
+        SELECT j.id, j.playlist_name, j.source, j.source_url, j.created_at,
+               COUNT(t.id) AS total,
+               SUM(CASE WHEN t.slskd_state='completed' THEN 1 ELSE 0 END) AS done
+        FROM import_jobs j
+        LEFT JOIN tracks t ON t.job_id = j.id
+        WHERE j.source_url != ''
+        GROUP BY j.id ORDER BY j.created_at DESC
+    """).fetchall()
     conn.close()
 
     needs_scan = False
@@ -2796,6 +2836,7 @@ def library():
             p = r["path"] or ""
             ext = Path(p).suffix[1:].upper() if p else ""
             tracks.append({
+                "id":          r["id"],
                 "artist":      r["artist"] or "",
                 "album":       r["album"] or "",
                 "title":       r["title"] or "",
@@ -2804,6 +2845,7 @@ def library():
                 "path":        p,
                 "user_rating": r["user_rating"],
                 "cover_url":   f"/api/library/cover/{r['cover_art_id']}" if r["cover_art_id"] else "",
+                "acoustid_score": r["acoustid_score"],
             })
     else:
         needs_scan = True
@@ -2820,6 +2862,7 @@ def library():
                 title  = num_re.sub("", f.stem)
                 size_mb = round(f.stat().st_size / 1_048_576, 1)
                 tracks.append({
+                    "id":          None,
                     "artist":      artist,
                     "album":       album,
                     "title":       title,
@@ -2828,9 +2871,11 @@ def library():
                     "path":        str(f),
                     "user_rating": None,
                     "cover_url":   "",
+                    "acoustid_score": None,
                 })
-    return render_template("library.html", tracks=tracks, music_path=music_path_str,
-                           needs_scan=needs_scan, title="Library")
+    playlists = [dict(r) for r in playlist_rows]
+    return render_template("library.html", tracks=tracks, playlists=playlists,
+                           music_path=music_path_str, needs_scan=needs_scan, title="Library")
 
 
 @app.route("/api/library/cover/<path:cover_art_id>")
@@ -3064,6 +3109,66 @@ def api_library_index():
         {"a": (r["artist"] or "").lower().strip(), "t": (r["title"] or "").lower().strip()}
         for r in rows
     ])
+
+
+@app.route("/api/library/acoustid", methods=["POST"])
+def api_library_acoustid():
+    with _lib_acoustid_lock:
+        if _lib_acoustid_state["in_progress"]:
+            return jsonify({"error": "already running"}), 409
+    data = request.get_json() or {}
+    scope = data.get("scope", "all")
+    conn = get_conn()
+    table = "library_index"
+    if scope == "track":
+        ids = [data["id"]]
+    elif scope == "album":
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM library_index WHERE artist=? AND album=?",
+            (data.get("artist"), data.get("album"))).fetchall()]
+    elif scope == "artist":
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM library_index WHERE artist=?",
+            (data.get("artist"),)).fetchall()]
+    elif scope == "playlist":
+        table = "tracks"
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM tracks WHERE job_id=? AND slskd_state='completed' AND local_path IS NOT NULL",
+            (data.get("job_id"),)).fetchall()]
+    else:
+        ids = [r["id"] for r in conn.execute("SELECT id FROM library_index").fetchall()]
+    conn.close()
+    if not ids:
+        return jsonify({"error": "no tracks matched"}), 404
+    threading.Thread(target=_run_lib_acoustid, args=(ids, table), daemon=True).start()
+    return jsonify({"ok": True, "total": len(ids)})
+
+
+@app.route("/api/library/acoustid/status")
+def api_library_acoustid_status():
+    with _lib_acoustid_lock:
+        return jsonify(dict(_lib_acoustid_state))
+
+
+@app.route("/api/library/acoustid/scores")
+def api_library_acoustid_scores():
+    """Return updated acoustid_score for all library_index rows — polled after a verify run."""
+    conn = get_conn()
+    rows = conn.execute("SELECT id, acoustid_score FROM library_index").fetchall()
+    conn.close()
+    return jsonify({r["id"]: r["acoustid_score"] for r in rows})
+
+
+@app.route("/api/library/playlist/<int:job_id>")
+def api_library_playlist(job_id):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, artist, title, album, track_number, cover_url, acoustid_score, local_path"
+        " FROM tracks WHERE job_id=? AND slskd_state='completed' ORDER BY track_number, id",
+        (job_id,)
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
 
 
 @app.route("/api/library/redownload", methods=["POST"])
