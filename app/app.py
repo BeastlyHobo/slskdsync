@@ -938,7 +938,7 @@ class AcoustIDClient:
         try:
             import acoustid
             na, nt = _acoustid_norm(artist), _acoustid_norm(title)
-            results = list(acoustid.match(api_key, str(path), meta="recordings", parse=True))
+            results = list(acoustid.match(api_key, str(path), meta="recordings", parse=True, force_fpcalc=True))
             if not results:
                 logger.info(f"[AcoustID] {tag} → not in database")
                 return -1.0
