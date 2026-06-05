@@ -139,6 +139,12 @@
   {% endif %}
   <button class="swipe-retry-btn" onclick="retryTrack({{ t.id }},this)">↻ Retry</button>
   <button class="swipe-del-btn" onclick="deleteTrack(this)">Delete</button>
+  <div class="row-actions">
+    {% if t.slskd_state != 'completed' %}
+    <button class="row-act row-retry" title="Retry" onclick="event.stopPropagation();retryTrack({{ t.id }},this)">↻</button>
+    {% endif %}
+    <button class="row-act row-del" title="Delete" onclick="event.stopPropagation();deleteTrack(this)">✕</button>
+  </div>
 </div>
 {% endmacro %}
 
@@ -212,10 +218,30 @@
 .swipe-row.swiped-left  .swipe-del-btn { transform: translateX(0); }
 .swipe-row.swiped-right .track-card { transform: translateX(76px); }
 .swipe-row.swiped-right .swipe-retry-btn { transform: translateX(0); }
-/* Reveal delete on hover for mouse users */
+/* Mouse users can't swipe — show inline action buttons on hover instead */
+.row-actions { display: none; }
+.row-act {
+  width: 30px; height: 30px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--surface);
+  cursor: pointer; font-size: .85rem; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: all .15s;
+}
+.row-retry { color: #40cc70; }
+.row-retry:hover { border-color: #40cc70; background: var(--surface2); }
+.row-del { color: #e05050; }
+.row-del:hover { border-color: #e05050; background: var(--surface2); }
 @media (hover: hover) {
-  .swipe-row:hover .swipe-del-btn { transform: translateX(0); }
-  .swipe-row:hover .track-card { transform: translateX(-76px); }
+  .row-actions {
+    display: flex; gap: .3rem;
+    position: absolute; right: .5rem; top: 50%;
+    transform: translateY(-50%);
+    opacity: 0; pointer-events: none;
+    transition: opacity .15s; z-index: 3;
+  }
+  .swipe-row:hover .row-actions { opacity: 1; pointer-events: auto; }
+  /* When expanded, the detail panel already has Retry/Delete buttons */
+  .swipe-row:has(.track-card.expanded) .row-actions { display: none; }
 }
 
 /* Retry button inside expanded card detail panel */
