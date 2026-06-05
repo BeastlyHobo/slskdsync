@@ -934,11 +934,13 @@ class AcoustIDClient:
         api_key = get_setting("acoustid_api_key").strip()
         if not api_key:
             return None
+        tag = f'"{title}" by {artist}'
         try:
             import acoustid
             na, nt = _acoustid_norm(artist), _acoustid_norm(title)
             results = list(acoustid.match(api_key, str(path), meta="recordings", parse=True))
             if not results:
+                logger.info(f"[AcoustID] {tag} → not in database")
                 return -1.0
             for score, _rid, rec_title, rec_artist in results:
                 nrt = _acoustid_norm(rec_title or "")
@@ -946,9 +948,13 @@ class AcoustIDClient:
                 title_ok = nt and nrt and (nt in nrt or nrt in nt)
                 artist_ok = not na or not nra or (na in nra or nra in na)
                 if title_ok and artist_ok:
+                    logger.info(f"[AcoustID] {tag} → {score:.0%} match")
                     return float(score)
-            return 0.0  # fingerprinted but wrong track
-        except Exception:
+            best_score, _, best_title, best_artist = results[0]
+            logger.warning(f"[AcoustID] {tag} → wrong track ({best_score:.0%} match for \"{best_title}\" by {best_artist})")
+            return 0.0
+        except Exception as exc:
+            logger.warning(f"[AcoustID] {tag} → fingerprint failed: {exc}")
             return None
 
 

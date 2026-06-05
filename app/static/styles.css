@@ -716,3 +716,11 @@ main {
   main { padding: 1.25rem 1rem; }
   .bottom-nav { max-width: 640px; left: 50%; transform: translateX(-50%); border-radius: var(--radius) var(--radius) 0 0; border: 1px solid var(--border); border-bottom: none; }
 }
+
+/* Show a thin scrollbar on desktop so users see the shelves are scrollable */
+@media (hover: hover) {
+  .shelf-scroll { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  .shelf-scroll::-webkit-scrollbar { display: block; height: 4px; }
+  .shelf-scroll::-webkit-scrollbar-track { background: transparent; }
+  .shelf-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+}
