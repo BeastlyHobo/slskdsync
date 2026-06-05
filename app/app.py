@@ -43,6 +43,17 @@ _buf_handler = _BufferHandler()
 _buf_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
 logging.getLogger().addHandler(_buf_handler)
 
+# Silence Werkzeug access-log spam for the high-frequency polling endpoints
+# (the Settings page hits these every couple of seconds).
+_QUIET_PATHS = ("/api/logs", "/api/queue/status")
+
+class _AccessLogFilter(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        return not any(p in msg for p in _QUIET_PATHS)
+
+logging.getLogger("werkzeug").addFilter(_AccessLogFilter())
+
 import requests
 import jwt as pyjwt
 from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory, Response, stream_with_context
@@ -3202,7 +3213,7 @@ def api_queue_status():
     """Lightweight polling endpoint — returns only what changes between refreshes."""
     conn = get_conn()
     rows = conn.execute(
-        "SELECT id, slskd_state, slskd_error FROM tracks ORDER BY id DESC LIMIT 100"
+        "SELECT id, slskd_state, slskd_error, acoustid_score FROM tracks ORDER BY id DESC LIMIT 100"
     ).fetchall()
     conn.close()
     stats = {"total": 0, "pending": 0, "downloading": 0, "completed": 0,
@@ -3218,7 +3229,8 @@ def api_queue_status():
         elif s in stats:
             stats[s] += 1
         tracks.append({"id": r["id"], "state": s,
-                        "error": (r["slskd_error"] or "")[:80]})
+                        "error": (r["slskd_error"] or "")[:80],
+                        "acoustid_score": r["acoustid_score"]})
     return jsonify({"stats": stats, "tracks": tracks})
 
 

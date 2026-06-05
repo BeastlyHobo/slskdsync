@@ -442,6 +442,19 @@ function submitSearch(input, trackId) {
         // If track count changed, do one full reload to render new rows
         if (d.stats.total !== knownCount) { location.reload(); return; }
 
+        // If any track just completed, reload so the server renders the
+        // filename row and AcoustID badge (those are Jinja-only).
+        let needsReload = false;
+        d.tracks.forEach(t => {
+          const row = document.querySelector(`.swipe-row[data-id="${t.id}"]`);
+          if (!row) return;
+          const badge = row.querySelector('.badge');
+          if (badge && t.state === 'completed' && !badge.classList.contains('badge-completed')) {
+            needsReload = true;
+          }
+        });
+        if (needsReload) { location.reload(); return; }
+
         // Update each track row in-place
         d.tracks.forEach(t => {
           const row = document.querySelector(`.swipe-row[data-id="${t.id}"]`);
