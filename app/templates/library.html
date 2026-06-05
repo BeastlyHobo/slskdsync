@@ -548,10 +548,17 @@ function renderPlaylistTracks() {
 // Stack so we can go back through multi-level drill
 const navStack = [];
 
+function saveNav() {
+  try {
+    sessionStorage.setItem('lib_state', JSON.stringify({view, ctx, stack: navStack}));
+  } catch(e) {}
+}
+
 function navTo(newView, newCtx={}) {
   navStack.push({view, ctx: Object.assign({},ctx)});
   view = newView;
   ctx  = Object.assign({}, newCtx);
+  saveNav();
   render();
 }
 
@@ -560,12 +567,12 @@ function goBack() {
     const prev = navStack.pop();
     view = prev.view;
     ctx  = prev.ctx;
-    render();
   } else {
     view = 'home'; ctx = {};
     navStack.length = 0;
-    render();
   }
+  saveNav();
+  render();
 }
 
 function setNav(showBack, backLabel, title) {
@@ -626,6 +633,16 @@ function redownload(btn,artist,album,title) {
     setTimeout(()=>{btn.disabled=false;btn.textContent='↺';},3000);
   }).catch(()=>{btn.disabled=false;btn.textContent='↺';});
 }
+
+// Restore last navigation state from this session (e.g. after switching tabs)
+try {
+  const saved = JSON.parse(sessionStorage.getItem('lib_state') || 'null');
+  if (saved && saved.view && saved.view !== 'home') {
+    view = saved.view;
+    ctx  = saved.ctx || {};
+    if (Array.isArray(saved.stack)) navStack.push(...saved.stack);
+  }
+} catch(e) {}
 
 render();
 </script>
