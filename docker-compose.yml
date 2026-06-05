@@ -10,5 +10,5 @@ services:
     volumes:
       - ./app/data:/app/app/data
       - ./downloads:/downloads
-      - ./library:/music
+      - /mnt/media/Plex/music:/music
     restart: unless-stopped
