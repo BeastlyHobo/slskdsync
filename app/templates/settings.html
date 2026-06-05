@@ -248,6 +248,15 @@
 }
 .hint a { color: var(--accent); }
 .optional-label { font-size: .7rem; color: var(--text-muted); font-weight: 400; }
+
+/* Live log viewer — colour-coded per level */
+.log-line { white-space: pre-wrap; word-break: break-all; }
+.log-info     { color: var(--text-muted); }
+.log-debug    { color: #6b7280; }
+.log-warning  { color: #e09020; }
+.log-error    { color: #e05050; }
+.log-critical { color: #ff5c5c; font-weight: 700; }
+.log-empty    { color: var(--text-muted); font-style: italic; }
 </style>
 
 <script>
@@ -318,13 +327,31 @@ function toggleLogViewer() {
   }
 }
 
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+}
+
+function logClass(line) {
+  const m = line.match(/\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]/);
+  return m ? 'log-' + m[1].toLowerCase() : 'log-info';
+}
+
 function fetchLogs() {
   fetch('/api/logs')
     .then(r => r.json())
     .then(d => {
       const el = document.getElementById('log-lines');
-      el.textContent = d.lines.join('\n') || '(no log entries yet)';
-      el.scrollTop = el.scrollHeight;
+      // Only stick to the bottom if the user is already there — otherwise
+      // preserve their scroll position so they can read older lines.
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      if (!d.lines.length) {
+        el.innerHTML = '<span class="log-empty">(no log entries yet)</span>';
+        return;
+      }
+      el.innerHTML = d.lines.map(line =>
+        `<div class="log-line ${logClass(line)}">${escapeHtml(line)}</div>`
+      ).join('');
+      if (atBottom) el.scrollTop = el.scrollHeight;
     })
     .catch(() => {});
 }
