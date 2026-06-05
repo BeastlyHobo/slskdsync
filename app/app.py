@@ -3400,11 +3400,12 @@ def api_download_album():
     source = data.get("source", "slskd")
     if not tracks:
         return jsonify({"ok": False, "error": "no tracks"}), 400
+    album_name = (data.get("album_name") or (tracks[0].get("album") if tracks else "") or "").strip() or None
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
-        ("search", "album", "", 0, "queued"),
+        "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status,playlist_name) VALUES(?,?,?,?,?,?)",
+        ("search", "album", "", 0, "queued", album_name),
     )
     job_id = cur.lastrowid
     count = 0
