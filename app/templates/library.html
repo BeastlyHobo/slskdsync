@@ -12,41 +12,40 @@
 </div>
 {% endif %}
 
-<!-- Search + AcoustID filter -->
-<div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;flex-wrap:wrap">
-  <input id="lib-search" type="search" placeholder="Search…" oninput="applyFilters()"
-    style="flex:1;min-width:140px;padding:.45rem .75rem;border-radius:var(--radius-pill);
+<!-- Top bar: back button (hidden on home) + search -->
+<div id="top-bar" style="margin-bottom:.6rem">
+  <div id="back-row" style="display:none;align-items:center;gap:.5rem;margin-bottom:.45rem">
+    <button onclick="goBack()" id="back-btn"
+      style="background:none;border:none;color:var(--accent);font-size:.88rem;font-weight:600;
+             cursor:pointer;padding:.2rem 0;display:flex;align-items:center;gap:.3rem">
+      ‹ <span id="back-label">Library</span>
+    </button>
+    <span id="view-title" style="font-size:.88rem;font-weight:700;flex:1;text-align:center;margin-right:2rem"></span>
+  </div>
+  <input id="lib-search" type="search" placeholder="Search library…" oninput="applyFilters()"
+    style="width:100%;box-sizing:border-box;padding:.5rem .9rem;border-radius:var(--radius-pill);
            border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:.85rem">
-  <div id="aid-filter-chips" style="display:flex;gap:.3rem;flex-wrap:wrap">
-    <button class="af-chip active" data-aid="all"       onclick="setAidFilter('all',this)">All</button>
-    <button class="af-chip"        data-aid="matched"   onclick="setAidFilter('matched',this)">✓ ≥80%</button>
-    <button class="af-chip"        data-aid="uncertain" onclick="setAidFilter('uncertain',this)">~ 50–79%</button>
-    <button class="af-chip"        data-aid="mismatch"  onclick="setAidFilter('mismatch',this)">✗ &lt;50%</button>
-    <button class="af-chip"        data-aid="unchecked" onclick="setAidFilter('unchecked',this)">? Not checked</button>
-  </div>
 </div>
 
-<!-- Tab bar -->
-<div class="lib-tab-bar">
-  <button class="lib-tab active" onclick="switchTab('songs',this)">Songs</button>
-  <button class="lib-tab" onclick="switchTab('artists',this)">Artists</button>
-  <button class="lib-tab" onclick="switchTab('albums',this)">Albums</button>
-  <button class="lib-tab" onclick="switchTab('playlists',this)">Playlists</button>
+<!-- AcoustID filter chips (shown only on track views) -->
+<div id="aid-filter-row" style="display:none;gap:.3rem;flex-wrap:wrap;margin-bottom:.5rem">
+  <button class="af-chip active" onclick="setAidFilter('all',this)">All</button>
+  <button class="af-chip" onclick="setAidFilter('matched',this)">✓ ≥80%</button>
+  <button class="af-chip" onclick="setAidFilter('uncertain',this)">~ 50–79%</button>
+  <button class="af-chip" onclick="setAidFilter('mismatch',this)">✗ &lt;50%</button>
+  <button class="af-chip" onclick="setAidFilter('unchecked',this)">? Not checked</button>
 </div>
 
-<!-- Breadcrumb + verify-all button -->
-<div id="breadcrumb-row" style="display:none;align-items:center;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap">
-  <div id="breadcrumb" style="font-size:.8rem;color:var(--text-muted);flex:1"></div>
-  <button id="verify-view-btn" class="lib-action-btn" onclick="verifyCurrentView()">↻ Verify all in view</button>
-</div>
-
-<!-- Progress bar (shown while AcoustID running) -->
-<div id="aid-progress-wrap" style="display:none;margin-bottom:.6rem">
-  <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.2rem">
-    <span id="aid-progress-text">Identifying…</span>
-  </div>
-  <div style="height:4px;background:var(--surface2);border-radius:2px;overflow:hidden">
-    <div id="aid-progress-bar" style="height:100%;background:var(--accent);width:0%;transition:width .3s"></div>
+<!-- Verify-all + progress (shown during verification) -->
+<div id="verify-row" style="display:none;align-items:center;gap:.5rem;margin-bottom:.5rem">
+  <button id="verify-view-btn" class="lib-sm-btn" onclick="verifyCurrentView()">↻ Verify all in view</button>
+  <div id="aid-progress-wrap" style="flex:1;display:none">
+    <div style="font-size:.7rem;color:var(--text-muted);margin-bottom:.15rem">
+      <span id="aid-progress-text">Identifying…</span>
+    </div>
+    <div style="height:3px;background:var(--surface2);border-radius:2px;overflow:hidden">
+      <div id="aid-progress-bar" style="height:100%;background:var(--accent);width:0%;transition:width .3s"></div>
+    </div>
   </div>
 </div>
 
@@ -54,98 +53,128 @@
 <div id="lib-content"></div>
 
 <style>
-.lib-tab-bar { display:flex; gap:.3rem; margin-bottom:.65rem; }
-.lib-tab {
-  padding:.35rem .85rem; border-radius:var(--radius-pill); font-size:.78rem; font-weight:600;
-  border:1.5px solid var(--border); background:var(--surface); color:var(--text-muted); cursor:pointer;
-  transition:all .15s;
+/* ── Collection menu ──────────────────────────────── */
+.coll-section-title {
+  font-size:.7rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--text-muted); margin:.1rem 0 .5rem;
 }
-.lib-tab.active { background:var(--accent); border-color:var(--accent); color:#080810; }
-.af-chip {
-  padding:.25rem .65rem; border-radius:var(--radius-pill); font-size:.7rem; font-weight:600;
-  border:1.5px solid var(--border); background:var(--surface); color:var(--text-muted); cursor:pointer;
-  transition:all .12s;
+.coll-row {
+  display:flex; align-items:center; gap:.85rem;
+  padding:.75rem .5rem; border-bottom:1px solid var(--border);
+  cursor:pointer; transition:background .1s; border-radius:var(--radius-sm);
 }
-.af-chip.active { border-color:var(--accent); color:var(--accent); }
+.coll-row:hover { background:var(--surface2); }
+.coll-icon {
+  width:44px; height:44px; border-radius:11px; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center; font-size:1.3rem;
+}
+.coll-label { font-size:.95rem; font-weight:600; flex:1; }
+.coll-count { font-size:.73rem; color:var(--text-muted); margin-right:.3rem; }
+.coll-chevron { color:var(--text-muted); font-size:1rem; }
 
-/* Track rows */
-.lib-row {
-  display:flex; align-items:center; gap:.6rem;
-  background:var(--surface); border-radius:var(--radius-sm);
-  padding:.45rem .6rem; margin-bottom:.3rem;
-  border-left:3px solid transparent; transition:background .1s;
+/* ── Artist rows ─────────────────────────────────── */
+.az-wrap { display:flex; gap:0; align-items:flex-start; }
+.az-list  { flex:1; min-width:0; }
+.az-sidebar {
+  width:16px; flex-shrink:0; display:flex; flex-direction:column; align-items:center;
+  gap:1px; position:sticky; top:80px; align-self:flex-start; padding:2px 0;
 }
-.lib-row.flagged { border-left-color:#e05050; }
-.lib-row:hover { background:var(--surface2); }
-.lib-cover { width:36px; height:36px; border-radius:5px; object-fit:cover; flex-shrink:0; background:var(--surface2); }
-.lib-cover-ph { width:36px; height:36px; border-radius:5px; flex-shrink:0; background:var(--surface2);
-                display:flex; align-items:center; justify-content:center; font-size:.9rem; }
-.lib-row-info { flex:1; min-width:0; }
-.lib-row-title { font-size:.83rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.lib-row-sub { font-size:.7rem; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.lib-row-right { display:flex; align-items:center; gap:.35rem; flex-shrink:0; }
-.lib-ext { font-size:.58rem; font-weight:700; border-radius:3px; padding:1px 4px;
-           background:var(--surface3); color:var(--text-muted); }
-.lib-ext.lossless { background:#163020; color:#40cc70; }
-
-/* Artist rows */
+.az-letter {
+  font-size:.58rem; font-weight:700; color:var(--accent); cursor:pointer;
+  line-height:1.4; user-select:none; width:16px; text-align:center;
+}
+.az-letter:hover { opacity:.6; }
+.az-section-hdr {
+  font-size:.72rem; font-weight:800; color:var(--accent); letter-spacing:.04em;
+  padding:.45rem .5rem .2rem; position:sticky; top:52px; background:var(--bg); z-index:2;
+}
 .artist-row {
-  display:flex; align-items:center; gap:.7rem;
-  background:var(--surface); border-radius:var(--radius-sm);
-  padding:.55rem .7rem; margin-bottom:.3rem; cursor:pointer; transition:background .1s;
+  display:flex; align-items:center; gap:.75rem;
+  padding:.6rem .5rem; border-bottom:1px solid var(--border);
+  cursor:pointer; transition:background .1s;
 }
 .artist-row:hover { background:var(--surface2); }
-.artist-avatar { width:40px; height:40px; border-radius:50%; background:var(--surface3);
-                 display:flex; align-items:center; justify-content:center; font-size:1rem; flex-shrink:0; }
-.artist-name { font-size:.88rem; font-weight:700; }
-.artist-count { font-size:.72rem; color:var(--text-muted); }
+.artist-avatar {
+  width:52px; height:52px; border-radius:50%; background:var(--surface2);
+  display:flex; align-items:center; justify-content:center; font-size:1.1rem; flex-shrink:0;
+  object-fit:cover;
+}
+.artist-info { flex:1; min-width:0; }
+.artist-name { font-size:.9rem; font-weight:700; }
+.artist-sub  { font-size:.72rem; color:var(--text-muted); margin-top:1px; }
 
-/* Album cards */
-.album-grid-lib { display:grid; grid-template-columns:repeat(3,1fr); gap:.5rem; }
-@media(min-width:500px){ .album-grid-lib { grid-template-columns:repeat(4,1fr); } }
+/* ── Album grid ──────────────────────────────────── */
+.album-grid-lib { display:grid; grid-template-columns:repeat(2,1fr); gap:.6rem; }
+@media(min-width:400px){ .album-grid-lib { grid-template-columns:repeat(3,1fr); } }
+@media(min-width:600px){ .album-grid-lib { grid-template-columns:repeat(4,1fr); } }
 @media(min-width:700px){ .album-grid-lib { grid-template-columns:repeat(5,1fr); } }
 .album-card-lib {
   background:var(--surface); border-radius:var(--radius-sm); padding:.5rem;
   cursor:pointer; transition:all .12s; box-shadow:var(--shadow-sm);
 }
 .album-card-lib:hover { background:var(--surface2); transform:translateY(-1px); }
-.album-card-cover { width:100%; aspect-ratio:1; border-radius:5px; object-fit:cover;
-                    background:var(--surface2); display:block; margin-bottom:.3rem; }
-.album-card-cover-ph { width:100%; aspect-ratio:1; border-radius:5px; background:var(--surface2);
+.album-card-cover { width:100%; aspect-ratio:1; border-radius:6px; object-fit:cover;
+                    background:var(--surface2); display:block; margin-bottom:.35rem; }
+.album-card-cover-ph { width:100%; aspect-ratio:1; border-radius:6px; background:var(--surface2);
                        display:flex; align-items:center; justify-content:center;
-                       font-size:1.4rem; margin-bottom:.3rem; }
+                       font-size:1.6rem; margin-bottom:.35rem; }
 .album-card-title { font-size:.73rem; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .album-card-sub { font-size:.63rem; color:var(--text-muted); margin-top:1px;
                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.album-card-actions { display:flex; align-items:center; gap:.25rem; margin-top:.3rem; }
+.album-card-actions { display:flex; align-items:center; gap:.2rem; margin-top:.3rem; flex-wrap:wrap; }
 
-/* Playlist rows */
-.playlist-row {
-  display:flex; align-items:center; gap:.7rem;
+/* ── Track rows ──────────────────────────────────── */
+.lib-row {
+  display:flex; align-items:center; gap:.6rem;
   background:var(--surface); border-radius:var(--radius-sm);
-  padding:.55rem .7rem; margin-bottom:.3rem; cursor:pointer; transition:background .1s;
+  padding:.45rem .6rem; margin-bottom:.3rem;
+  border-left:3px solid transparent;
+}
+.lib-row.flagged { border-left-color:#e05050; }
+.lib-row:hover { background:var(--surface2); }
+.lib-cover { width:38px; height:38px; border-radius:5px; object-fit:cover; flex-shrink:0; background:var(--surface2); }
+.lib-cover-ph { width:38px; height:38px; border-radius:5px; flex-shrink:0; background:var(--surface2);
+                display:flex; align-items:center; justify-content:center; font-size:.95rem; }
+.lib-row-info { flex:1; min-width:0; }
+.lib-row-title { font-size:.83rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lib-row-sub   { font-size:.7rem; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lib-row-right { display:flex; align-items:center; gap:.3rem; flex-shrink:0; }
+.lib-ext { font-size:.58rem; font-weight:700; border-radius:3px; padding:1px 4px;
+           background:var(--surface3); color:var(--text-muted); }
+.lib-ext.lossless { background:#163020; color:#40cc70; }
+
+/* ── Playlist rows ───────────────────────────────── */
+.playlist-row {
+  display:flex; align-items:center; gap:.75rem;
+  padding:.65rem .5rem; border-bottom:1px solid var(--border);
+  cursor:pointer; transition:background .1s;
 }
 .playlist-row:hover { background:var(--surface2); }
-.playlist-icon { width:40px; height:40px; border-radius:var(--radius-sm); background:var(--surface3);
-                 display:flex; align-items:center; justify-content:center; font-size:1.1rem; flex-shrink:0; }
-.playlist-name { font-size:.86rem; font-weight:700; flex:1; min-width:0;
+.playlist-icon { width:46px; height:46px; border-radius:10px; flex-shrink:0;
+                 display:flex; align-items:center; justify-content:center; font-size:1.2rem; }
+.playlist-info { flex:1; min-width:0; }
+.playlist-name { font-size:.88rem; font-weight:700;
                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.playlist-sub  { font-size:.7rem; color:var(--text-muted); margin-top:1px; }
 
-/* Action buttons */
-.lib-action-btn {
-  padding:.25rem .65rem; border-radius:var(--radius-pill); font-size:.7rem; font-weight:600;
-  border:1px solid var(--border); background:var(--surface); color:var(--text-muted); cursor:pointer;
-  transition:all .15s; white-space:nowrap;
+/* ── Shared ──────────────────────────────────────── */
+.lib-sm-btn {
+  padding:.22rem .6rem; border-radius:var(--radius-pill); font-size:.68rem; font-weight:600;
+  border:1px solid var(--border); background:var(--surface); color:var(--text-muted);
+  cursor:pointer; transition:all .15s; white-space:nowrap;
 }
-.lib-action-btn:hover { border-color:var(--accent); color:var(--accent); }
-.lib-action-btn:disabled { opacity:.4; cursor:default; }
-.lib-verify-btn { font-size:.62rem; padding:.18rem .45rem; }
-
+.lib-sm-btn:hover { border-color:var(--accent); color:var(--accent); }
+.lib-sm-btn:disabled { opacity:.4; cursor:default; }
+.af-chip {
+  padding:.22rem .6rem; border-radius:var(--radius-pill); font-size:.68rem; font-weight:600;
+  border:1.5px solid var(--border); background:var(--surface); color:var(--text-muted);
+  cursor:pointer; transition:all .12s;
+}
+.af-chip.active { border-color:var(--accent); color:var(--accent); }
 .lib-section-hdr {
-  display:flex; align-items:center; gap:.5rem; margin:.4rem 0 .55rem;
+  display:flex; align-items:center; gap:.5rem; margin:.3rem 0 .5rem;
 }
-.lib-section-hdr h3 { font-size:.95rem; font-weight:800; flex:1; margin:0; }
-
+.lib-section-hdr h3 { font-size:.92rem; font-weight:800; flex:1; margin:0; }
 .empty-lib { text-align:center; padding:2rem; color:var(--text-muted); font-size:.85rem; }
 </style>
 
@@ -153,16 +182,13 @@
 const ALL_TRACKS    = {{ tracks | tojson }};
 const ALL_PLAYLISTS = {{ playlists | tojson }};
 
-let currentTab  = 'songs';
-let currentView = 'list';   // 'list' | 'artist' | 'album' | 'playlist'
-let drillArtist = null;
-let drillAlbum  = null;
-let drillJobId  = null;
-let drillName   = null;
-let aidFilter   = 'all';
-let aidRunning  = false;
+// Navigation state
+let view       = 'home';   // home | artists | albums | songs | playlists | artist-albums | album-tracks | playlist-tracks
+let ctx        = {};       // {artist, album, jobId, name} depending on view
+let aidFilter  = 'all';
+let aidRunning = false;
 
-// ── AcoustID helpers ──────────────────────────────────────────────────────
+// ── AcoustID ─────────────────────────────────────────────────────────────
 
 function aidBadgeHtml(score) {
   if (score === null || score === undefined) return '';
@@ -176,117 +202,80 @@ function aidBadgeHtml(score) {
 function aidPassesFilter(score) {
   if (aidFilter === 'all')       return true;
   if (aidFilter === 'unchecked') return score === null || score === undefined;
-  if (aidFilter === 'matched')   return score !== null && score !== undefined && score >= 0.8;
-  if (aidFilter === 'uncertain') return score !== null && score !== undefined && score >= 0.5 && score < 0.8;
-  if (aidFilter === 'mismatch')  return score !== null && score !== undefined && score < 0.5;
+  if (aidFilter === 'matched')   return score != null && score >= 0.8;
+  if (aidFilter === 'uncertain') return score != null && score >= 0.5 && score < 0.8;
+  if (aidFilter === 'mismatch')  return score != null && score < 0.5;
   return true;
 }
 
-function groupAidBadge(tracks) {
-  const scored = tracks.filter(t => t.acoustid_score !== null && t.acoustid_score !== undefined);
-  if (!scored.length) return '';
-  return aidBadgeHtml(Math.min(...scored.map(t => t.acoustid_score)));
+function groupWorstAid(tracks) {
+  const s = tracks.filter(t => t.acoustid_score != null);
+  return s.length ? Math.min(...s.map(t => t.acoustid_score)) : null;
 }
 
-// ── Filtering ─────────────────────────────────────────────────────────────
-
-function getFilteredTracks() {
-  const q = (document.getElementById('lib-search').value || '').toLowerCase().trim();
-  return ALL_TRACKS.filter(t => {
-    if (q && !((t.artist+' '+t.album+' '+t.title).toLowerCase().includes(q))) return false;
-    return aidPassesFilter(t.acoustid_score);
-  });
+function verifyLib(scope, params, btn) {
+  if (aidRunning) return;
+  if (btn) { btn.disabled=true; btn.textContent='…'; }
+  fetch('/api/library/acoustid', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({scope, ...params}),
+  }).then(r=>r.json()).then(d => {
+    if (d.error) { alert(d.error); if(btn){btn.disabled=false;btn.textContent='↻ Verify';} return; }
+    aidRunning = true;
+    document.getElementById('aid-progress-wrap').style.display = '';
+    showProgress(0, d.total);
+    pollAid();
+  }).catch(() => { if(btn){btn.disabled=false;btn.textContent='↻ Verify';} });
 }
 
-// ── Cover / ext helpers ───────────────────────────────────────────────────
+function verifyCurrentView() {
+  if (view==='album-tracks')     verifyLib('album',   {artist:ctx.artist, album:ctx.album});
+  else if (view==='artist-albums') verifyLib('artist', {artist:ctx.artist});
+  else if (view==='playlist-tracks') verifyLib('playlist',{job_id:ctx.jobId});
+  else verifyLib('all', {});
+}
 
-function coverHtml(t, size=36) {
+function showProgress(done, total) {
+  const pct = total>0 ? Math.round(done/total*100) : 0;
+  document.getElementById('aid-progress-bar').style.width = pct+'%';
+  document.getElementById('aid-progress-text').textContent = `Identifying… ${done} / ${total}`;
+}
+
+function pollAid() {
+  fetch('/api/library/acoustid/status').then(r=>r.json()).then(d => {
+    showProgress(d.done, d.total);
+    if (d.in_progress) { setTimeout(pollAid, 2000); return; }
+    aidRunning = false;
+    document.getElementById('aid-progress-wrap').style.display = 'none';
+    fetch('/api/library/acoustid/scores').then(r=>r.json()).then(scores => {
+      ALL_TRACKS.forEach(t => {
+        if (t.id !== null && Object.prototype.hasOwnProperty.call(scores, t.id))
+          t.acoustid_score = scores[t.id];
+      });
+      render();
+    });
+  }).catch(() => setTimeout(pollAid, 5000));
+}
+
+// ── Escape ────────────────────────────────────────────────────────────────
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+// ── Cover / ext ───────────────────────────────────────────────────────────
+function coverHtml(t, size=38) {
   if (t.cover_url)
     return `<img class="lib-cover" src="${esc(t.cover_url)}" width="${size}" height="${size}" alt="" loading="lazy"
               onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
             <div class="lib-cover-ph" style="width:${size}px;height:${size}px;display:none">🎵</div>`;
   return `<div class="lib-cover-ph" style="width:${size}px;height:${size}px">🎵</div>`;
 }
+function extClass(e){ return ['FLAC','ALAC','WAV','AIFF','AIF'].includes((e||'').toUpperCase()) ? 'lib-ext lossless' : 'lib-ext'; }
 
-function extClass(e) {
-  if (!e) return 'lib-ext';
-  if (['FLAC','ALAC','WAV','AIFF','AIF'].includes(e.toUpperCase())) return 'lib-ext lossless';
-  return 'lib-ext';
-}
-
-// ── Verify helpers ────────────────────────────────────────────────────────
-
-function verifyLib(scope, params, btn) {
-  if (aidRunning) return;
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
-  fetch('/api/library/acoustid', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({scope, ...params}),
-  }).then(r => r.json()).then(d => {
-    if (d.error) {
-      alert(d.error);
-      if (btn) { btn.disabled=false; btn.textContent='↻ Verify'; }
-      return;
-    }
-    aidRunning = true;
-    showProgress(0, d.total);
-    pollAidStatus();
-  }).catch(() => { if (btn) { btn.disabled=false; btn.textContent='↻ Verify'; } });
-}
-
-function verifyCurrentView() {
-  if (currentView === 'album' && drillArtist && drillAlbum)
-    verifyLib('album', {artist: drillArtist, album: drillAlbum});
-  else if (currentView === 'artist' && drillArtist)
-    verifyLib('artist', {artist: drillArtist});
-  else if (currentView === 'playlist' && drillJobId !== null)
-    verifyLib('playlist', {job_id: drillJobId});
-  else
-    verifyLib('all', {});
-}
-
-function showProgress(done, total) {
-  document.getElementById('aid-progress-wrap').style.display = '';
-  const pct = total > 0 ? Math.round(done / total * 100) : 0;
-  document.getElementById('aid-progress-bar').style.width = pct + '%';
-  document.getElementById('aid-progress-text').textContent =
-    `Identifying… ${done} / ${total} tracks`;
-}
-
-function pollAidStatus() {
-  fetch('/api/library/acoustid/status').then(r => r.json()).then(d => {
-    showProgress(d.done, d.total);
-    if (d.in_progress) {
-      setTimeout(pollAidStatus, 2000);
-    } else {
-      aidRunning = false;
-      document.getElementById('aid-progress-wrap').style.display = 'none';
-      fetch('/api/library/acoustid/scores').then(r => r.json()).then(scores => {
-        ALL_TRACKS.forEach(t => {
-          if (t.id !== null && Object.prototype.hasOwnProperty.call(scores, t.id))
-            t.acoustid_score = scores[t.id];
-        });
-        render();
-      });
-    }
-  }).catch(() => setTimeout(pollAidStatus, 5000));
-}
-
-// ── Rendering: track row ──────────────────────────────────────────────────
-
+// ── Track row ─────────────────────────────────────────────────────────────
 function trackRowHtml(t, showArtist=true) {
-  const sub = showArtist
-    ? `${esc(t.artist)}${t.album ? ' · '+esc(t.album) : ''}`
-    : esc(t.album || '');
-  const verifyBtn = t.id !== null
-    ? `<button class="lib-action-btn lib-verify-btn" title="Verify with AcoustID"
-         onclick="event.stopPropagation();verifyLib('track',{id:${t.id}},this)">↻ ID</button>`
-    : '';
-  const reDlBtn =
-    `<button class="lib-action-btn lib-verify-btn" title="Re-download"
-       onclick="event.stopPropagation();redownload(this,${JSON.stringify(t.artist)},${JSON.stringify(t.album)},${JSON.stringify(t.title)})"
-     >↺ Re-DL</button>`;
+  const sub = showArtist ? `${esc(t.artist)}${t.album?' · '+esc(t.album):''}` : esc(t.album||'');
+  const verifyBtn = t.id!=null
+    ? `<button class="lib-sm-btn" style="font-size:.6rem;padding:.15rem .4rem" title="Verify"
+         onclick="event.stopPropagation();verifyLib('track',{id:${t.id}},this)">↻ ID</button>` : '';
   return `<div class="lib-row${t.user_rating===1?' flagged':''}">
     ${coverHtml(t)}
     <div class="lib-row-info">
@@ -297,27 +286,43 @@ function trackRowHtml(t, showArtist=true) {
       ${aidBadgeHtml(t.acoustid_score)}
       <span class="${extClass(t.ext)}">${esc(t.ext||'?')}</span>
       ${verifyBtn}
-      ${reDlBtn}
+      <button class="lib-sm-btn" style="font-size:.6rem;padding:.15rem .4rem" title="Re-download"
+        onclick="event.stopPropagation();redownload(this,${JSON.stringify(t.artist)},${JSON.stringify(t.album)},${JSON.stringify(t.title)})">↺</button>
     </div>
   </div>`;
 }
 
-// ── Rendering: Songs ──────────────────────────────────────────────────────
-
-function renderSongs() {
-  setBreadcrumb(null);
-  const tracks = getFilteredTracks();
-  document.getElementById('lib-content').innerHTML = tracks.length
-    ? `<div style="margin-bottom:.35rem;font-size:.72rem;color:var(--text-muted)">${tracks.length} track${tracks.length===1?'':'s'}</div>`
-      + tracks.map(t => trackRowHtml(t)).join('')
-    : '<div class="empty-lib">No tracks match your filters.</div>';
+// ── Home / collection menu ────────────────────────────────────────────────
+function renderHome() {
+  setNav(false);
+  const q = searchVal();
+  // If searching, go straight to songs view
+  if (q) { view='songs'; renderSongs(); return; }
+  const artistCount = new Set(ALL_TRACKS.map(t=>t.artist)).size;
+  const albumCount  = new Set(ALL_TRACKS.map(t=>t.artist+'\x00'+t.album)).size;
+  const icons = [
+    {label:'Artists',  icon:'🎤', bg:'#c0392b', count:`${artistCount} artist${artistCount===1?'':'s'}`,  v:'artists'},
+    {label:'Albums',   icon:'💿', bg:'#e67e22', count:`${albumCount} album${albumCount===1?'':'s'}`,    v:'albums'},
+    {label:'Songs',    icon:'🎵', bg:'#e74c3c', count:`${ALL_TRACKS.length} song${ALL_TRACKS.length===1?'':'s'}`, v:'songs'},
+    {label:'Playlists',icon:'📋', bg:'#8e44ad', count:`${ALL_PLAYLISTS.length} playlist${ALL_PLAYLISTS.length===1?'':'s'}`, v:'playlists'},
+  ];
+  document.getElementById('lib-content').innerHTML =
+    `<div class="coll-section-title">Collection</div>` +
+    icons.map(i => `
+      <div class="coll-row" onclick="navTo('${i.v}')">
+        <div class="coll-icon" style="background:${i.bg}">${i.icon}</div>
+        <span class="coll-label">${i.label}</span>
+        <span class="coll-count">${i.count}</span>
+        <span class="coll-chevron">›</span>
+      </div>`).join('');
 }
 
-// ── Rendering: Artists ────────────────────────────────────────────────────
-
+// ── Artists list ──────────────────────────────────────────────────────────
 function renderArtists() {
-  setBreadcrumb(null);
-  const q = (document.getElementById('lib-search').value || '').toLowerCase().trim();
+  setNav(true, 'Library', 'Artists');
+  document.getElementById('verify-row').style.display = 'none';
+  const q = searchVal();
+  // Group tracks by artist
   const map = {};
   ALL_TRACKS.forEach(t => {
     const a = t.artist || '(Unknown)';
@@ -326,311 +331,292 @@ function renderArtists() {
   });
   let artists = Object.keys(map).sort((a,b) => a.localeCompare(b));
   if (q) artists = artists.filter(a =>
-    a.toLowerCase().includes(q) ||
-    map[a].some(t => (t.album+' '+t.title).toLowerCase().includes(q)));
+    a.toLowerCase().includes(q) || map[a].some(t => (t.album+' '+t.title).toLowerCase().includes(q)));
 
   if (!artists.length) {
     document.getElementById('lib-content').innerHTML = '<div class="empty-lib">No artists match.</div>';
     return;
   }
-  document.getElementById('lib-content').innerHTML = artists.map(a => {
-    const tracks = map[a];
-    const albums = [...new Set(tracks.map(t => t.album).filter(Boolean))];
-    const sub    = `${tracks.length} track${tracks.length===1?'':'s'} · ${albums.length} album${albums.length===1?'':'s'}`;
-    const aJ     = JSON.stringify(a);
-    return `<div class="artist-row" onclick="drillToArtist(${aJ})">
-      <div class="artist-avatar">🎤</div>
-      <div style="flex:1;min-width:0">
-        <div class="artist-name">${esc(a)}</div>
-        <div class="artist-count">${sub}</div>
-      </div>
-      ${groupAidBadge(tracks)}
-      <button class="lib-action-btn lib-verify-btn" style="margin-left:.3rem"
-        onclick="event.stopPropagation();verifyLib('artist',{artist:${aJ}},this)">↻ Verify</button>
-      <span style="color:var(--text-muted);margin-left:.25rem;flex-shrink:0">›</span>
-    </div>`;
+
+  // Group by first letter
+  const sections = {};
+  artists.forEach(a => {
+    const ch = a[0].toUpperCase();
+    const key = /[A-Z]/.test(ch) ? ch : '#';
+    if (!sections[key]) sections[key] = [];
+    sections[key].push(a);
+  });
+  const letters = Object.keys(sections).sort((a,b) => a==='#' ? 1 : b==='#' ? -1 : a.localeCompare(b));
+
+  const listHtml = letters.map(letter => {
+    const rows = sections[letter].map(a => {
+      const tracks = map[a];
+      const albums = [...new Set(tracks.map(t=>t.album).filter(Boolean))];
+      const sub = `${albums.length} album${albums.length===1?'':'s'} · ${tracks.length} track${tracks.length===1?'':'s'}`;
+      const aJ  = JSON.stringify(a);
+      return `<div class="artist-row" onclick="navTo('artist-albums',{artist:${aJ}})">
+        <div class="artist-avatar">🎤</div>
+        <div class="artist-info">
+          <div class="artist-name">${esc(a)}</div>
+          <div class="artist-sub">${sub}</div>
+        </div>
+        ${aidBadgeHtml(groupWorstAid(tracks))}
+        <button class="lib-sm-btn" style="margin-left:.35rem;flex-shrink:0"
+          onclick="event.stopPropagation();verifyLib('artist',{artist:${aJ}},this)">↻</button>
+        <span class="coll-chevron" style="margin-left:.2rem">›</span>
+      </div>`;
+    }).join('');
+    return `<div id="az-sec-${letter}" class="az-section-hdr">${letter}</div>${rows}`;
   }).join('');
+
+  const sidebarHtml = letters.map(l =>
+    `<span class="az-letter" onclick="jumpTo('az-sec-${l}')">${l}</span>`).join('');
+
+  document.getElementById('lib-content').innerHTML =
+    `<div class="az-wrap">
+       <div class="az-list">${listHtml}</div>
+       <div class="az-sidebar">${sidebarHtml}</div>
+     </div>`;
 }
 
-// ── Rendering: Albums ─────────────────────────────────────────────────────
-
-function renderAlbums() {
-  setBreadcrumb(null);
-  const q = (document.getElementById('lib-search').value || '').toLowerCase().trim();
-  const map = {};
-  ALL_TRACKS.forEach(t => {
-    const key = JSON.stringify([t.artist||'', t.album||'(Unknown)']);
-    if (!map[key]) map[key] = {artist:t.artist||'', album:t.album||'(Unknown)', cover_url:t.cover_url, tracks:[]};
-    map[key].tracks.push(t);
-  });
-  let keys = Object.keys(map).sort((a,b) => {
-    const [,al] = JSON.parse(a), [,bl] = JSON.parse(b);
-    return al.localeCompare(bl);
-  });
-  if (q) keys = keys.filter(k => {
-    const {artist,album,tracks} = map[k];
-    return (artist+' '+album).toLowerCase().includes(q) ||
-      tracks.some(t => t.title.toLowerCase().includes(q));
-  });
-  if (!keys.length) {
-    document.getElementById('lib-content').innerHTML = '<div class="empty-lib">No albums match.</div>';
-    return;
-  }
-  const html = keys.map(k => {
-    const {artist, album, cover_url, tracks} = map[k];
-    const aJ  = JSON.stringify(artist);
-    const alJ = JSON.stringify(album);
-    const imgHtml = cover_url
-      ? `<img class="album-card-cover" src="${esc(cover_url)}" alt="" loading="lazy"
-           onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-         <div class="album-card-cover-ph" style="display:none">💿</div>`
-      : `<div class="album-card-cover-ph">💿</div>`;
-    return `<div class="album-card-lib" onclick="drillToAlbum(${aJ},${alJ})">
-      ${imgHtml}
-      <div class="album-card-title">${esc(album)}</div>
-      <div class="album-card-sub">${esc(artist)}</div>
-      <div class="album-card-actions">
-        ${groupAidBadge(tracks)}
-        <button class="lib-action-btn lib-verify-btn" style="margin-left:auto"
-          onclick="event.stopPropagation();verifyLib('album',{artist:${aJ},album:${alJ}},this)">↻ Verify</button>
-      </div>
-    </div>`;
-  }).join('');
-  document.getElementById('lib-content').innerHTML = `<div class="album-grid-lib">${html}</div>`;
-}
-
-// ── Rendering: Artist drill → albums ─────────────────────────────────────
-
-function renderArtistDrill(artist) {
-  setBreadcrumb(`<a onclick="switchTab('artists')" style="cursor:pointer;color:var(--accent)">Artists</a>
-    <span style="margin:0 .3rem">›</span>${esc(artist)}`);
-  const tracks = ALL_TRACKS.filter(t => t.artist === artist);
+// ── Artist → albums ───────────────────────────────────────────────────────
+function renderArtistAlbums() {
+  setNav(true, 'Artists', ctx.artist);
+  showVerifyRow();
+  const tracks = ALL_TRACKS.filter(t => t.artist === ctx.artist);
   const map = {};
   tracks.forEach(t => {
     const al = t.album || '(Unknown)';
     if (!map[al]) map[al] = {cover_url:t.cover_url, tracks:[]};
     map[al].tracks.push(t);
   });
-  const aJ = JSON.stringify(artist);
+  const aJ = JSON.stringify(ctx.artist);
   const html = Object.keys(map).sort().map(al => {
-    const {cover_url, tracks: at} = map[al];
+    const {cover_url, tracks:at} = map[al];
     const alJ = JSON.stringify(al);
-    const imgHtml = cover_url
+    const cover = cover_url
       ? `<img class="album-card-cover" src="${esc(cover_url)}" alt="" loading="lazy"
            onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
          <div class="album-card-cover-ph" style="display:none">💿</div>`
       : `<div class="album-card-cover-ph">💿</div>`;
-    return `<div class="album-card-lib" onclick="drillToAlbum(${aJ},${alJ})">
-      ${imgHtml}
+    return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:ctx.artist,album:${alJ}})">
+      ${cover}
       <div class="album-card-title">${esc(al)}</div>
       <div class="album-card-sub">${at.length} track${at.length===1?'':'s'}</div>
       <div class="album-card-actions">
-        ${groupAidBadge(at)}
-        <button class="lib-action-btn lib-verify-btn" style="margin-left:auto"
-          onclick="event.stopPropagation();verifyLib('album',{artist:${aJ},album:${alJ}},this)">↻ Verify</button>
+        ${aidBadgeHtml(groupWorstAid(at))}
+        <button class="lib-sm-btn" style="margin-left:auto;font-size:.6rem;padding:.15rem .4rem"
+          onclick="event.stopPropagation();verifyLib('album',{artist:${aJ},album:${alJ}},this)">↻</button>
       </div>
     </div>`;
   }).join('');
-  document.getElementById('lib-content').innerHTML =
-    `<div class="lib-section-hdr">
-       <h3>${esc(artist)}</h3>
-       <button class="lib-action-btn lib-verify-btn"
-         onclick="verifyLib('artist',{artist:${aJ}},this)">↻ Verify all</button>
-     </div>
-     <div class="album-grid-lib">${html}</div>`;
+  document.getElementById('lib-content').innerHTML = `<div class="album-grid-lib">${html}</div>`;
 }
 
-// ── Rendering: Album drill → tracks ──────────────────────────────────────
+// ── Albums list ───────────────────────────────────────────────────────────
+function renderAlbums() {
+  setNav(true, 'Library', 'Albums');
+  document.getElementById('verify-row').style.display = 'none';
+  const q = searchVal();
+  const map = {};
+  ALL_TRACKS.forEach(t => {
+    const key = JSON.stringify([t.artist||'', t.album||'(Unknown)']);
+    if (!map[key]) map[key] = {artist:t.artist||'', album:t.album||'(Unknown)', cover_url:t.cover_url, tracks:[]};
+    map[key].tracks.push(t);
+  });
+  let keys = Object.keys(map).sort((a,b)=>{
+    const [,al]=JSON.parse(a),[,bl]=JSON.parse(b); return al.localeCompare(bl);
+  });
+  if (q) keys = keys.filter(k=>{
+    const {artist,album,tracks}=map[k];
+    return (artist+' '+album).toLowerCase().includes(q)||tracks.some(t=>t.title.toLowerCase().includes(q));
+  });
+  if (!keys.length) { document.getElementById('lib-content').innerHTML='<div class="empty-lib">No albums match.</div>'; return; }
+  const html = keys.map(k => {
+    const {artist,album,cover_url,tracks} = map[k];
+    const aJ=JSON.stringify(artist), alJ=JSON.stringify(album);
+    const cover = cover_url
+      ? `<img class="album-card-cover" src="${esc(cover_url)}" alt="" loading="lazy"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+         <div class="album-card-cover-ph" style="display:none">💿</div>`
+      : `<div class="album-card-cover-ph">💿</div>`;
+    return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:${aJ},album:${alJ}})">
+      ${cover}
+      <div class="album-card-title">${esc(album)}</div>
+      <div class="album-card-sub">${esc(artist)}</div>
+      <div class="album-card-actions">
+        ${aidBadgeHtml(groupWorstAid(tracks))}
+        <button class="lib-sm-btn" style="margin-left:auto;font-size:.6rem;padding:.15rem .4rem"
+          onclick="event.stopPropagation();verifyLib('album',{artist:${aJ},album:${alJ}},this)">↻</button>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('lib-content').innerHTML = `<div class="album-grid-lib">${html}</div>`;
+}
 
-function renderAlbumDrill(artist, album) {
-  const aJ  = JSON.stringify(artist);
-  const alJ = JSON.stringify(album);
-  let crumb;
-  if (currentTab === 'artists' && drillArtist) {
-    crumb = `<a onclick="switchTab('artists')" style="cursor:pointer;color:var(--accent)">Artists</a>
-      <span style="margin:0 .3rem">›</span>
-      <a onclick="drillToArtist(${aJ})" style="cursor:pointer;color:var(--accent)">${esc(artist)}</a>
-      <span style="margin:0 .3rem">›</span>${esc(album)}`;
-  } else {
-    crumb = `<a onclick="switchTab('albums')" style="cursor:pointer;color:var(--accent)">Albums</a>
-      <span style="margin:0 .3rem">›</span>${esc(album)}`;
-  }
-  setBreadcrumb(crumb);
-  const tracks = ALL_TRACKS
-    .filter(t => t.artist === artist && t.album === album)
+// ── Album → tracks ────────────────────────────────────────────────────────
+function renderAlbumTracks() {
+  const backLabel = view === 'album-tracks' && ctx._from === 'albums' ? 'Albums' : ctx.artist;
+  setNav(true, backLabel, ctx.album);
+  showVerifyRow();
+  let tracks = ALL_TRACKS
+    .filter(t => t.artist===ctx.artist && t.album===ctx.album)
     .filter(t => aidPassesFilter(t.acoustid_score));
-  document.getElementById('lib-content').innerHTML =
-    `<div class="lib-section-hdr">
-       <h3>${esc(album)}</h3>
-       <button class="lib-action-btn lib-verify-btn"
-         onclick="verifyLib('album',{artist:${aJ},album:${alJ}},this)">↻ Verify all</button>
-     </div>`
-    + (tracks.length
-       ? tracks.map(t => trackRowHtml(t, false)).join('')
-       : '<div class="empty-lib">No tracks match filter.</div>');
+  document.getElementById('lib-content').innerHTML = tracks.length
+    ? tracks.map(t=>trackRowHtml(t,false)).join('')
+    : '<div class="empty-lib">No tracks match filter.</div>';
 }
 
-// ── Rendering: Playlists ──────────────────────────────────────────────────
+// ── Songs list ────────────────────────────────────────────────────────────
+function renderSongs() {
+  setNav(true, 'Library', 'Songs');
+  showVerifyRow();
+  const q = searchVal();
+  const tracks = ALL_TRACKS.filter(t => {
+    if (q && !((t.artist+' '+t.album+' '+t.title).toLowerCase().includes(q))) return false;
+    return aidPassesFilter(t.acoustid_score);
+  });
+  document.getElementById('lib-content').innerHTML = tracks.length
+    ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${tracks.length} song${tracks.length===1?'':'s'}</div>`
+      + tracks.map(t=>trackRowHtml(t)).join('')
+    : '<div class="empty-lib">No songs match.</div>';
+}
 
+// ── Playlists list ────────────────────────────────────────────────────────
 function renderPlaylists() {
-  setBreadcrumb(null);
+  setNav(true, 'Library', 'Playlists');
+  document.getElementById('verify-row').style.display = 'none';
   if (!ALL_PLAYLISTS.length) {
-    document.getElementById('lib-content').innerHTML = '<div class="empty-lib">No playlists imported yet.</div>';
+    document.getElementById('lib-content').innerHTML='<div class="empty-lib">No playlists imported yet.</div>';
     return;
   }
-  const q = (document.getElementById('lib-search').value || '').toLowerCase().trim();
-  const icons = {spotify:'🟢', apple:'🍎', tidal:'⬛', deezer:'🟠', search:'🔍'};
-  const rows = ALL_PLAYLISTS.filter(p =>
-    !q || (p.playlist_name||p.source_url||'').toLowerCase().includes(q)
-  ).map(p => {
-    const name     = p.playlist_name || p.source_url || `Import #${p.id}`;
-    const icon     = icons[p.source] || '🎵';
-    const progress = p.total > 0 ? `${p.done}/${p.total} tracks` : 'empty';
-    const nJ       = JSON.stringify(name);
-    return `<div class="playlist-row" onclick="drillToPlaylist(${p.id},${nJ})">
-      <div class="playlist-icon">${icon}</div>
-      <div style="flex:1;min-width:0">
+  const q = searchVal();
+  const icons = {spotify:'🟢',apple:'🍎',tidal:'⬛',deezer:'🟠',search:'🔍'};
+  const colors = {spotify:'#1DB954',apple:'#fc3c44',tidal:'#000',deezer:'#EF5466',search:'#555'};
+  const rows = ALL_PLAYLISTS.filter(p => !q||(p.playlist_name||p.source_url||'').toLowerCase().includes(q)).map(p => {
+    const name = p.playlist_name||p.source_url||`Import #${p.id}`;
+    const nJ   = JSON.stringify(name);
+    const bg   = colors[p.source] || 'var(--surface3)';
+    const prog = p.total>0 ? `${p.done} / ${p.total} downloaded` : 'empty';
+    return `<div class="playlist-row" onclick="navTo('playlist-tracks',{jobId:${p.id},name:${nJ}})">
+      <div class="playlist-icon" style="background:${bg}">${icons[p.source]||'🎵'}</div>
+      <div class="playlist-info">
         <div class="playlist-name">${esc(name)}</div>
-        <div style="font-size:.68rem;color:var(--text-muted)">${esc(p.source||'')} · ${progress}</div>
+        <div class="playlist-sub">${esc(p.source||'')} · ${prog}</div>
       </div>
-      <button class="lib-action-btn lib-verify-btn"
+      <button class="lib-sm-btn" style="flex-shrink:0"
         onclick="event.stopPropagation();verifyLib('playlist',{job_id:${p.id}},this)">↻ Verify</button>
-      <span style="color:var(--text-muted);margin-left:.35rem;flex-shrink:0">›</span>
+      <span class="coll-chevron" style="margin-left:.35rem">›</span>
     </div>`;
   }).join('');
-  document.getElementById('lib-content').innerHTML = rows || '<div class="empty-lib">No playlists match.</div>';
+  document.getElementById('lib-content').innerHTML = rows||'<div class="empty-lib">No playlists match.</div>';
 }
 
-// ── Rendering: Playlist drill → tracks ───────────────────────────────────
-
-function renderPlaylistDrill(jobId, name) {
-  const nJ = JSON.stringify(name);
-  setBreadcrumb(`<a onclick="switchTab('playlists')" style="cursor:pointer;color:var(--accent)">Playlists</a>
-    <span style="margin:0 .3rem">›</span>${esc(name)}`);
+// ── Playlist → tracks ─────────────────────────────────────────────────────
+function renderPlaylistTracks() {
+  setNav(true, 'Playlists', ctx.name);
+  showVerifyRow();
   document.getElementById('lib-content').innerHTML = '<div class="empty-lib">Loading…</div>';
-  fetch(`/api/library/playlist/${jobId}`)
-    .then(r => r.json())
-    .then(tracks => {
-      const filtered = tracks.filter(t => aidPassesFilter(t.acoustid_score));
-      document.getElementById('lib-content').innerHTML =
-        `<div class="lib-section-hdr">
-           <h3>${esc(name)}</h3>
-           <button class="lib-action-btn lib-verify-btn"
-             onclick="verifyLib('playlist',{job_id:${jobId}},this)">↻ Verify all</button>
-         </div>`
-        + (filtered.length
-           ? filtered.map(t => `<div class="lib-row">
-               <div class="lib-cover-ph">🎵</div>
-               <div class="lib-row-info">
-                 <div class="lib-row-title">${esc(t.title||'—')}</div>
-                 <div class="lib-row-sub">${esc(t.artist||'')}${t.album?' · '+esc(t.album):''}</div>
-               </div>
-               <div class="lib-row-right">${aidBadgeHtml(t.acoustid_score)}</div>
-             </div>`).join('')
-           : '<div class="empty-lib">No completed tracks or none match filter.</div>');
-    })
-    .catch(() => {
-      document.getElementById('lib-content').innerHTML = '<div class="empty-lib">Failed to load playlist tracks.</div>';
-    });
+  fetch(`/api/library/playlist/${ctx.jobId}`)
+    .then(r=>r.json()).then(tracks => {
+      const f = tracks.filter(t=>aidPassesFilter(t.acoustid_score));
+      document.getElementById('lib-content').innerHTML = f.length
+        ? f.map(t=>`<div class="lib-row">
+            <div class="lib-cover-ph">🎵</div>
+            <div class="lib-row-info">
+              <div class="lib-row-title">${esc(t.title||'—')}</div>
+              <div class="lib-row-sub">${esc(t.artist||'')}${t.album?' · '+esc(t.album):''}</div>
+            </div>
+            <div class="lib-row-right">${aidBadgeHtml(t.acoustid_score)}</div>
+          </div>`).join('')
+        : '<div class="empty-lib">No completed tracks or none match filter.</div>';
+    }).catch(()=>{ document.getElementById('lib-content').innerHTML='<div class="empty-lib">Failed to load.</div>'; });
 }
 
-// ── Drill navigation ──────────────────────────────────────────────────────
+// ── Navigation ────────────────────────────────────────────────────────────
 
-function drillToArtist(artist) {
-  currentView = 'artist'; drillArtist = artist; drillAlbum = null; drillJobId = null;
-  renderArtistDrill(artist);
-}
+// Stack so we can go back through multi-level drill
+const navStack = [];
 
-function drillToAlbum(artist, album) {
-  currentView = 'album'; drillArtist = artist; drillAlbum = album; drillJobId = null;
-  renderAlbumDrill(artist, album);
-}
-
-function drillToPlaylist(jobId, name) {
-  currentView = 'playlist'; drillJobId = jobId; drillName = name; drillArtist = null; drillAlbum = null;
-  renderPlaylistDrill(jobId, name);
-}
-
-function setBreadcrumb(html) {
-  const row = document.getElementById('breadcrumb-row');
-  const el  = document.getElementById('breadcrumb');
-  if (html) {
-    el.innerHTML = html;
-    row.style.display = 'flex';
-  } else {
-    el.innerHTML = '';
-    row.style.display = 'none';
-    currentView = 'list'; drillArtist = null; drillAlbum = null; drillJobId = null;
-  }
-}
-
-// ── Tab switching ─────────────────────────────────────────────────────────
-
-function switchTab(tab, btn) {
-  currentTab = tab; currentView = 'list';
-  drillArtist = null; drillAlbum = null; drillJobId = null;
-  document.querySelectorAll('.lib-tab').forEach(b => b.classList.remove('active'));
-  (btn || document.querySelector(`.lib-tab[onclick*="'${tab}'"]`))?.classList.add('active');
+function navTo(newView, newCtx={}) {
+  navStack.push({view, ctx: Object.assign({},ctx)});
+  view = newView;
+  ctx  = Object.assign({}, newCtx);
   render();
 }
 
-function render() {
-  if (currentTab === 'songs') renderSongs();
-  else if (currentTab === 'artists') {
-    if      (currentView === 'album')  renderAlbumDrill(drillArtist, drillAlbum);
-    else if (currentView === 'artist') renderArtistDrill(drillArtist);
-    else renderArtists();
-  }
-  else if (currentTab === 'albums') {
-    if (currentView === 'album') renderAlbumDrill(drillArtist, drillAlbum);
-    else renderAlbums();
-  }
-  else if (currentTab === 'playlists') {
-    if (currentView === 'playlist') renderPlaylistDrill(drillJobId, drillName);
-    else renderPlaylists();
+function goBack() {
+  if (navStack.length) {
+    const prev = navStack.pop();
+    view = prev.view;
+    ctx  = prev.ctx;
+    render();
+  } else {
+    view = 'home'; ctx = {};
+    navStack.length = 0;
+    render();
   }
 }
 
+function setNav(showBack, backLabel, title) {
+  const row  = document.getElementById('back-row');
+  const lbl  = document.getElementById('back-label');
+  const ttl  = document.getElementById('view-title');
+  row.style.display = showBack ? 'flex' : 'none';
+  if (showBack) { lbl.textContent = backLabel||'Back'; ttl.textContent = title||''; }
+}
+
+function showVerifyRow() {
+  const row = document.getElementById('verify-row');
+  const aid = document.getElementById('aid-filter-row');
+  row.style.display = 'flex';
+  aid.style.display = 'flex';
+}
+
+function jumpTo(id) {
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
 // ── Filters ───────────────────────────────────────────────────────────────
-
-function applyFilters() { render(); }
-
-function setAidFilter(val, btn) {
-  aidFilter = val;
-  document.querySelectorAll('.af-chip').forEach(b => b.classList.remove('active'));
+function searchVal() { return (document.getElementById('lib-search').value||'').toLowerCase().trim(); }
+function applyFilters() { if (view==='home' && searchVal()) navTo('songs'); else render(); }
+function setAidFilter(val,btn) {
+  aidFilter=val;
+  document.querySelectorAll('.af-chip').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   render();
 }
 
-// ── Library scan ──────────────────────────────────────────────────────────
+// ── Main render ───────────────────────────────────────────────────────────
+function render() {
+  document.getElementById('aid-filter-row').style.display = 'none';
+  document.getElementById('verify-row').style.display = 'none';
+  if (view==='home')             renderHome();
+  else if (view==='artists')     renderArtists();
+  else if (view==='albums')      renderAlbums();
+  else if (view==='songs')       renderSongs();
+  else if (view==='playlists')   renderPlaylists();
+  else if (view==='artist-albums') renderArtistAlbums();
+  else if (view==='album-tracks')  renderAlbumTracks();
+  else if (view==='playlist-tracks') renderPlaylistTracks();
+}
 
+// ── Scan / Re-DL ──────────────────────────────────────────────────────────
 function triggerScan(btn) {
-  btn.disabled = true; btn.textContent = '…';
-  fetch('/api/library/scan', {method:'POST'})
-    .then(() => setTimeout(() => location.reload(), 3000))
-    .catch(() => { btn.disabled=false; btn.textContent='Scan now'; });
+  btn.disabled=true; btn.textContent='…';
+  fetch('/api/library/scan',{method:'POST'}).then(()=>setTimeout(()=>location.reload(),3000))
+    .catch(()=>{btn.disabled=false;btn.textContent='Scan now';});
+}
+function redownload(btn,artist,album,title) {
+  btn.disabled=true; btn.textContent='…';
+  fetch('/api/library/redownload',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({artist,album,title})}).then(r=>r.json()).then(d=>{
+    btn.textContent = d.ok?'✓':'!';
+    setTimeout(()=>{btn.disabled=false;btn.textContent='↺';},3000);
+  }).catch(()=>{btn.disabled=false;btn.textContent='↺';});
 }
 
-// ── Re-download ───────────────────────────────────────────────────────────
-
-function redownload(btn, artist, album, title) {
-  btn.disabled = true; btn.textContent = '…';
-  fetch('/api/library/redownload', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({artist, album, title}),
-  }).then(r => r.json()).then(d => {
-    btn.textContent = d.ok ? '✓' : '!';
-    setTimeout(() => { btn.disabled=false; btn.textContent='↺ Re-DL'; }, 3000);
-  }).catch(() => { btn.disabled=false; btn.textContent='↺ Re-DL'; });
-}
-
-// ── Escape HTML ───────────────────────────────────────────────────────────
-
-function esc(s) {
-  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-
-// ── Init ──────────────────────────────────────────────────────────────────
 render();
 </script>
 
