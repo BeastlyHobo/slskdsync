@@ -412,6 +412,14 @@ function esc(str) {
   return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// ── Desktop: convert vertical wheel to horizontal scroll on shelves ───────
+document.addEventListener('wheel', e => {
+  const shelf = e.target.closest('.shelf-scroll');
+  if (!shelf || e.deltaY === 0) return;
+  e.preventDefault();
+  shelf.scrollLeft += e.deltaY * 1.5;
+}, { passive: false });
+
 // ── Init ──────────────────────────────────────────────────────────────────
 loadCharts('');
 loadApple();
