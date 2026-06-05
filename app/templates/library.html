@@ -110,9 +110,16 @@
 @media(min-width:700px){ .album-grid-lib { grid-template-columns:repeat(5,1fr); } }
 .album-card-lib {
   background:var(--surface); border-radius:var(--radius-sm); padding:.5rem;
-  cursor:pointer; transition:all .12s; box-shadow:var(--shadow-sm);
+  cursor:pointer; transition:all .12s; box-shadow:var(--shadow-sm); overflow:hidden;
 }
 .album-card-lib:hover { background:var(--surface2); transform:translateY(-1px); }
+.album-cover-wrap {
+  width:100%; position:relative; padding-bottom:100%;
+  border-radius:6px; overflow:hidden; background:var(--surface2); margin-bottom:.35rem;
+}
+.album-cover-wrap img { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; display:block; }
+.album-cover-wrap .album-ph { position:absolute; top:0; left:0; width:100%; height:100%;
+  display:flex; align-items:center; justify-content:center; font-size:1.6rem; }
 .album-card-cover { width:100%; aspect-ratio:1; border-radius:6px; object-fit:cover;
                     background:var(--surface2); display:block; margin-bottom:.35rem; }
 .album-card-cover-ph { width:100%; aspect-ratio:1; border-radius:6px; background:var(--surface2);
@@ -394,11 +401,7 @@ function renderArtistAlbums() {
   const html = Object.keys(map).sort().map(al => {
     const {cover_url, tracks:at} = map[al];
     const alJ = JSON.stringify(al);
-    const cover = cover_url
-      ? `<img class="album-card-cover" src="${esc(cover_url)}" alt="" loading="lazy"
-           onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-         <div class="album-card-cover-ph" style="display:none">💿</div>`
-      : `<div class="album-card-cover-ph">💿</div>`;
+    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">💿</div></div>`;
     return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:ctx.artist,album:${alJ}})">
       ${cover}
       <div class="album-card-title">${esc(al)}</div>
@@ -435,11 +438,7 @@ function renderAlbums() {
   const html = keys.map(k => {
     const {artist,album,cover_url,tracks} = map[k];
     const aJ=JSON.stringify(artist), alJ=JSON.stringify(album);
-    const cover = cover_url
-      ? `<img class="album-card-cover" src="${esc(cover_url)}" alt="" loading="lazy"
-           onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-         <div class="album-card-cover-ph" style="display:none">💿</div>`
-      : `<div class="album-card-cover-ph">💿</div>`;
+    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">💿</div></div>`;
     return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:${aJ},album:${alJ}})">
       ${cover}
       <div class="album-card-title">${esc(album)}</div>
@@ -494,15 +493,18 @@ function renderPlaylists() {
   const icons = {spotify:'🟢',apple:'🍎',tidal:'⬛',deezer:'🟠',search:'🔍'};
   const colors = {spotify:'#1DB954',apple:'#fc3c44',tidal:'#000',deezer:'#EF5466',search:'#555'};
   const rows = ALL_PLAYLISTS.filter(p => !q||(p.playlist_name||p.source_url||'').toLowerCase().includes(q)).map(p => {
-    const name = p.playlist_name||p.source_url||`Import #${p.id}`;
+    const name = p.playlist_name || p.source_url || `Import #${p.id}`;
     const nJ   = JSON.stringify(name);
-    const bg   = colors[p.source] || 'var(--surface3)';
-    const prog = p.total>0 ? `${p.done} / ${p.total} downloaded` : 'empty';
+    const src  = p.source || 'search';
+    const bg   = colors[src] || 'var(--surface3)';
+    const done = p.done || 0;
+    const total = p.total || 0;
+    const prog = total > 0 ? `${done} / ${total} downloaded` : 'no tracks';
     return `<div class="playlist-row" onclick="navTo('playlist-tracks',{jobId:${p.id},name:${nJ}})">
-      <div class="playlist-icon" style="background:${bg}">${icons[p.source]||'🎵'}</div>
+      <div class="playlist-icon" style="background:${bg}">${icons[src]||'🎵'}</div>
       <div class="playlist-info">
         <div class="playlist-name">${esc(name)}</div>
-        <div class="playlist-sub">${esc(p.source||'')} · ${prog}</div>
+        <div class="playlist-sub">${esc(src)} · ${prog}</div>
       </div>
       <button class="lib-sm-btn" style="flex-shrink:0"
         onclick="event.stopPropagation();verifyLib('playlist',{job_id:${p.id}},this)">↻ Verify</button>
@@ -519,17 +521,25 @@ function renderPlaylistTracks() {
   document.getElementById('lib-content').innerHTML = '<div class="empty-lib">Loading…</div>';
   fetch(`/api/library/playlist/${ctx.jobId}`)
     .then(r=>r.json()).then(tracks => {
+      if (!tracks.length) {
+        document.getElementById('lib-content').innerHTML =
+          '<div class="empty-lib">No downloaded tracks yet — check Queue for progress.</div>';
+        return;
+      }
       const f = tracks.filter(t=>aidPassesFilter(t.acoustid_score));
       document.getElementById('lib-content').innerHTML = f.length
-        ? f.map(t=>`<div class="lib-row">
-            <div class="lib-cover-ph">🎵</div>
+        ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${tracks.length} track${tracks.length===1?'':'s'}</div>`
+          + f.map(t=>`<div class="lib-row">
+            ${t.cover_url
+              ? `<img class="lib-cover" src="${esc(t.cover_url)}" width="38" height="38" alt="" loading="lazy" onerror="this.style.display='none'">`
+              : '<div class="lib-cover-ph">🎵</div>'}
             <div class="lib-row-info">
               <div class="lib-row-title">${esc(t.title||'—')}</div>
               <div class="lib-row-sub">${esc(t.artist||'')}${t.album?' · '+esc(t.album):''}</div>
             </div>
             <div class="lib-row-right">${aidBadgeHtml(t.acoustid_score)}</div>
           </div>`).join('')
-        : '<div class="empty-lib">No completed tracks or none match filter.</div>';
+        : `<div class="empty-lib">${tracks.length} track${tracks.length===1?'':'s'} downloaded but none match the current filter.</div>`;
     }).catch(()=>{ document.getElementById('lib-content').innerHTML='<div class="empty-lib">Failed to load.</div>'; });
 }
 

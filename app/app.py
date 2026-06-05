@@ -2837,8 +2837,8 @@ def library():
                SUM(CASE WHEN t.slskd_state='completed' THEN 1 ELSE 0 END) AS done
         FROM import_jobs j
         LEFT JOIN tracks t ON t.job_id = j.id
-        WHERE j.source_url != ''
-        GROUP BY j.id ORDER BY j.created_at DESC
+        WHERE j.source_type NOT IN ('redownload', 'track')
+        GROUP BY j.id HAVING COUNT(t.id) > 0 ORDER BY j.created_at DESC
     """).fetchall()
     conn.close()
 
