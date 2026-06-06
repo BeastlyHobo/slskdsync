@@ -2482,6 +2482,38 @@ _lib_acoustid_state: dict = {"in_progress": False, "done": 0, "total": 0}
 _lib_acoustid_lock = threading.Lock()
 
 
+def _resolve_path(stored: str) -> Optional[Path]:
+    """Return a usable Path for a library track, tolerating name normalization differences.
+
+    Navidrome sometimes returns paths with characters (colons, smart quotes, etc.)
+    that differ from what's on disk due to filesystem normalization.  We try:
+      1. Exact path as stored.
+      2. Unicode NFC normalization of the stored path.
+      3. Filename-only glob under the library root (safe for small mismatches).
+    """
+    import unicodedata
+    p = Path(stored)
+    if p.exists():
+        return p
+    # Try NFC-normalised version
+    nfc = Path(unicodedata.normalize("NFC", stored))
+    if nfc.exists():
+        return nfc
+    # Try NFD-normalised version
+    nfd = Path(unicodedata.normalize("NFD", stored))
+    if nfd.exists():
+        return nfd
+    # Glob by filename under the library root
+    music_root = Path(get_setting("library_path") or "/music")
+    stem = p.stem
+    suffix = p.suffix.lower()
+    matches = [f for f in music_root.rglob(f"*{suffix}") if f.stem == stem and f.is_file()]
+    if len(matches) == 1:
+        logger.info(f"[AcoustID] resolved via glob: {stored!r} → {matches[0]}")
+        return matches[0]
+    return None
+
+
 def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
     """Fingerprint-verify a batch of rows from library_index or tracks."""
     logger.info(f"[AcoustID] starting verification for {len(ids)} tracks in {table}")
@@ -2503,12 +2535,33 @@ def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
             with _lib_acoustid_lock:
                 _lib_acoustid_state["done"] += 1
             continue
-        if not Path(row["path"]).exists():
-            logger.warning(f"[AcoustID] {table} id={row_id}: path not found on disk: {row['path']}")
+        resolved = _resolve_path(row["path"])
+        if resolved is None:
+            # Log parent dir to help diagnose the mismatch
+            parent = Path(row["path"]).parent
+            if parent.exists():
+                near = sorted(f.name for f in parent.iterdir())[:10]
+                logger.warning(
+                    f"[AcoustID] {table} id={row_id}: path not found: {row['path']!r}. "
+                    f"Parent dir exists, contains: {near}"
+                )
+            else:
+                gp = parent.parent
+                if gp.exists():
+                    near = sorted(f.name for f in gp.iterdir())[:10]
+                    logger.warning(
+                        f"[AcoustID] {table} id={row_id}: path not found: {row['path']!r}. "
+                        f"Parent missing; grandparent contains: {near}"
+                    )
+                else:
+                    logger.warning(
+                        f"[AcoustID] {table} id={row_id}: path not found: {row['path']!r}. "
+                        f"Parent and grandparent both missing."
+                    )
             with _lib_acoustid_lock:
                 _lib_acoustid_state["done"] += 1
             continue
-        score = _acoustid.verify(Path(row["path"]), row["artist"] or "", row["title"] or "")
+        score = _acoustid.verify(resolved, row["artist"] or "", row["title"] or "")
         if score is not None:
             conn = get_conn()
             conn.execute(f"UPDATE {table} SET acoustid_score=? WHERE id=?", (score, row_id))
