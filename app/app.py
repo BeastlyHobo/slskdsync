@@ -1992,6 +1992,26 @@ def scan_library() -> None:
                     rows.append((artist, title, album, str(f), None, None))
             source = "filesystem"
 
+        # Navidrome reports tag-derived paths that often don't match disk
+        # (e.g. "Artist/Album/" vs "Artist - Album/", ":" vs "_"). Resolve each
+        # against the real filesystem so library_index holds usable paths.
+        if source == "navidrome" and rows:
+            music_root = Path(get_setting("library_path") or "/music")
+            with _fs_index_lock:
+                _fs_index_cache["built_at"] = 0.0  # force a fresh walk
+            fs_index = _build_fs_index(music_root)
+            fixed = 0
+            resolved_rows = []
+            for a, t, al, p, ur, ca in rows:
+                rp = _resolve_path(p or "", a or "", t or "", al or "", fs_index)
+                if rp is not None and str(rp) != p:
+                    fixed += 1
+                    p = str(rp)
+                resolved_rows.append((a, t, al, p, ur, ca))
+            rows = resolved_rows
+            if fixed:
+                logger.info(f"[library] Repaired {fixed} mismatched paths via filesystem")
+
         conn = get_conn()
         conn.execute("DELETE FROM library_index")
         conn.executemany(
@@ -2482,47 +2502,94 @@ _lib_acoustid_state: dict = {"in_progress": False, "done": 0, "total": 0}
 _lib_acoustid_lock = threading.Lock()
 
 
-def _resolve_path(stored: str) -> Optional[Path]:
-    """Return a usable Path for a library track, tolerating name normalization differences.
+_fs_index_cache: dict = {"built_at": 0.0, "root": None, "files": []}  # files: list[(norm_sig, Path)]
+_fs_index_lock = threading.Lock()
 
-    Navidrome sometimes returns paths with characters (colons, smart quotes, etc.)
-    that differ from what's on disk due to filesystem normalization.  We try:
+
+def _build_fs_index(root: Path, ttl: float = 120.0) -> list:
+    """Walk the music root once and return a cached list of (normalized_signature, Path).
+
+    The signature is the file's full relative path (artist folder + album folder +
+    filename, without extension) run through _acoustid_norm — i.e. lower-cased with
+    every non-alphanumeric character stripped. This lets us match a library track to
+    its real file regardless of directory-structure or punctuation differences
+    (e.g. "Artist/Album/" vs "Artist - Album/", or ":" vs "_").
+    """
+    now = time.time()
+    with _fs_index_lock:
+        if (_fs_index_cache["root"] == str(root)
+                and now - _fs_index_cache["built_at"] < ttl
+                and _fs_index_cache["files"]):
+            return _fs_index_cache["files"]
+        files = []
+        if root.exists():
+            for f in root.rglob("*"):
+                if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
+                    rel = f.relative_to(root)
+                    sig = _acoustid_norm(str(rel.with_suffix("")))
+                    files.append((sig, f))
+        _fs_index_cache.update(built_at=now, root=str(root), files=files)
+        logger.info(f"[AcoustID] built filesystem index: {len(files)} audio files under {root}")
+        return files
+
+
+def _resolve_path(stored: str, artist: str = "", title: str = "",
+                  album: str = "", fs_index: Optional[list] = None) -> Optional[Path]:
+    """Return a usable Path for a library track, tolerating name differences.
+
+    Library paths (from Navidrome) frequently differ from what's on disk due to
+    directory-structure conventions and character substitution. We try, in order:
       1. Exact path as stored.
-      2. Unicode NFC normalization of the stored path.
-      3. Filename-only glob under the library root (safe for small mismatches).
+      2. Unicode NFC / NFD normalization of the stored path.
+      3. Normalized fuzzy match against the filesystem index (artist + title must
+         both appear in the file's normalized signature; album, if present, breaks ties).
     """
     import unicodedata
     p = Path(stored)
     if p.exists():
         return p
-    # Try NFC-normalised version
     nfc = Path(unicodedata.normalize("NFC", stored))
     if nfc.exists():
         return nfc
-    # Try NFD-normalised version
     nfd = Path(unicodedata.normalize("NFD", stored))
     if nfd.exists():
         return nfd
-    # Glob by filename under the library root
-    music_root = Path(get_setting("library_path") or "/music")
-    stem = p.stem
-    suffix = p.suffix.lower()
-    matches = [f for f in music_root.rglob(f"*{suffix}") if f.stem == stem and f.is_file()]
-    if len(matches) == 1:
-        logger.info(f"[AcoustID] resolved via glob: {stored!r} → {matches[0]}")
-        return matches[0]
+
+    # Fuzzy match against the filesystem
+    na, nt, nal = _acoustid_norm(artist), _acoustid_norm(title), _acoustid_norm(album)
+    if not nt:
+        return None  # without a title we can't match safely
+    if fs_index is None:
+        fs_index = _build_fs_index(Path(get_setting("library_path") or "/music"))
+    candidates = []
+    for sig, fpath in fs_index:
+        if nt in sig and (not na or na in sig):
+            score = 1 + (1 if na and na in sig else 0) + (1 if nal and nal in sig else 0)
+            candidates.append((score, fpath))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    top = candidates[0][0]
+    best = [fp for sc, fp in candidates if sc == top]
+    if len(best) == 1:
+        logger.info(f"[AcoustID] resolved via fs-index: {stored!r} → {best[0]}")
+        return best[0]
+    logger.warning(f"[AcoustID] ambiguous fs-index match for {stored!r}: {len(best)} candidates")
     return None
 
 
 def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
     """Fingerprint-verify a batch of rows from library_index or tracks."""
     logger.info(f"[AcoustID] starting verification for {len(ids)} tracks in {table}")
+    # library_index stores the file path in `path`; tracks stores it in `local_path`.
+    path_col = "local_path" if table == "tracks" else "path"
+    fs_index = _build_fs_index(Path(get_setting("library_path") or "/music"))
     with _lib_acoustid_lock:
         _lib_acoustid_state.update(in_progress=True, done=0, total=len(ids))
     for row_id in ids:
         conn = get_conn()
         row = conn.execute(
-            f"SELECT path, artist, title FROM {table} WHERE id=?", (row_id,)
+            f"SELECT {path_col} AS path, artist, title, album FROM {table} WHERE id=?", (row_id,)
         ).fetchone()
         conn.close()
         if not row:
@@ -2535,9 +2602,10 @@ def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
             with _lib_acoustid_lock:
                 _lib_acoustid_state["done"] += 1
             continue
-        resolved = _resolve_path(row["path"])
+        resolved = _resolve_path(row["path"], row["artist"] or "", row["title"] or "",
+                                 row["album"] or "", fs_index)
         if resolved is None:
-            # Log parent dir to help diagnose the mismatch
+            # Log nearby directory contents to help diagnose the mismatch
             parent = Path(row["path"]).parent
             if parent.exists():
                 near = sorted(f.name for f in parent.iterdir())[:10]
@@ -2561,6 +2629,12 @@ def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
             with _lib_acoustid_lock:
                 _lib_acoustid_state["done"] += 1
             continue
+        # Repair the stored path so future runs hit the exact-path fast path
+        if str(resolved) != row["path"]:
+            conn = get_conn()
+            conn.execute(f"UPDATE {table} SET {path_col}=? WHERE id=?", (str(resolved), row_id))
+            conn.commit()
+            conn.close()
         score = _acoustid.verify(resolved, row["artist"] or "", row["title"] or "")
         if score is not None:
             conn = get_conn()
