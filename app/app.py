@@ -2502,18 +2502,24 @@ _lib_acoustid_state: dict = {"in_progress": False, "done": 0, "total": 0}
 _lib_acoustid_lock = threading.Lock()
 
 
-_fs_index_cache: dict = {"built_at": 0.0, "root": None, "files": []}  # files: list[(norm_sig, Path)]
+_fs_index_cache: dict = {"built_at": 0.0, "root": None, "files": []}  # files: list[(stem_sig, dir_sig, full_sig, Path)]
 _fs_index_lock = threading.Lock()
 
 
 def _build_fs_index(root: Path, ttl: float = 120.0) -> list:
-    """Walk the music root once and return a cached list of (normalized_signature, Path).
+    """Walk the music root once and return a cached index of audio files.
 
-    The signature is the file's full relative path (artist folder + album folder +
-    filename, without extension) run through _acoustid_norm — i.e. lower-cased with
-    every non-alphanumeric character stripped. This lets us match a library track to
-    its real file regardless of directory-structure or punctuation differences
-    (e.g. "Artist/Album/" vs "Artist - Album/", or ":" vs "_").
+    Each entry is (stem_sig, dir_sig, full_sig, Path) where every *_sig is run
+    through _acoustid_norm (lower-cased, all non-alphanumerics stripped):
+      - stem_sig: the filename without extension
+      - dir_sig:  the parent directory path relative to root
+      - full_sig: the whole relative path
+
+    Splitting the signatures lets us match a track's *title* against the
+    filename only — crucial because the album name (which often contains words
+    that also appear in a track title) is repeated in every file's directory.
+    This matches files regardless of directory-structure or punctuation
+    differences (e.g. "Artist/Album/" vs "Artist - Album/", or ":" vs "_").
     """
     now = time.time()
     with _fs_index_lock:
@@ -2526,8 +2532,10 @@ def _build_fs_index(root: Path, ttl: float = 120.0) -> list:
             for f in root.rglob("*"):
                 if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
                     rel = f.relative_to(root)
-                    sig = _acoustid_norm(str(rel.with_suffix("")))
-                    files.append((sig, f))
+                    stem_sig = _acoustid_norm(f.stem)
+                    dir_sig = _acoustid_norm(str(rel.parent))
+                    full_sig = _acoustid_norm(str(rel.with_suffix("")))
+                    files.append((stem_sig, dir_sig, full_sig, f))
         _fs_index_cache.update(built_at=now, root=str(root), files=files)
         logger.info(f"[AcoustID] built filesystem index: {len(files)} audio files under {root}")
         return files
@@ -2541,8 +2549,9 @@ def _resolve_path(stored: str, artist: str = "", title: str = "",
     directory-structure conventions and character substitution. We try, in order:
       1. Exact path as stored.
       2. Unicode NFC / NFD normalization of the stored path.
-      3. Normalized fuzzy match against the filesystem index (artist + title must
-         both appear in the file's normalized signature; album, if present, breaks ties).
+      3. Normalized fuzzy match against the filesystem index: the title must
+         appear in the filename, and the artist (if known) somewhere in the path;
+         album presence breaks ties between multiple candidates.
     """
     import unicodedata
     p = Path(stored)
@@ -2562,9 +2571,10 @@ def _resolve_path(stored: str, artist: str = "", title: str = "",
     if fs_index is None:
         fs_index = _build_fs_index(Path(get_setting("library_path") or "/music"))
     candidates = []
-    for sig, fpath in fs_index:
-        if nt in sig and (not na or na in sig):
-            score = 1 + (1 if na and na in sig else 0) + (1 if nal and nal in sig else 0)
+    for stem_sig, dir_sig, full_sig, fpath in fs_index:
+        # Title must be in the filename; artist (if known) anywhere in the path.
+        if nt in stem_sig and (not na or na in full_sig):
+            score = (1 if na and na in full_sig else 0) + (1 if nal and nal in dir_sig else 0)
             candidates.append((score, fpath))
     if not candidates:
         return None
