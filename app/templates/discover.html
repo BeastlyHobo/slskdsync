@@ -1,113 +1,61 @@
 {% extends 'base.html' %}
 {% block content %}
 
-<style>
-/* ── Genre chips ──────────────────────────────────────────── */
-.genre-chip {
-  padding:.32rem .9rem; background:var(--surface2); border:1.5px solid var(--border);
-  border-radius:var(--radius-pill); color:var(--text-muted); font-size:.74rem; cursor:pointer;
-  white-space:nowrap; transition:all .12s; font-weight:600; flex-shrink:0;
-}
-.genre-chip:hover { border-color:var(--accent); color:var(--accent); }
-.genre-chip.active { background:var(--accent); border-color:var(--accent); color:#080810; font-weight:700; }
-
-/* ── ListenBrainz compact track list ─────────────────────── */
-.disc-track-list { display:flex; flex-direction:column; gap:.4rem; }
-.track-card.track-in-lib { border-left:3px solid var(--success-text); }
-.in-lib-badge { font-size:.62rem; font-weight:700; color:var(--success-text);
-                background:var(--success-bg); border-radius:var(--radius-pill); padding:1px 6px;
-                margin-left:.25rem; vertical-align:middle; }
-
-/* ── Tile action buttons ─────────────────────────────────── */
-.btn-tile-slsk { background:#1e4a78; color:#a8d0ff; font-size:.68rem; font-weight:700;
-                 padding:.28rem .7rem; border:none; border-radius:var(--radius-pill);
-                 cursor:pointer; white-space:nowrap; min-width:80px; }
-.btn-tile-mono { background:#3a1a6e; color:#c8a8ff; font-size:.68rem; font-weight:700;
-                 padding:.28rem .7rem; border:none; border-radius:var(--radius-pill);
-                 cursor:pointer; white-space:nowrap; min-width:80px; }
-.btn-tile-slsk:active, .btn-tile-mono:active { transform:scale(.95); }
-.btn-queued { background:var(--surface3) !important; color:var(--text-muted) !important; cursor:default !important; }
-
-/* ── Radio results ───────────────────────────────────────── */
-.radio-results { margin-top:.45rem; padding:.5rem .6rem;
-                 background:var(--surface); border-radius:var(--radius);
-                 border-left:3px solid var(--accent); box-shadow:var(--shadow-sm); }
-.radio-label { font-size:.72rem; color:var(--text-muted); margin-bottom:.4rem; font-weight:700; }
-.dl-btns { display:flex; gap:.3rem; flex-shrink:0; }
-.btn-radio { background:var(--surface2); color:var(--accent); border:1.5px solid var(--border);
-             font-size:.68rem; padding:.3rem .6rem; border-radius:var(--radius-pill);
-             font-weight:700; cursor:pointer; }
-.btn-radio:hover { border-color:var(--accent); background:var(--surface3); }
-
-/* ── Loading / empty ─────────────────────────────────────── */
-.disc-loading { display:flex; align-items:center; gap:.5rem; justify-content:center;
-                padding:2rem 1rem; color:var(--text-muted); font-size:.84rem; }
-.disc-empty { text-align:center; padding:1.5rem; color:var(--text-muted); font-size:.84rem; }
-.shelf-spinner { width:16px; height:16px; border:2px solid var(--border);
-                 border-top-color:var(--accent); border-radius:50%;
-                 animation:spin .6s linear infinite; display:inline-block; }
-@keyframes spin { to { transform:rotate(360deg); } }
-
-/* ── Genre toggle chevron ────────────────────────────────── */
-#genre-toggle-wrap { overflow:hidden; max-height:0; transition:max-height .25s; margin-bottom:0; }
-#genre-toggle-wrap.open { max-height:80px; margin-bottom:.55rem; }
-</style>
-
-<div style="padding:.25rem 0 1rem">
-
-  <!-- ── Top Charts ──────────────────────────────────────── -->
-  <div class="shelf">
-    <div class="shelf-hdr">
-      <span class="shelf-hdr-title">Top Charts</span>
-      <span class="shelf-hdr-link" id="genre-toggle-btn" onclick="toggleGenres()">Genres ›</span>
-    </div>
-    <div id="genre-toggle-wrap">
-      <div class="shelf-scroll" id="genre-chips">
-        <button class="genre-chip active" data-genre-id="" onclick="selectGenre(this,'')">All</button>
-      </div>
-    </div>
-    <div class="shelf-scroll" id="charts-area">
-      <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
-    </div>
-  </div>
-
-  {% if apple_configured %}
-  <!-- ── New Releases ────────────────────────────────────── -->
-  <div class="shelf">
-    <div class="shelf-hdr">
-      <span class="shelf-hdr-title">New Releases</span>
-    </div>
-    <div class="shelf-scroll" id="apple-area">
-      <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
-    </div>
-  </div>
-  {% endif %}
-
-  {% if lb_username %}
-  <!-- ── For You (ListenBrainz) ──────────────────────────── -->
-  <div class="shelf">
-    <div class="shelf-hdr">
-      <span class="shelf-hdr-title">For You</span>
-      <span class="shelf-hdr-sub">Your top tracks this month</span>
-    </div>
-    <div class="disc-track-list" id="lb-area">
-      <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
-    </div>
-  </div>
-
-  <!-- ── Listening History (ListenBrainz) ───────────────── -->
-  <div class="shelf">
-    <div class="shelf-hdr">
-      <span class="shelf-hdr-title">Listening History</span>
-      <span class="shelf-hdr-sub">Recently scrobbled</span>
-    </div>
-    <div class="disc-track-list" id="lb-history-area">
-      <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
-    </div>
-  </div>
-  {% endif %}
-
+<div class="page-head">
+  <h1 class="page-title">Discover</h1>
 </div>
+
+<!-- ── Top Charts ──────────────────────────────────────── -->
+<div class="shelf">
+  <div class="shelf-hdr">
+    <span class="shelf-hdr-title">Top Charts</span>
+    <span class="shelf-hdr-link" id="genre-toggle-btn" onclick="toggleGenres()">Genres ›</span>
+  </div>
+  <div id="genre-toggle-wrap">
+    <div class="shelf-scroll" id="genre-chips">
+      <button class="genre-chip active" data-genre-id="" onclick="selectGenre(this,'')">All</button>
+    </div>
+  </div>
+  <div class="shelf-scroll" id="charts-area">
+    <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
+  </div>
+</div>
+
+{% if apple_configured %}
+<!-- ── New Releases ────────────────────────────────────── -->
+<div class="shelf">
+  <div class="shelf-hdr">
+    <span class="shelf-hdr-title">New Releases</span>
+  </div>
+  <div class="shelf-scroll" id="apple-area">
+    <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
+  </div>
+</div>
+{% endif %}
+
+{% if lb_username %}
+<!-- ── For You (ListenBrainz) ──────────────────────────── -->
+<div class="shelf">
+  <div class="shelf-hdr">
+    <span class="shelf-hdr-title">For You</span>
+    <span class="shelf-hdr-sub">Your top tracks this month</span>
+  </div>
+  <div class="disc-track-list card-list" id="lb-area">
+    <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
+  </div>
+</div>
+
+<!-- ── Listening History (ListenBrainz) ───────────────── -->
+<div class="shelf">
+  <div class="shelf-hdr">
+    <span class="shelf-hdr-title">Listening History</span>
+    <span class="shelf-hdr-sub">Recently scrobbled</span>
+  </div>
+  <div class="disc-track-list card-list" id="lb-history-area">
+    <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
+  </div>
+</div>
+{% endif %}
 
 <script>
 // ── Library index ─────────────────────────────────────────────────────────
@@ -228,13 +176,13 @@ function tilHtml(t) {
   const libKey = (t.artist||'').toLowerCase().trim() + '||' + (t.title||'').toLowerCase().trim();
   const inLib = libIndex.has(libKey);
   const isAlbum = t.type === 'album';
-  const label = isAlbum ? esc(t.title) : esc(t.title);
-  const sub   = esc(t.artist || '');
+  const h = hueOf(t.title || t.artist || '');
+  const initial = (t.title || t.artist || '?').replace(/^the\s+/i,'').trim()[0] || '?';
   const artHtml = t.cover
     ? `<img class="shelf-tile-art" src="${esc(t.cover)}" alt="" loading="lazy"
            onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"
-        ><div class="shelf-tile-ph" style="display:none">${isAlbum ? '💿' : '🎵'}</div>`
-    : `<div class="shelf-tile-ph">${isAlbum ? '💿' : '🎵'}</div>`;
+        ><div class="art" style="width:158px;height:158px;background:hsl(${h},44%,52%);display:none;border-radius:var(--radius)"><span class="glyph">${esc(initial)}</span></div>`
+    : `<div class="art" style="width:158px;height:158px;background:hsl(${h},44%,52%);border-radius:var(--radius)"><span class="glyph">${esc(initial)}</span></div>`;
 
   const radioBtn = (!isAlbum && t.artist_id)
     ? `<button class="btn-radio radio-btn"
@@ -258,8 +206,8 @@ function tilHtml(t) {
     ${artHtml}
     ${inLib ? '<div class="shelf-tile-lib"></div>' : ''}
     <div class="tile-actions">${dlBtns || '<span style="color:var(--text-muted);font-size:.72rem">Album</span>'}</div>
-    <div class="shelf-tile-title">${label}</div>
-    <div class="shelf-tile-sub">${sub}</div>
+    <div class="shelf-tile-title">${esc(t.title)}</div>
+    <div class="shelf-tile-sub">${esc(t.artist || '')}</div>
   </div>`;
 }
 
@@ -275,13 +223,16 @@ function renderTrackList(container, tracks) {
 function trackCardHtml(t) {
   const libKey = (t.artist||'').toLowerCase().trim() + '||' + (t.title||'').toLowerCase().trim();
   const inLib = libIndex.has(libKey);
+  const h = hueOf(t.album || t.title || '');
+  const initial = (t.album || t.title || '?').replace(/^the\s+/i,'').trim()[0] || '?';
+  const artHtml = t.cover
+    ? `<img class="cover" src="${esc(t.cover)}" alt="" loading="lazy" style="width:50px;height:50px;"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="art" style="width:50px;height:50px;background:hsl(${h},44%,52%);display:none;"><span class="glyph">${esc(initial)}</span></div>`
+    : `<div class="art" style="width:50px;height:50px;background:hsl(${h},44%,52%);"><span class="glyph">${esc(initial)}</span></div>`;
   return `
   <div class="track-card${inLib ? ' track-in-lib' : ''}">
-    ${t.cover
-      ? `<img class="cover" src="${esc(t.cover)}" alt="" loading="lazy"
-             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-         <div class="cover-placeholder" style="display:none">🎵</div>`
-      : `<div class="cover-placeholder">🎵</div>`}
+    ${artHtml}
     <div class="track-info">
       <div class="track-title">${esc(t.title)}${inLib ? ' <span class="in-lib-badge">✓ Library</span>' : ''}</div>
       <div class="track-sub">${esc(t.artist||'')}${t.album ? ' · ' + esc(t.album) : ''}</div>
@@ -312,12 +263,10 @@ function tileClick(tile) {
 }
 
 document.addEventListener('click', e => {
-  // Close active tile when clicking outside
   if (!e.target.closest('.shelf-tile')) {
     document.querySelectorAll('.shelf-tile.active').forEach(t => t.classList.remove('active'));
   }
 
-  // Download button
   const dlBtn = e.target.closest('.dl-btn');
   if (dlBtn && !dlBtn.classList.contains('btn-queued')) {
     e.stopPropagation();
@@ -330,7 +279,6 @@ document.addEventListener('click', e => {
     return;
   }
 
-  // Artist radio
   const radioBtn = e.target.closest('.radio-btn');
   if (radioBtn) {
     e.stopPropagation();
@@ -352,7 +300,6 @@ function loadArtistRadio(btn) {
     .then(tracks => {
       btn.textContent = origText;
       btn.disabled = false;
-      // Show radio results below the shelf
       const shelf = tile ? tile.closest('.shelf') : null;
       if (!shelf) return;
       let existing = shelf.nextElementSibling;
@@ -361,7 +308,7 @@ function loadArtistRadio(btn) {
       const div = document.createElement('div');
       div.className = 'radio-results';
       div.innerHTML = `<div class="radio-label">↺ Similar to ${esc(artistName)}</div>
-        <div class="disc-track-list">` +
+        <div class="disc-track-list card-list">` +
         tracks.slice(0, 10).map(t => trackCardHtml(t)).join('') +
         `</div>`;
       shelf.insertAdjacentElement('afterend', div);
@@ -402,10 +349,11 @@ function queueDl(btn, item, source) {
   });
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
-function fmtDur(s) {
-  if (!s) return '';
-  return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+// ── Gradient art helper ───────────────────────────────────────────────────
+function hueOf(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
+  return h;
 }
 
 function esc(str) {
