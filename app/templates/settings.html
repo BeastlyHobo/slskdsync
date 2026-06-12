@@ -202,8 +202,14 @@
     Live logs
     <button type="button" class="test-btn" id="log-toggle-btn" onclick="toggleLogViewer()">Show</button>
   </div>
-  <div id="log-viewer" style="display:none;margin-top:.4rem">
-    <div id="log-lines" class="log-box">Loading…</div>
+  <div id="log-viewer" style="display:none">
+    <div class="log-toolbar">
+      <button type="button" class="log-toolbar-btn" id="log-copy-btn" onclick="copyLogs()">Copy all</button>
+      <a id="log-download-btn" class="log-toolbar-btn" download="slskdsync.log">Download</a>
+      <button type="button" class="log-toolbar-btn" onclick="clearLogDisplay()">Clear display</button>
+      <span class="log-count" id="log-count"></span>
+    </div>
+    <div id="log-lines" class="log-box"></div>
   </div>
 </div>
 
@@ -258,6 +264,8 @@ function testPaths(btn) {
 }
 
 let _logInterval = null;
+let _logLines = [];
+
 function toggleLogViewer() {
   const viewer = document.getElementById('log-viewer');
   const btn    = document.getElementById('log-toggle-btn');
@@ -268,7 +276,7 @@ function toggleLogViewer() {
     clearInterval(_logInterval);
     _logInterval = null;
   } else {
-    viewer.style.display = '';
+    viewer.style.display = 'block';
     btn.textContent = 'Hide';
     fetchLogs();
     _logInterval = setInterval(fetchLogs, 2000);
@@ -288,18 +296,52 @@ function fetchLogs() {
   fetch('/api/logs')
     .then(r => r.json())
     .then(d => {
+      _logLines = d.lines;
       const el = document.getElementById('log-lines');
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       if (!d.lines.length) {
         el.innerHTML = '<span class="log-empty">(no log entries yet)</span>';
+        document.getElementById('log-count').textContent = '';
         return;
       }
       el.innerHTML = d.lines.map(line =>
         `<div class="log-line ${logClass(line)}">${escapeHtml(line)}</div>`
       ).join('');
+      document.getElementById('log-count').textContent = `${d.lines.length} lines`;
+      updateDownloadLink(d.lines);
       if (atBottom) el.scrollTop = el.scrollHeight;
     })
     .catch(() => {});
+}
+
+function copyLogs() {
+  const btn = document.getElementById('log-copy-btn');
+  navigator.clipboard.writeText(_logLines.join('\n')).then(() => {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy all'; btn.classList.remove('copied'); }, 2000);
+  }).catch(() => {
+    // Fallback: select all text in the box
+    const el = document.getElementById('log-lines');
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+}
+
+function updateDownloadLink(lines) {
+  const blob = new Blob([lines.join('\n')], {type: 'text/plain'});
+  const a = document.getElementById('log-download-btn');
+  if (a._blobUrl) URL.revokeObjectURL(a._blobUrl);
+  a._blobUrl = URL.createObjectURL(blob);
+  a.href = a._blobUrl;
+}
+
+function clearLogDisplay() {
+  document.getElementById('log-lines').innerHTML = '<span class="log-empty">(display cleared — live logs continue below when next poll runs)</span>';
+  document.getElementById('log-count').textContent = '';
 }
 
 function triggerScan(btn) {

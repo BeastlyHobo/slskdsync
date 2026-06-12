@@ -2329,8 +2329,38 @@ main {
 }
 
 /* Live log viewer */
-#log-viewer { display: none; margin-top: 10px; }
-#log-viewer.visible { display: block; }
+#log-viewer { margin-top: 10px; }
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.log-toolbar-btn {
+  padding: 3px 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition: border-color .14s, color .14s;
+  text-decoration: none;
+}
+
+.log-toolbar-btn:hover { border-color: var(--accent); color: var(--accent); }
+.log-toolbar-btn.copied { border-color: var(--ok); color: var(--ok); }
+
+.log-count {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
 
 .log-box {
   background: var(--surface-solid);
@@ -2340,13 +2370,16 @@ main {
   font-size: 0.68rem;
   color: var(--text-muted);
   padding: 0.5rem 0.6rem;
-  max-height: 300px;
+  max-height: 420px;
   overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  line-height: 1.5;
-  margin-top: 8px;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+  margin-top: 0;
+  user-select: text;
+  cursor: text;
 }
+
+.log-line { padding: 1px 0; white-space: pre-wrap; }
 
 /* ── Login / Setup (auth) ────────────────────────────────── */
 .auth-wrap,
