@@ -946,7 +946,12 @@ class AcoustIDClient:
             for score, _rid, rec_title, rec_artist in results:
                 nrt = _acoustid_norm(rec_title or "")
                 nra = _acoustid_norm(rec_artist or "")
-                title_ok = nt and nrt and (nt in nrt or nrt in nt)
+                # Recording has no metadata in AcoustID DB — can't refute by title,
+                # so trust the acoustic fingerprint confidence directly.
+                if not nrt:
+                    logger.info(f"[AcoustID] {tag} → {score:.0%} match (recording has no metadata in DB)")
+                    return float(score)
+                title_ok = nt and (nt in nrt or nrt in nt)
                 artist_ok = not na or not nra or (na in nra or nra in na)
                 if title_ok and artist_ok:
                     logger.info(f"[AcoustID] {tag} → {score:.0%} match")
