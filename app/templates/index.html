@@ -1,13 +1,17 @@
 {% extends 'base.html' %}
 {% block content %}
 
+<div class="page-head">
+  <h1 class="page-title">Queue</h1>
+</div>
+
 <!-- Import URL -->
 <div class="import-section">
-  <span class="section-label">Import from URL</span>
+  <span class="label">Import from URL</span>
   <form method="post" action="/import" id="import-form">
     <div class="input-row">
       <input
-        class="text-input"
+        class="field-input"
         type="url"
         name="url"
         id="import-url"
@@ -29,7 +33,7 @@
         <input type="checkbox" name="create_m3u" value="1" id="m3u-check" onchange="toggleM3uName()">
         Save as .m3u playlist
       </label>
-      <input type="text" name="playlist_name" id="m3u-name" class="text-input"
+      <input type="text" name="playlist_name" id="m3u-name" class="field-input"
         placeholder="Playlist name…"
         style="display:none;flex:1;margin-left:.5rem;font-size:.82rem">
     </div>
@@ -37,8 +41,8 @@
 </div>
 
 <!-- slskd connection status -->
-<div id="slskd-status-bar" style="display:none;font-size:.72rem;color:var(--text-muted);padding:.2rem 0 .4rem;display:flex;align-items:center;gap:.5rem">
-  <span id="slskd-dot" style="width:7px;height:7px;border-radius:50%;background:#444;flex-shrink:0;display:inline-block"></span>
+<div id="slskd-status-bar" style="display:none">
+  <span class="slskd-dot" id="slskd-dot"></span>
   <span id="slskd-status-text">Checking slskd…</span>
 </div>
 
@@ -54,20 +58,20 @@
 </div>
 <div class="queue-actions">
   {% if stats.downloading > 0 %}
-  <button class="qa-btn qa-retry" onclick="queueAction('retry_downloading')">↺ Retry stuck</button>
+  <button class="q-btn" onclick="queueAction('retry_downloading')">↺ Retry stuck</button>
   {% endif %}
   {% if stats.needs_search > 0 %}
-  <button class="qa-btn qa-clear" onclick="queueAction('clear_needs_search')">✕ Clear fix search</button>
+  <button class="q-btn" onclick="queueAction('clear_needs_search')">✕ Clear fix search</button>
   {% endif %}
   {% if stats.failed > 0 %}
-  <button class="qa-btn qa-retry" onclick="queueAction('retry_failed')">↺ Retry failed</button>
-  <button class="qa-btn qa-clear" onclick="queueAction('clear_failed')">✕ Clear failed</button>
+  <button class="q-btn" style="color:#5a9aee;border-color:rgba(90,154,238,.3)" onclick="queueAction('retry_failed')">↺ Retry failed</button>
+  <button class="q-btn" onclick="queueAction('clear_failed')">✕ Clear failed</button>
   {% endif %}
   {% if stats.completed > 0 %}
-  <button class="qa-btn qa-clear" onclick="queueAction('clear_completed')">✕ Clear done</button>
+  <button class="q-btn" onclick="queueAction('clear_completed')">✕ Clear done</button>
   {% endif %}
   {% if stats.total > 0 %}
-  <button class="qa-btn qa-clear" onclick="queueAction('clear_all')">✕ Clear all</button>
+  <button class="q-btn" onclick="queueAction('clear_all')">✕ Clear all</button>
   {% endif %}
 </div>
 {% endif %}
@@ -76,10 +80,13 @@
 {% set done_tracks = tracks | selectattr('slskd_state', 'equalto', 'completed') | list %}
 
 {% macro track_card(t) %}
+{% set h = namespace(val=0) %}
 <div class="swipe-row" data-id="{{ t.id }}">
   <div class="track-card expandable" onclick="toggleExpand(this)">
+    {%- set cover_hue = (t.title or t.artist or '') | length * 37 % 360 -%}
     {% if t.cover_url %}
-      <img class="cover" src="{{ t.cover_url }}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      <img class="cover" src="{{ t.cover_url }}" alt="" loading="lazy"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
       <div class="cover-placeholder" style="display:none">🎵</div>
     {% else %}
       <div class="cover-placeholder">🎵</div>
@@ -91,7 +98,7 @@
       <div class="track-sub track-error">{{ t.slskd_error[:120] }}{% if t.slskd_error|length > 120 %}…{% endif %}</div>
       {% endif %}
       {% if t.local_path and t.slskd_state == 'completed' %}
-      <div class="track-sub" style="color:#40cc70;margin-top:2px">
+      <div class="track-sub" style="color:var(--ok);margin-top:2px">
         ✓ {{ t.local_path.split('/')[-1] }}
         {% if t.acoustid_score is not none %}
           {% if t.acoustid_score < 0 %}
@@ -110,14 +117,14 @@
         <div class="detail-row"><span class="detail-label">Source</span> {{ t.download_source or 'slskd' }}</div>
         {% if t.slskd_download_user %}<div class="detail-row"><span class="detail-label">Peer</span> {{ t.slskd_download_user }}</div>{% endif %}
         {% if t.slskd_download_filename %}<div class="detail-row"><span class="detail-label">File</span> {{ t.slskd_download_filename.split('\\')[-1] }}</div>{% endif %}
-        {% if t.slskd_error %}<div class="detail-row" style="color:#e05050;white-space:pre-wrap;word-break:break-word"><span class="detail-label" style="color:#e05050">Error</span> {{ t.slskd_error }}</div>{% endif %}
+        {% if t.slskd_error %}<div class="detail-row" style="color:var(--err);white-space:pre-wrap;word-break:break-word"><span class="detail-label" style="color:var(--err)">Error</span> {{ t.slskd_error }}</div>{% endif %}
         {% if t.local_path %}<div class="detail-row"><span class="detail-label">Path</span> {{ t.local_path }}</div>{% endif %}
         {% if t.slskd_search_id %}<div class="detail-row"><span class="detail-label">Search ID</span> {{ t.slskd_search_id[:16] }}…</div>{% endif %}
         <div style="display:flex;gap:.4rem;margin-top:.5rem;flex-wrap:wrap">
           {% if t.slskd_state != 'completed' %}
           <button class="detail-retry-btn" onclick="event.stopPropagation();retryTrack({{ t.id }},this)">↻ Retry this track</button>
           {% endif %}
-          <button class="detail-retry-btn" style="color:#e05050;border-color:#e05050" onclick="event.stopPropagation();deleteTrack(this)">✕ Delete</button>
+          <button class="detail-retry-btn" style="color:var(--err);border-color:var(--err)" onclick="event.stopPropagation();deleteTrack(this)">✕ Delete</button>
         </div>
       </div>
     </div>
@@ -156,7 +163,7 @@
 {% endif %}
 
 {% if done_tracks %}
-<div class="completed-header" id="completed-toggle" onclick="toggleCompleted()">
+<div id="completed-toggle" onclick="toggleCompleted()">
   <span>✓ {{ done_tracks|length }} completed</span>
   <span id="completed-chevron">›</span>
 </div>
@@ -178,127 +185,6 @@
   <p>No tracks in queue yet.<br>Search for music or paste a playlist URL above.</p>
 </div>
 {% endif %}
-
-<style>
-.stat-chip-fail { color: #e05050 !important; }
-.stat-chip-warn { color: #e09020 !important; }
-.queue-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .75rem; }
-.qa-btn {
-  padding: .35rem .8rem; border-radius: var(--radius-pill); font-size: .75rem;
-  font-weight: 600; cursor: pointer; border: 1px solid var(--border);
-  background: var(--surface); color: var(--text-muted); transition: all .15s;
-}
-.qa-btn:hover { background: var(--surface2); }
-.qa-retry { color: #5a9aee; border-color: #1a3a5c; }
-.qa-retry:hover { border-color: #5a9aee; }
-.qa-clear:hover { color: #e05050; border-color: #5c1a1a; }
-
-/* ── Swipe-to-delete / swipe-to-retry ────────── */
-.swipe-row {
-  position: relative; overflow: hidden;
-  border-radius: var(--radius-sm);
-}
-.swipe-row .track-card {
-  transition: transform .18s ease;
-  border-radius: var(--radius-sm);
-}
-.swipe-retry-btn {
-  position: absolute; left: 0; top: 0; bottom: 0; width: 76px;
-  background: #1a6a38; color: #fff; border: none;
-  font-size: .78rem; font-weight: 700; cursor: pointer;
-  transform: translateX(-76px); transition: transform .18s ease;
-}
-.swipe-del-btn {
-  position: absolute; right: 0; top: 0; bottom: 0; width: 76px;
-  background: #c0392b; color: #fff; border: none;
-  font-size: .78rem; font-weight: 700; cursor: pointer;
-  transform: translateX(76px); transition: transform .18s ease;
-}
-.swipe-row.swiped-left  .track-card { transform: translateX(-76px); }
-.swipe-row.swiped-left  .swipe-del-btn { transform: translateX(0); }
-.swipe-row.swiped-right .track-card { transform: translateX(76px); }
-.swipe-row.swiped-right .swipe-retry-btn { transform: translateX(0); }
-/* Mouse users can't swipe — show inline action buttons on hover instead */
-.row-actions { display: none; }
-.row-act {
-  width: 30px; height: 30px; border-radius: 7px;
-  border: 1px solid var(--border); background: var(--surface);
-  cursor: pointer; font-size: .85rem; line-height: 1;
-  display: flex; align-items: center; justify-content: center;
-  transition: all .15s;
-}
-.row-retry { color: #40cc70; }
-.row-retry:hover { border-color: #40cc70; background: var(--surface2); }
-.row-del { color: #e05050; }
-.row-del:hover { border-color: #e05050; background: var(--surface2); }
-@media (hover: hover) {
-  .row-actions {
-    display: flex; gap: .3rem;
-    position: absolute; right: .5rem; top: 50%;
-    transform: translateY(-50%);
-    opacity: 0; pointer-events: none;
-    transition: opacity .15s; z-index: 3;
-  }
-  .swipe-row:hover .row-actions { opacity: 1; pointer-events: auto; }
-  /* When expanded, the detail panel already has Retry/Delete buttons */
-  .swipe-row:has(.track-card.expanded) .row-actions { display: none; }
-}
-
-/* Retry button inside expanded card detail panel */
-.detail-retry-btn {
-  margin-top: .5rem; padding: .25rem .6rem;
-  background: var(--surface3); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); color: var(--accent);
-  font-size: .72rem; font-weight: 600; cursor: pointer;
-}
-
-.track-card.expandable { cursor: pointer; flex-wrap: wrap; }
-.track-card.expandable:hover { background: var(--surface2); }
-.track-detail { display: none; width: 100%; margin-top: .5rem; padding-top: .5rem;
-                border-top: 1px solid var(--border); }
-.track-card.expanded .track-detail { display: block; }
-.detail-row { font-size: .72rem; color: var(--text-muted); line-height: 1.6; word-break: break-all; }
-.detail-label { font-weight: 600; margin-right: .35rem; }
-.track-error { color: #e05050; margin-top: 3px; font-size: .75rem; }
-
-/* AcoustID confidence badges */
-.aid-badge { font-size:.62rem; font-weight:700; border-radius:var(--radius-pill);
-             padding:1px 6px; margin-left:.3rem; vertical-align:middle; }
-.aid-green  { background:#163020; color:#40cc70; }
-.aid-yellow { background:#2a2000; color:#e09020; }
-.aid-red    { background:#2a0a0a; color:#e05050; }
-.aid-gray   { background:var(--surface3); color:var(--text-muted); }
-
-/* needs_search inline panel */
-.needs-search-panel {
-  display: flex; gap: .4rem; padding: .4rem .65rem .5rem;
-  background: var(--surface); border-top: 1px solid var(--border);
-}
-.ns-input {
-  flex: 1; background: var(--surface2); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); color: var(--text); font-size: .8rem;
-  padding: .3rem .5rem; min-width: 0;
-}
-.ns-input:focus { outline: none; border-color: var(--accent); }
-.ns-btn {
-  padding: .3rem .65rem; background: var(--accent); color: #fff;
-  border: none; border-radius: var(--radius-sm); font-size: .78rem;
-  font-weight: 600; cursor: pointer; white-space: nowrap;
-}
-.ns-btn:disabled { opacity: .5; }
-.badge-needs_search { background: #4a2e00; color: #e09020; }
-
-.completed-header {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: .6rem .75rem; margin-top: .75rem;
-  background: var(--surface); border-radius: var(--radius-sm);
-  font-size: .82rem; color: var(--success-text, #40cc70);
-  cursor: pointer; font-weight: 600; border: 1px solid var(--border);
-}
-.completed-header:hover { background: var(--surface2); }
-#completed-chevron { transition: transform .2s; font-size: 1rem; }
-#completed-chevron.open { transform: rotate(90deg); }
-</style>
 
 <script>
 function toggleExpand(card) {
@@ -412,12 +298,10 @@ function submitSearch(input, trackId) {
     const delBtn  = active.querySelector('.swipe-del-btn');
     const retBtn  = active.querySelector('.swipe-retry-btn');
     if (dx < 0) {
-      // Left swipe → reveal delete
       if (card)   card.style.transform   = `translateX(-${travel}px)`;
       if (delBtn) delBtn.style.transform = `translateX(${76 - travel}px)`;
       if (retBtn) retBtn.style.transform = `translateX(-76px)`;
     } else {
-      // Right swipe → reveal retry
       if (card)   card.style.transform   = `translateX(${travel}px)`;
       if (retBtn) retBtn.style.transform = `translateX(${travel - 76}px)`;
       if (delBtn) delBtn.style.transform = `translateX(76px)`;
@@ -446,7 +330,7 @@ function submitSearch(input, trackId) {
   });
 })();
 
-// ── Live queue polling (replaces full page reload) ──
+// ── Live queue polling ──
 (function() {
   const BADGE_LABELS = {
     pending: 'pending', queued: 'queued', album_queued: 'album_queued',
@@ -456,20 +340,12 @@ function submitSearch(input, trackId) {
   const knownCount = {{ stats.total }};
   let hasActive = {{ 'true' if (stats.pending + stats.downloading) > 0 else 'false' }};
 
-  function updateStatChip(selector, value, label) {
-    const el = document.querySelector(selector);
-    if (el) el.querySelector('strong').textContent = value;
-  }
-
   function poll() {
     fetch('/api/queue/status')
       .then(r => r.json())
       .then(d => {
-        // If track count changed, do one full reload to render new rows
         if (d.stats.total !== knownCount) { location.reload(); return; }
 
-        // If any track just completed, reload so the server renders the
-        // filename row and AcoustID badge (those are Jinja-only).
         let needsReload = false;
         d.tracks.forEach(t => {
           const row = document.querySelector(`.swipe-row[data-id="${t.id}"]`);
@@ -481,44 +357,40 @@ function submitSearch(input, trackId) {
         });
         if (needsReload) { location.reload(); return; }
 
-        // Update each track row in-place
         d.tracks.forEach(t => {
           const row = document.querySelector(`.swipe-row[data-id="${t.id}"]`);
           if (!row) return;
           const badge = row.querySelector('.badge');
           if (badge) {
-            const label = BADGE_LABELS[t.state] || t.state;
-            badge.textContent = label;
+            badge.textContent = BADGE_LABELS[t.state] || t.state;
             badge.className = `badge badge-${t.state}`;
           }
           const errEl = row.querySelector('.track-error');
           if (errEl) errEl.textContent = t.error || '';
         });
 
-        // Update stat chips
         const s = d.stats;
         document.querySelectorAll('.stat-chip strong').forEach(el => {
           const chip = el.parentElement;
-          if (chip.textContent.includes('total'))        el.textContent = s.total;
-          if (chip.textContent.includes('downloading'))  el.textContent = s.downloading;
-          if (chip.textContent.includes('pending'))      el.textContent = s.pending;
-          if (chip.textContent.includes('done'))         el.textContent = s.completed;
-          if (chip.textContent.includes('failed'))       el.textContent = s.failed;
-          if (chip.textContent.includes('need search'))  el.textContent = s.needs_search;
+          if (chip.textContent.includes('total'))       el.textContent = s.total;
+          if (chip.textContent.includes('downloading')) el.textContent = s.downloading;
+          if (chip.textContent.includes('pending'))     el.textContent = s.pending;
+          if (chip.textContent.includes('done'))        el.textContent = s.completed;
+          if (chip.textContent.includes('failed'))      el.textContent = s.failed;
+          if (chip.textContent.includes('need search')) el.textContent = s.needs_search;
         });
 
         hasActive = (s.pending + s.downloading) > 0;
         if (hasActive) setTimeout(poll, 5000);
-        else setTimeout(poll, 20000); // slow down when idle
+        else setTimeout(poll, 20000);
       })
       .catch(() => setTimeout(poll, 15000));
   }
 
-  // Start polling after a short delay
   setTimeout(poll, 5000);
 })();
 
-// ── M3U playlist row ──────────────────────────
+// ── M3U playlist row ──
 (function() {
   const urlInput = document.getElementById('import-url');
   const m3uRow   = document.getElementById('m3u-row');
@@ -552,19 +424,19 @@ function toggleM3uName() {
       .then(d => {
         bar.style.display = 'flex';
         if (d.connected) {
-          dot.style.background = '#40cc70';
+          dot.style.background = 'var(--ok)';
           const parts = ['slskd connected'];
           if (d.version) parts.push(`v${d.version}`);
           if (d.active > 0) parts.push(`${d.active} active download${d.active !== 1 ? 's' : ''}`);
           txt.textContent = parts.join(' · ');
         } else {
-          dot.style.background = '#e05050';
+          dot.style.background = 'var(--err)';
           txt.textContent = 'slskd not reachable';
         }
       })
       .catch(() => {
         bar.style.display = 'flex';
-        dot.style.background = '#888';
+        dot.style.background = 'var(--text-faint)';
         txt.textContent = 'slskd status unknown';
       });
   }

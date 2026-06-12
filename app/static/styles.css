@@ -833,53 +833,109 @@ main {
   margin-bottom: 0.35rem;
 }
 
+/* card slides via JS transform */
+.swipe-row .track-card { transition: transform .18s ease; }
+
 .swipe-retry-btn,
 .swipe-del-btn {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 80px;
+  width: 76px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.2rem;
+  font-size: 0.78rem;
   font-weight: 700;
   cursor: pointer;
   border: none;
-  opacity: 0;
-  transition: opacity .2s;
-  pointer-events: none;
+  transition: transform .18s ease;
 }
 
 .swipe-retry-btn {
   left: 0;
   background: #1a4a2e;
   color: #40cc70;
-  border-radius: var(--radius) 0 0 var(--radius);
+  transform: translateX(-76px);
 }
 
 .swipe-del-btn {
   right: 0;
   background: #3a1010;
   color: #e05050;
-  border-radius: 0 var(--radius) var(--radius) 0;
+  transform: translateX(76px);
 }
 
-.swipe-row.swiped-left .swipe-del-btn,
-.swipe-row.swiped-right .swipe-retry-btn {
-  opacity: 1;
-  pointer-events: auto;
-}
+.swipe-row.swiped-left  .track-card   { transform: translateX(-76px); }
+.swipe-row.swiped-left  .swipe-del-btn  { transform: translateX(0); }
+.swipe-row.swiped-right .track-card   { transform: translateX(76px); }
+.swipe-row.swiped-right .swipe-retry-btn { transform: translateX(0); }
 
+/* Desktop hover action icons */
 .row-actions {
   display: none;
   gap: 4px;
-  flex-shrink: 0;
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+  z-index: 3;
 }
 
-@media (hover: hover) {
-  .track-card:hover .row-actions { display: flex; }
+.row-act {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .15s;
 }
+
+.row-retry { color: var(--ok); }
+.row-retry:hover { border-color: var(--ok); background: var(--surface2); }
+.row-del { color: var(--err); }
+.row-del:hover { border-color: var(--err); background: var(--surface2); }
+
+@media (hover: hover) {
+  .row-actions { display: flex; }
+  .swipe-row:hover .row-actions { opacity: 1; pointer-events: auto; }
+  .swipe-row:has(.track-card.expanded) .row-actions { display: none; }
+}
+
+/* Queue card detail panel */
+.detail-row {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+  word-break: break-all;
+  font-family: var(--font-mono);
+}
+
+.detail-label { font-weight: 700; margin-right: 0.35rem; color: var(--text-faint); font-family: var(--font-ui); }
+
+.detail-retry-btn {
+  padding: 0.25rem 0.6rem;
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition: background .14s;
+}
+
+.detail-retry-btn:hover { background: var(--surface2); }
 
 /* ── Needs-search inline panel ──────────────────────────── */
 .needs-search-panel {
@@ -1183,6 +1239,15 @@ main {
 }
 
 /* Collection home menu */
+.coll-section-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0.1rem 0 0.5rem;
+}
+
 .coll-row {
   display: flex;
   align-items: center;
@@ -1391,6 +1456,7 @@ main {
 }
 
 .lib-sm-btn:hover { background: var(--accent-soft); color: var(--accent); }
+.lib-sm-btn:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 
 .empty-lib {
   text-align: center;
@@ -1405,6 +1471,50 @@ main {
   gap: 6px;
   flex-wrap: wrap;
   margin-bottom: 14px;
+}
+
+/* Library search input */
+#lib-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-family: var(--font-ui);
+  outline: none;
+}
+
+#lib-search:focus { border-color: var(--accent); }
+
+/* Library back row */
+#back-row {
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+#back-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.2rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+#view-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  flex: 1;
+  text-align: center;
+  margin-right: 2rem;
 }
 
 /* Verify progress row */
@@ -1707,6 +1817,21 @@ main {
   font-family: var(--font-ui);
   transition: filter .14s;
 }
+
+/* Album cover img in grid cards */
+.album-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  display: block;
+  background: var(--surface2);
+  margin-bottom: 5px;
+}
+
+/* Clickable artist/album drill links in track rows */
+.track-link { color: var(--accent); cursor: pointer; }
+.track-link:hover { text-decoration: underline; }
 
 /* ── Playlists ───────────────────────────────────────────── */
 .pl-list { display: flex; flex-direction: column; gap: 10px; }
@@ -2433,6 +2558,130 @@ main {
 }
 
 #completed-chevron.open { transform: rotate(90deg); }
+
+/* ── Settings helpers ───────────────────────────────────────── */
+.test-btn {
+  margin-left: auto;
+  padding: 0.2rem 0.6rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition: border-color .14s, color .14s;
+  flex-shrink: 0;
+}
+
+.test-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.test-result {
+  font-size: 0.78rem;
+  line-height: 1.4;
+  white-space: pre-line;
+  margin-bottom: 0.5rem;
+  min-height: 0;
+}
+
+.test-result.ok   { color: var(--ok); }
+.test-result.fail { color: var(--err); }
+
+.hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: 0.4rem;
+}
+
+.hint a { color: var(--accent); }
+.hint code { font-family: var(--font-mono); font-size: 0.8em; background: var(--surface2); padding: 1px 4px; border-radius: 4px; }
+
+.optional-label { font-size: 0.7rem; color: var(--text-muted); font-weight: 400; }
+
+/* Live log — colour-coded levels */
+.log-line     { white-space: pre-wrap; word-break: break-all; }
+.log-info     { color: var(--text-muted); }
+.log-debug    { color: var(--text-faint); }
+.log-warning  { color: var(--warn); }
+.log-error    { color: var(--err); }
+.log-critical { color: #ff5c5c; font-weight: 700; }
+.log-empty    { color: var(--text-faint); font-style: italic; }
+
+/* ── Discover: genre toggle (by ID, since the element uses id not class) ─── */
+#genre-toggle-wrap {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height .25s;
+  margin-bottom: 0;
+}
+
+#genre-toggle-wrap.open { max-height: 80px; margin-bottom: .55rem; }
+
+/* Track in library indicator */
+.track-card.track-in-lib { border-left: 3px solid var(--ok); }
+
+/* Discover loading / empty states */
+.disc-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-content: center;
+  padding: 2rem 1rem;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.disc-empty {
+  text-align: center;
+  padding: 1.5rem;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.shelf-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* Radio results section */
+.radio-results {
+  margin-top: 0.45rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  border-left: 3px solid var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.radio-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+  font-weight: 700;
+}
+
+.btn-radio {
+  background: var(--surface2);
+  color: var(--accent);
+  border: 1.5px solid var(--border);
+  font-size: 0.68rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: var(--radius-pill);
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.btn-radio:hover { border-color: var(--accent); background: var(--surface3); }
 
 /* ── Responsive desktop tweaks ──────────────────────────── */
 @media (min-width: 920px) {

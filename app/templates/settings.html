@@ -1,6 +1,10 @@
 {% extends 'base.html' %}
 {% block content %}
 
+<div class="page-head">
+  <h1 class="page-title">Settings</h1>
+</div>
+
 <form method="post" id="settings-form">
 
   <div class="settings-group">
@@ -91,8 +95,7 @@
     <div class="field">
       <label>Additional fallback instances <span class="optional-label">(one URL per line)</span></label>
       <textarea name="monochrome_fallbacks" rows="3" autocomplete="off"
-        placeholder="https://my-instance.example.com&#10;https://another-instance.example.com"
-        style="width:100%;font-family:monospace;font-size:.78rem;resize:vertical;background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius-sm);color:var(--text);padding:.4rem .5rem">{{ settings.monochrome_fallbacks }}</textarea>
+        placeholder="https://my-instance.example.com&#10;https://another-instance.example.com">{{ settings.monochrome_fallbacks }}</textarea>
       <p class="hint">These are tried before the built-in public instances. Useful if you run your own hifi-api.
         Built-in fallbacks: <code>hifi.geeked.wtf</code>, <code>monochrome-api.samidy.com</code>, <code>api.monochrome.tf</code>.</p>
     </div>
@@ -142,8 +145,7 @@
     <div class="field">
       <label>Private key <span class="optional-label">(.p8 file contents)</span></label>
       <textarea name="apple_private_key" rows="5" autocomplete="off"
-        placeholder="-----BEGIN PRIVATE KEY-----&#10;…paste the full .p8 file contents here…&#10;-----END PRIVATE KEY-----"
-        style="width:100%;font-family:monospace;font-size:.72rem;resize:vertical;background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius-sm);color:var(--text);padding:.5rem">{{ settings.apple_private_key }}</textarea>
+        placeholder="-----BEGIN PRIVATE KEY-----&#10;…paste the full .p8 file contents here…&#10;-----END PRIVATE KEY-----">{{ settings.apple_private_key }}</textarea>
     </div>
   </div>
 
@@ -201,63 +203,9 @@
     <button type="button" class="test-btn" id="log-toggle-btn" onclick="toggleLogViewer()">Show</button>
   </div>
   <div id="log-viewer" style="display:none;margin-top:.4rem">
-    <div id="log-lines"
-      style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);
-             font-family:monospace;font-size:.68rem;color:var(--text-muted);line-height:1.5;
-             padding:.5rem .6rem;max-height:320px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">
-      Loading…
-    </div>
+    <div id="log-lines" class="log-box">Loading…</div>
   </div>
 </div>
-
-<style>
-.settings-group-title {
-  display: flex;
-  align-items: center;
-  gap: .5rem;
-}
-.test-btn {
-  margin-left: auto;
-  padding: .2rem .6rem;
-  background: var(--surface3);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-muted);
-  font-size: .72rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all .15s;
-}
-.test-btn:hover { border-color: var(--accent); color: var(--accent); }
-.test-result {
-  font-size: .78rem;
-  min-height: 0;
-  margin-bottom: .5rem;
-  padding: 0;
-  transition: all .2s;
-  line-height: 1.4;
-  white-space: pre-line;
-}
-.test-result.ok   { color: var(--success-text); }
-.test-result.fail { color: var(--error-text); }
-.hint {
-  font-size: .75rem;
-  color: var(--text-muted);
-  line-height: 1.4;
-  margin-top: .4rem;
-}
-.hint a { color: var(--accent); }
-.optional-label { font-size: .7rem; color: var(--text-muted); font-weight: 400; }
-
-/* Live log viewer — colour-coded per level */
-.log-line { white-space: pre-wrap; word-break: break-all; }
-.log-info     { color: var(--text-muted); }
-.log-debug    { color: #6b7280; }
-.log-warning  { color: #e09020; }
-.log-error    { color: #e05050; }
-.log-critical { color: #ff5c5c; font-weight: 700; }
-.log-empty    { color: var(--text-muted); font-style: italic; }
-</style>
 
 <script>
 function testConn(service, btn) {
@@ -341,8 +289,6 @@ function fetchLogs() {
     .then(r => r.json())
     .then(d => {
       const el = document.getElementById('log-lines');
-      // Only stick to the bottom if the user is already there — otherwise
-      // preserve their scroll position so they can read older lines.
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       if (!d.lines.length) {
         el.innerHTML = '<span class="log-empty">(no log entries yet)</span>';

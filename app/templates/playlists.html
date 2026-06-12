@@ -1,86 +1,10 @@
 {% extends 'base.html' %}
 {% block content %}
 
-<style>
-.pl-list { display: flex; flex-direction: column; gap: .6rem; padding: .75rem 0; }
-.pl-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); overflow: hidden;
-  box-shadow: var(--shadow-sm);
-  transition: box-shadow .12s;
-}
-.pl-card:hover { box-shadow: var(--shadow-md); }
-.pl-header {
-  display: flex; align-items: center; gap: .6rem;
-  padding: .75rem .85rem; cursor: pointer;
-}
-.pl-header:hover { background: var(--surface2); }
-.pl-title { flex: 1; min-width: 0; }
-.pl-name { font-size: var(--fs-headline); font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pl-sub { font-size: .72rem; color: var(--text-muted); margin-top: 1px; }
-.pl-source-badge {
-  font-size: .65rem; font-weight: 700; padding: .15rem .5rem;
-  border-radius: var(--radius-pill); white-space: nowrap; flex-shrink: 0;
-}
-.src-spotify { background: #1a3a1a; color: #1db954; }
-.src-apple   { background: #3a1a1a; color: #fc3c44; }
-.src-tidal   { background: #1a1a3a; color: #00f; }
-.src-other   { background: var(--surface3); color: var(--text-muted); }
-.pl-progress {
-  display: flex; align-items: center; gap: .5rem;
-  font-size: .72rem; color: var(--text-muted); flex-shrink: 0;
-}
-.pl-bar-wrap { width: 64px; height: 6px; background: var(--surface3); border-radius: var(--radius-pill); overflow: hidden; }
-.pl-bar { height: 100%; background: #40cc70; border-radius: var(--radius-pill); transition: width .3s; }
-.pl-counts { font-size: .7rem; white-space: nowrap; }
-.pl-fix-badge {
-  font-size: .65rem; font-weight: 700; padding: .15rem .5rem;
-  background: #4a2e00; color: #e09020; border-radius: var(--radius-pill); white-space: nowrap;
-}
-.pl-actions { display: flex; gap: .4rem; flex-shrink: 0; }
-.pl-link { font-size: .72rem; color: var(--text-muted); text-decoration: none; flex-shrink: 0; }
-.pl-link:hover { color: var(--accent); }
-
-.pl-missing { display: none; border-top: 1px solid var(--border); }
-.pl-card.open .pl-missing { display: block; }
-.pl-card.open .pl-chevron { transform: rotate(90deg); }
-.pl-chevron { font-size: .8rem; color: var(--text-muted); transition: transform .18s; flex-shrink: 0; }
-
-.missing-row {
-  display: flex; align-items: center; gap: .5rem;
-  padding: .45rem .75rem; border-bottom: 1px solid var(--border);
-}
-.missing-row:last-child { border-bottom: none; }
-.missing-info { flex: 1; min-width: 0; }
-.missing-title { font-size: .82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.missing-sub { font-size: .7rem; color: var(--text-muted); }
-.missing-search { display: flex; gap: .35rem; flex-shrink: 0; }
-.ms-input {
-  width: 160px; background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); color: var(--text); font-size: .75rem;
-  padding: .25rem .4rem;
-}
-.ms-input:focus { outline: none; border-color: var(--accent); }
-.ms-btn {
-  padding: .25rem .5rem; background: var(--accent); color: #fff;
-  border: none; border-radius: var(--radius-sm); font-size: .72rem;
-  font-weight: 600; cursor: pointer; white-space: nowrap;
-}
-.pl-empty { padding: .75rem; font-size: .8rem; color: var(--text-muted); text-align: center; }
-.pl-actions-row {
-  display: flex; gap: .4rem; flex-wrap: wrap;
-  padding: .35rem .75rem .45rem;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
-}
-.pl-regen-btn {
-  flex-shrink: 0; font-size: .65rem; font-weight: 700; padding: .15rem .4rem;
-  background: var(--surface3); border: 1px solid var(--border); border-radius: 3px;
-  color: var(--text-muted); cursor: pointer; white-space: nowrap;
-}
-.pl-regen-btn:hover { border-color: var(--accent); color: var(--accent); }
-.pl-regen-result { font-size: .65rem; white-space: nowrap; }
-</style>
+<div class="page-head">
+  <h1 class="page-title">Playlists</h1>
+  <p class="page-sub">Imported playlists mirrored as .m3u files for Navidrome.</p>
+</div>
 
 {% if not jobs %}
 <div class="empty-state">
@@ -94,7 +18,7 @@
 {% set src_class = 'src-spotify' if job.source == 'Spotify' else ('src-apple' if job.source == 'Apple' else ('src-tidal' if job.source == 'TIDAL' else 'src-other')) %}
 <div class="pl-card {% if job.needs_fix %}expandable{% endif %}" id="plcard-{{ job.id }}">
   <div class="pl-header" onclick="togglePl({{ job.id }}, {{ 'true' if job.needs_fix else 'false' }})">
-    <span class="pl-chevron {% if not job.needs_fix %}" style="visibility:hidden{% endif %}">›</span>
+    <span class="pl-chevron" {% if not job.needs_fix %}style="visibility:hidden"{% endif %}>›</span>
     <div class="pl-title">
       <div class="pl-name" title="{{ job.playlist_name or job.source_url }}">
         {{ job.playlist_name or (job.source_url | truncate(60)) }}
@@ -122,7 +46,7 @@
     <span class="pl-regen-result" id="regen-{{ job.id }}"></span>
     {% endif %}
     {% if job.needs_fix %}
-    <button class="pl-regen-btn" style="color:#5a9aee;border-color:#1a3a5c"
+    <button class="pl-regen-btn" style="color:#5a9aee;border-color:rgba(90,154,238,0.3)"
       onclick="retryAllMissing({{ job.id }},this)" title="Queue all missing for re-search">↻ All</button>
     {% endif %}
     {% if job.source_url %}
@@ -130,7 +54,7 @@
     {% endif %}
   </div>
   {% endif %}
-  <div class="pl-new-tracks" id="new-tracks-{{ job.id }}" style="display:none;border-top:1px solid var(--border);padding:.5rem .75rem"></div>
+  <div class="pl-new-tracks" id="new-tracks-{{ job.id }}" style="display:none;border-top:1px solid var(--border);padding:.5rem .85rem"></div>
   {% if job.needs_fix and missing.get(job.id) %}
   <div class="pl-missing" id="plmissing-{{ job.id }}">
     {% for t in missing[job.id] %}
@@ -138,7 +62,7 @@
       <div class="missing-info">
         <div class="missing-title">{{ t.title or '—' }}</div>
         <div class="missing-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
-        {% if t.slskd_error %}<div class="missing-sub" style="color:#e05050">{{ t.slskd_error[:80] }}</div>{% endif %}
+        {% if t.slskd_error %}<div class="missing-sub" style="color:var(--err)">{{ t.slskd_error[:80] }}</div>{% endif %}
       </div>
       <div class="missing-search">
         <input class="ms-input" type="text"
@@ -175,12 +99,12 @@ function regenM3u(jobId, name, btn) {
     btn.disabled = false;
     btn.textContent = '♻ M3U';
     result.textContent = d.ok ? `✓ ${d.count} tracks` : `✗ ${d.error}`;
-    result.style.color = d.ok ? 'var(--success-text)' : '#e05050';
+    result.style.color = d.ok ? 'var(--ok)' : 'var(--err)';
   }).catch(() => {
     btn.disabled = false;
     btn.textContent = '♻ M3U';
     result.textContent = '✗ Error';
-    result.style.color = '#e05050';
+    result.style.color = 'var(--err)';
   });
 }
 
@@ -192,7 +116,7 @@ function retryAllMissing(jobId, btn) {
     .then(d => {
       if (d.ok) {
         btn.textContent = `↻ ${d.queued} queued`;
-        btn.style.color = 'var(--success-text)';
+        btn.style.color = 'var(--ok)';
       } else {
         btn.textContent = '↻ All';
         btn.disabled = false;
@@ -210,7 +134,7 @@ function checkFresh(jobId, btn) {
     .then(d => {
       btn.textContent = '⟳ New?';
       btn.disabled = false;
-      if (!d.ok) { panel.style.display=''; panel.innerHTML=`<span style="color:#e05050;font-size:.75rem">✗ ${d.error}</span>`; return; }
+      if (!d.ok) { panel.style.display=''; panel.innerHTML=`<span style="color:var(--err);font-size:.75rem">✗ ${d.error}</span>`; return; }
       if (d.new_tracks.length === 0) {
         panel.style.display='';
         panel.innerHTML=`<span style="color:var(--text-muted);font-size:.75rem">✓ Up to date (${d.total_source} tracks in source)</span>`;
@@ -222,7 +146,7 @@ function checkFresh(jobId, btn) {
             <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
             <div style="font-size:.7rem;color:var(--text-muted)">${esc(t.artist)}</div>
           </div>
-          <button class="pl-regen-btn" style="color:#5a9aee;border-color:#1a3a5c"
+          <button class="pl-regen-btn" style="color:#5a9aee;border-color:rgba(90,154,238,0.3)"
             onclick="queueNewTrack(this,'${esc(t.artist)}','${esc(t.album)}','${esc(t.title)}')">+ Queue</button>
         </div>`).join('');
       panel.style.display='';
@@ -263,7 +187,6 @@ function plSearch(input, trackId) {
       row.style.opacity = '.5';
       btn.disabled = false;
       btn.textContent = 'Queued';
-      input.placeholder = 'Try a different query…';
     } else {
       btn.disabled = false;
       btn.textContent = 'Search';

@@ -2,37 +2,42 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#18181c">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a11">
   <title>slskdsync · Setup</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-<div class="login-wrap">
-  <div class="login-logo">slskdsync</div>
-  <p style="text-align:center;font-size:.85rem;color:var(--text-muted);margin-bottom:1.25rem;line-height:1.4">
-    Welcome! Create your login to get started.
-  </p>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for category, message in messages %}
-      <div class="flash {{ category }}">{{ message }}</div>
-    {% endfor %}
-  {% endwith %}
-  <form method="post" action="/setup">
-    <div class="field">
-      <label>Username</label>
-      <input name="username" type="text" value="admin" autocomplete="username" autofocus>
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <span class="brand-mark" style="width:34px;height:34px;border-radius:10px;">
+        <svg viewBox="0 0 24 24" style="width:19px;height:19px;"><g fill="#fff"><rect x="4" y="9" width="3.4" height="6" rx="1.7"/><rect x="10.3" y="4" width="3.4" height="16" rx="1.7"/><rect x="16.6" y="7" width="3.4" height="10" rx="1.7"/></g></svg>
+      </span>
+      <span class="brand-wordmark" style="font-size:1.3rem;font-weight:800;">slskdsync</span>
     </div>
-    <div class="field">
-      <label>Password</label>
-      <input name="password" type="password" autocomplete="new-password" placeholder="At least 6 characters">
-    </div>
-    <div class="field">
-      <label>Confirm password</label>
-      <input name="confirm" type="password" autocomplete="new-password">
-    </div>
-    <button class="btn-full" type="submit">Create account</button>
-  </form>
+    <p class="auth-sub">Welcome! Create your login to get started.</p>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="flash {{ category }}" style="text-align:left;margin-bottom:12px;">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+    <form method="post" action="/setup">
+      <div class="field" style="text-align:left;">
+        <label>Username</label>
+        <input name="username" type="text" value="admin" autocomplete="username" autofocus>
+      </div>
+      <div class="field" style="text-align:left;">
+        <label>Password</label>
+        <input name="password" type="password" autocomplete="new-password" placeholder="At least 6 characters">
+      </div>
+      <div class="field" style="text-align:left;">
+        <label>Confirm password</label>
+        <input name="confirm" type="password" autocomplete="new-password">
+      </div>
+      <button class="btn-full" type="submit">Create account</button>
+    </form>
+  </div>
 </div>
 </body>
 </html>
