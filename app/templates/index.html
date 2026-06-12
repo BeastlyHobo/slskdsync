@@ -142,6 +142,8 @@
       value="{{ t.title or '' }}"
       onkeydown="if(event.key==='Enter')submitSearch(this,{{ t.id }})">
     <button class="ns-btn" onclick="submitSearch(this.previousElementSibling,{{ t.id }})">Search</button>
+    <button class="ns-btn" onclick="aiSuggestQ(this,{{ t.id }})">✨ AI</button>
+    <div class="ai-chips" id="ai-chips-{{ t.id }}"></div>
   </div>
   {% endif %}
   <button class="swipe-retry-btn" onclick="retryTrack({{ t.id }},this)">↻ Retry</button>
@@ -275,6 +277,31 @@ function submitSearch(input, trackId) {
     }
   })
   .catch(() => { btn.disabled = false; btn.textContent = 'Search'; });
+}
+
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function aiSuggestQ(btn, trackId) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  const panel = btn.closest('.needs-search-panel');
+  const chipsDiv = panel.querySelector('.ai-chips');
+  chipsDiv.innerHTML = '';
+  fetch(`/api/tracks/${trackId}/ai-suggest`, { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      btn.disabled = false; btn.textContent = '✨ AI';
+      if (!d.ok) {
+        chipsDiv.innerHTML = `<span style="color:var(--err);font-size:.72rem">${esc(d.error)}</span>`;
+        return;
+      }
+      chipsDiv.innerHTML = d.suggestions.map(s =>
+        `<button class="af-chip" style="margin:.2rem .2rem 0 0;font-size:.7rem"
+           title="${esc(s.why)}"
+           onclick="this.closest('.needs-search-panel').querySelector('.ns-input').value=${JSON.stringify(s.q)}">${esc(s.q)}</button>`
+      ).join('');
+    })
+    .catch(() => { btn.disabled = false; btn.textContent = '✨ AI'; });
 }
 
 // ── Swipe gesture (left = delete, right = retry) ──

@@ -36,6 +36,20 @@
   <button class="af-chip" onclick="setAidFilter('unchecked',this)">? Not checked</button>
 </div>
 
+<!-- Flagged filter chips -->
+<div id="rating-filter-row" style="display:none">
+  <button class="af-chip active" onclick="setRatingFilter('all',this)">All</button>
+  <button class="af-chip" onclick="setRatingFilter('flagged',this)">⭐ Flagged</button>
+  <button class="af-chip" onclick="setRatingFilter('unflagged',this)">Unflagged</button>
+</div>
+
+<!-- Format filter chips -->
+<div id="fmt-filter-row" style="display:none">
+  <button class="af-chip active" onclick="setFmtFilter('all',this)">All</button>
+  <button class="af-chip" onclick="setFmtFilter('lossless',this)">Lossless</button>
+  <button class="af-chip" onclick="setFmtFilter('lossy',this)">Lossy</button>
+</div>
+
 <!-- Verify-all + progress (shown during verification) -->
 <div id="verify-row" style="display:none">
   <button id="verify-view-btn" class="lib-sm-btn" onclick="verifyCurrentView()">↻ Verify all in view</button>
@@ -57,10 +71,12 @@ const ALL_TRACKS    = {{ tracks | tojson }};
 const ALL_PLAYLISTS = {{ playlists | tojson }};
 
 // Navigation state
-let view       = 'home';   // home | artists | albums | songs | playlists | artist-albums | album-tracks | playlist-tracks
-let ctx        = {};       // {artist, album, jobId, name} depending on view
-let aidFilter  = 'all';
-let aidRunning = false;
+let view         = 'home';   // home | artists | albums | songs | playlists | artist-albums | album-tracks | playlist-tracks
+let ctx          = {};       // {artist, album, jobId, name} depending on view
+let aidFilter    = 'all';
+let ratingFilter = 'all';
+let fmtFilter    = 'all';
+let aidRunning   = false;
 
 // ── AcoustID ─────────────────────────────────────────────────────────────
 
@@ -327,7 +343,9 @@ function renderAlbumTracks() {
   showVerifyRow();
   let tracks = ALL_TRACKS
     .filter(t => t.artist===ctx.artist && t.album===ctx.album)
-    .filter(t => aidPassesFilter(t.acoustid_score));
+    .filter(t => aidPassesFilter(t.acoustid_score))
+    .filter(t => ratingPassesFilter(t.user_rating))
+    .filter(t => fmtPassesFilter(t.ext));
   document.getElementById('lib-content').innerHTML = tracks.length
     ? tracks.map(t=>trackRowHtml(t,false)).join('')
     : '<div class="empty-lib">No tracks match filter.</div>';
@@ -340,7 +358,7 @@ function renderSongs() {
   const q = searchVal();
   const tracks = ALL_TRACKS.filter(t => {
     if (q && !((t.artist+' '+t.album+' '+t.title).toLowerCase().includes(q))) return false;
-    return aidPassesFilter(t.acoustid_score);
+    return aidPassesFilter(t.acoustid_score) && ratingPassesFilter(t.user_rating) && fmtPassesFilter(t.ext);
   });
   document.getElementById('lib-content').innerHTML = tracks.length
     ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${tracks.length} song${tracks.length===1?'':'s'}</div>`
@@ -393,7 +411,7 @@ function renderPlaylistTracks() {
           '<div class="empty-lib">No downloaded tracks yet — check Queue for progress.</div>';
         return;
       }
-      const f = tracks.filter(t=>aidPassesFilter(t.acoustid_score));
+      const f = tracks.filter(t=>aidPassesFilter(t.acoustid_score)&&ratingPassesFilter(t.user_rating)&&fmtPassesFilter(t.ext));
       document.getElementById('lib-content').innerHTML = f.length
         ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${tracks.length} track${tracks.length===1?'':'s'}</div>`
           + f.map(t=>`<div class="lib-row">
@@ -451,10 +469,10 @@ function setNav(showBack, backLabel, title) {
 }
 
 function showVerifyRow() {
-  const row = document.getElementById('verify-row');
-  const aid = document.getElementById('aid-filter-row');
-  row.style.display = 'flex';
-  aid.style.display = 'flex';
+  document.getElementById('verify-row').style.display = 'flex';
+  document.getElementById('aid-filter-row').style.display = 'flex';
+  document.getElementById('rating-filter-row').style.display = 'flex';
+  document.getElementById('fmt-filter-row').style.display = 'flex';
 }
 
 function jumpTo(id) {
@@ -467,14 +485,44 @@ function searchVal() { return (document.getElementById('lib-search').value||'').
 function applyFilters() { if (view==='home' && searchVal()) navTo('songs'); else render(); }
 function setAidFilter(val,btn) {
   aidFilter=val;
-  document.querySelectorAll('.af-chip').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('#aid-filter-row .af-chip').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   render();
+}
+
+const LOSSLESS_EXTS = new Set(['FLAC','ALAC','WAV','AIFF','AIF']);
+
+function setRatingFilter(val,btn) {
+  ratingFilter=val;
+  document.querySelectorAll('#rating-filter-row .af-chip').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  render();
+}
+function ratingPassesFilter(r) {
+  if (ratingFilter==='all')      return true;
+  if (ratingFilter==='flagged')  return r===1;
+  if (ratingFilter==='unflagged') return r!==1;
+  return true;
+}
+
+function setFmtFilter(val,btn) {
+  fmtFilter=val;
+  document.querySelectorAll('#fmt-filter-row .af-chip').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  render();
+}
+function fmtPassesFilter(ext) {
+  if (fmtFilter==='all')      return true;
+  if (fmtFilter==='lossless') return LOSSLESS_EXTS.has((ext||'').toUpperCase());
+  if (fmtFilter==='lossy')    return !LOSSLESS_EXTS.has((ext||'').toUpperCase());
+  return true;
 }
 
 // ── Main render ───────────────────────────────────────────────────────────
 function render() {
   document.getElementById('aid-filter-row').style.display = 'none';
+  document.getElementById('rating-filter-row').style.display = 'none';
+  document.getElementById('fmt-filter-row').style.display = 'none';
   document.getElementById('verify-row').style.display = 'none';
   if (view==='home')             renderHome();
   else if (view==='artists')     renderArtists();
