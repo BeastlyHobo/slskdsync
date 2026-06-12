@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#18181c">
+  <meta name="theme-color" content="#0a0a11">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="slskdsync">
@@ -13,54 +13,80 @@
 </head>
 <body>
 
-<header class="app-header">
-  <div class="brand-row">
-    <span class="brand">slskdsync</span>
-    <a href="/logout" class="header-action">sign out</a>
-  </div>
-  {% block page_title %}{% if title %}<h1 class="page-title">{{ title }}</h1>{% endif %}{% endblock %}
-</header>
+{% set nav_items = [
+  ('/search',    'Search',    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'),
+  ('/discover',  'Discover',  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'),
+  ('/',          'Queue',     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'),
+  ('/library',   'Library',   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="15.5" r="2.5"/><line x1="9" y1="17.5" x2="9" y2="6"/><line x1="20" y1="15.5" x2="20" y2="4"/><path d="M9 6l11-2"/></svg>'),
+  ('/playlists', 'Playlists', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>'),
+  ('/settings',  'Settings',  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>')
+] %}
 
-<main>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for category, message in messages %}
-      <div class="flash {{ category }}">{{ message }}</div>
-    {% endfor %}
-  {% endwith %}
-  {% block content %}{% endblock %}
-</main>
+{% macro brand_mark(size=26) %}
+<span class="brand-mark" style="width:{{size}}px;height:{{size}}px;">
+  <svg viewBox="0 0 24 24"><g fill="#fff"><rect x="4" y="9" width="3.4" height="6" rx="1.7"/><rect x="10.3" y="4" width="3.4" height="16" rx="1.7"/><rect x="16.6" y="7" width="3.4" height="10" rx="1.7"/></g></svg>
+</span>
+{% endmacro %}
 
+<div class="app-shell">
+
+  {# Sidebar (desktop ≥920px) #}
+  <nav class="sidebar">
+    <div class="sidebar-brand">
+      {{ brand_mark(26) }}
+      <span class="brand-wordmark">slskdsync</span>
+    </div>
+    <div class="sidebar-nav">
+      {% for href, label, icon in nav_items %}
+      <a href="{{ href }}" class="nav-link {{ 'active' if request.path == href else '' }}">
+        <span class="nav-icon">{{ icon | safe }}</span>
+        {{ label }}
+      </a>
+      {% endfor %}
+    </div>
+    <div class="sidebar-foot">
+      <a href="/logout" class="sidebar-signout">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        Sign out
+      </a>
+    </div>
+  </nav>
+
+  {# Content column #}
+  <div class="content-col">
+
+    {# Top bar (mobile <920px) #}
+    <header class="topbar app-header">
+      <div class="topbar-brand">
+        {{ brand_mark(22) }}
+        <span class="brand-wordmark" style="font-size:0.82rem;">slskdsync</span>
+      </div>
+      <div class="topbar-right">
+        <a href="/logout" class="topbar-signout">Sign out</a>
+      </div>
+    </header>
+
+    <main>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endwith %}
+      {% block page_title %}{% endblock %}
+      {% block content %}{% endblock %}
+    </main>
+
+  </div>{# /content-col #}
+
+</div>{# /app-shell #}
+
+{# Bottom navigation (mobile <920px) #}
 <nav class="bottom-nav">
-  <a href="/search" class="{{ 'active' if request.path == '/search' else '' }}">
-    <span class="nav-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-    </span>Search
+  {% for href, label, icon in nav_items %}
+  <a href="{{ href }}" class="{{ 'active' if request.path == href else '' }}">
+    <span class="nav-icon">{{ icon | safe }}</span>{{ label }}
   </a>
-  <a href="/discover" class="{{ 'active' if request.path == '/discover' else '' }}">
-    <span class="nav-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.8L18.7 9.7 13.9 11.6 12 16.4 10.1 11.6 5.3 9.7 10.1 7.8z"/><path d="M19 14l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg>
-    </span>Discover
-  </a>
-  <a href="/" class="{{ 'active' if request.path == '/' else '' }}">
-    <span class="nav-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-    </span>Queue
-  </a>
-  <a href="/library" class="{{ 'active' if request.path == '/library' else '' }}">
-    <span class="nav-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="15.5" r="2.5"/><line x1="9" y1="17.5" x2="9" y2="6"/><line x1="20" y1="15.5" x2="20" y2="4"/><path d="M9 6l11-2"/></svg>
-    </span>Library
-  </a>
-  <a href="/playlists" class="{{ 'active' if request.path == '/playlists' else '' }}">
-    <span class="nav-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-    </span>Playlists
-  </a>
-  <a href="/settings" class="{{ 'active' if request.path == '/settings' else '' }}">
-    <span class="nav-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-    </span>Settings
-  </a>
+  {% endfor %}
 </nav>
 
 <div class="toast" id="toast"></div>
