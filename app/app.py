@@ -301,23 +301,22 @@ class SpotifyProvider:
             auth_manager=SpotifyClientCredentials(client_id=cid, client_secret=secret)
         )
 
-    def parse(self, url: str) -> tuple[str, list[TrackMeta]]:
-        client = self._get_client()
-        if not client:
-            raise RuntimeError("Spotify credentials missing — add them in Settings → Spotify.")
-
+    def _parse_api(self, client, url: str) -> tuple[str, list[TrackMeta]]:
         if "/playlist/" in url:
             pid = url.split("/playlist/")[1].split("?")[0]
-            data = client.playlist_items(pid, additional_types=["track"])
-            tracks = []
-            for item in data.get("items", []):
-                t = item.get("track") or {}
-                artist = ", ".join(a["name"] for a in t.get("artists", [])) or "Unknown Artist"
-                album = (t.get("album") or {}).get("name") or "Unknown Album"
-                cover = ((t.get("album") or {}).get("images") or [{}])[0].get("url", "")
-                tracks.append(TrackMeta(artist=artist, album=album, title=t.get("name") or "Unknown",
-                                        track_number=t.get("track_number") or 0,
-                                        source_id=t.get("id") or "", cover_url=cover))
+            tracks, data = [], client.playlist_items(pid, additional_types=["track"])
+            while data:
+                for item in data.get("items", []):
+                    t = item.get("track") or {}
+                    if not t.get("id"):
+                        continue
+                    artist = ", ".join(a["name"] for a in t.get("artists", [])) or "Unknown Artist"
+                    album  = (t.get("album") or {}).get("name") or "Unknown Album"
+                    cover  = ((t.get("album") or {}).get("images") or [{}])[0].get("url", "")
+                    tracks.append(TrackMeta(artist=artist, album=album,
+                        title=t.get("name") or "Unknown", track_number=t.get("track_number") or 0,
+                        source_id=t.get("id") or "", cover_url=cover))
+                data = client.next(data) if data.get("next") else None
             return "playlist", tracks
 
         if "/album/" in url:
@@ -357,6 +356,51 @@ class SpotifyProvider:
             return "artist", tracks
 
         raise RuntimeError("Unsupported Spotify URL type")
+
+    def _parse_scraper(self, url: str) -> tuple[str, list[TrackMeta]]:
+        from spotify_scraper import SpotifyClient
+
+        def _track_meta(t) -> TrackMeta:
+            artist    = ", ".join(a.name for a in (getattr(t, "artists", None) or [])) or "Unknown Artist"
+            album_obj = getattr(t, "album", None)
+            album     = getattr(album_obj, "name", None) or "Unknown Album"
+            images    = getattr(album_obj, "images", None) or []
+            cover     = images[0].url if images else ""
+            return TrackMeta(artist=artist, album=album,
+                title=getattr(t, "name", None) or "Unknown",
+                track_number=getattr(t, "track_number", None) or 0,
+                source_id=getattr(t, "id", None) or "", cover_url=cover)
+
+        with SpotifyClient() as client:
+            if "/playlist/" in url:
+                pid      = url.split("/playlist/")[1].split("?")[0]
+                playlist = client.get_playlist(pid)
+                return "playlist", [_track_meta(t) for t in (getattr(playlist, "tracks", None) or [])]
+            if "/album/" in url:
+                aid   = url.split("/album/")[1].split("?")[0]
+                album = client.get_album(aid)
+                return "album", [_track_meta(t) for t in (getattr(album, "tracks", None) or [])]
+            if "/track/" in url:
+                tid = url.split("/track/")[1].split("?")[0]
+                return "track", [_track_meta(client.get_track(tid))]
+            if "/artist/" in url:
+                aid    = url.split("/artist/")[1].split("?")[0]
+                artist = client.get_artist(aid)
+                return "artist", [_track_meta(t) for t in (getattr(artist, "top_tracks", None) or [])]
+        raise RuntimeError("Unsupported Spotify URL type")
+
+    def parse(self, url: str) -> tuple[str, list[TrackMeta]]:
+        client = self._get_client()
+        if client:
+            try:
+                return self._parse_api(client, url)
+            except Exception as ex:
+                status = getattr(ex, "http_status", None)
+                if status in (403, 429):
+                    logger.info(f"[spotify] API returned {status}, falling back to embed scraper: {ex}")
+                else:
+                    raise
+        return self._parse_scraper(url)
 
 
 def _apple_jwt() -> str:
