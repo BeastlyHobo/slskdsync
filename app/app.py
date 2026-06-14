@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import sqlite3
 import threading
 import time
@@ -56,6 +57,11 @@ logging.getLogger("werkzeug").addFilter(_AccessLogFilter())
 
 import requests
 import jwt as pyjwt
+try:
+    import anthropic as _anthropic
+    _HAS_ANTHROPIC = True
+except ImportError:
+    _HAS_ANTHROPIC = False
 from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory, Response, stream_with_context
 from werkzeug.security import check_password_hash, generate_password_hash
 from dotenv import load_dotenv
@@ -281,27 +287,28 @@ def _is_live(text: str) -> bool:
 class SpotifyProvider:
     name = "spotify"
 
-    def __init__(self):
-        self.client = None
-        cid = os.getenv("SPOTIFY_CLIENT_ID")
-        secret = os.getenv("SPOTIFY_CLIENT_SECRET")
-        if cid and secret:
-            import spotipy
-            from spotipy.oauth2 import SpotifyClientCredentials
-            self.client = spotipy.Spotify(
-                auth_manager=SpotifyClientCredentials(client_id=cid, client_secret=secret)
-            )
-
     def supports(self, url: str) -> bool:
         return "open.spotify.com" in url
 
+    def _get_client(self):
+        cid    = (get_setting("spotify_client_id")    or "").strip() or os.getenv("SPOTIFY_CLIENT_ID", "")
+        secret = (get_setting("spotify_client_secret") or "").strip() or os.getenv("SPOTIFY_CLIENT_SECRET", "")
+        if not cid or not secret:
+            return None
+        import spotipy
+        from spotipy.oauth2 import SpotifyClientCredentials
+        return spotipy.Spotify(
+            auth_manager=SpotifyClientCredentials(client_id=cid, client_secret=secret)
+        )
+
     def parse(self, url: str) -> tuple[str, list[TrackMeta]]:
-        if not self.client:
-            raise RuntimeError("Spotify credentials missing — set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET.")
+        client = self._get_client()
+        if not client:
+            raise RuntimeError("Spotify credentials missing — add them in Settings → Spotify.")
 
         if "/playlist/" in url:
             pid = url.split("/playlist/")[1].split("?")[0]
-            data = self.client.playlist_items(pid, additional_types=["track"])
+            data = client.playlist_items(pid, additional_types=["track"])
             tracks = []
             for item in data.get("items", []):
                 t = item.get("track") or {}
@@ -315,7 +322,7 @@ class SpotifyProvider:
 
         if "/album/" in url:
             aid = url.split("/album/")[1].split("?")[0]
-            album = self.client.album(aid)
+            album = client.album(aid)
             album_name = album.get("name") or "Unknown Album"
             cover = (album.get("images") or [{}])[0].get("url", "")
             tracks = []
@@ -328,7 +335,7 @@ class SpotifyProvider:
 
         if "/track/" in url:
             tid = url.split("/track/")[1].split("?")[0]
-            t = self.client.track(tid)
+            t = client.track(tid)
             artist = ", ".join(a["name"] for a in t.get("artists", [])) or "Unknown Artist"
             album = (t.get("album") or {}).get("name") or "Unknown Album"
             cover = ((t.get("album") or {}).get("images") or [{}])[0].get("url", "")
@@ -338,7 +345,7 @@ class SpotifyProvider:
 
         if "/artist/" in url:
             aid = url.split("/artist/")[1].split("?")[0]
-            top = self.client.artist_top_tracks(aid)
+            top = client.artist_top_tracks(aid)
             tracks = []
             for t in top.get("tracks", []):
                 artist = ", ".join(a["name"] for a in t.get("artists", [])) or "Unknown Artist"
@@ -1887,7 +1894,11 @@ def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
         logger.warning(f"[nav] getPlaylists failed: {ex}")
         return
 
-    existing_id: str | None = next((p["id"] for p in playlists if p.get("name") == playlist_name), None)
+    existing_id: str | None = next(
+        (p["id"] for p in playlists
+         if p.get("name", "").strip().lower() == playlist_name.strip().lower()),
+        None
+    )
 
     try:
         if existing_id:
@@ -2488,8 +2499,12 @@ def _worker_tick():
 
     conn.close()
 
-    # Flush playlist syncs once per affected playlist (debounced from per-track)
+    # Flush playlist syncs once per affected playlist (deduplicated by name)
+    synced_names: set[str] = set()
     for sync_job_id, sync_name in playlists_to_sync.items():
+        if sync_name.strip().lower() in synced_names:
+            continue
+        synced_names.add(sync_name.strip().lower())
         try:
             write_playlist_m3u(sync_job_id, sync_name)
         except Exception as ex:
@@ -3066,7 +3081,9 @@ def settings():
         "navidrome_url", "navidrome_user", "navidrome_pass",
         "apple_team_id", "apple_key_id", "apple_private_key",
         "listenbrainz_username",
+        "spotify_client_id", "spotify_client_secret",
         "acoustid_api_key",
+        "anthropic_api_key",
         "quality", "replace_existing",
         "library_scan_interval",
         "app_username", "app_password_hash",
@@ -3237,6 +3254,87 @@ def retry_track(track_id):
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/api/tracks/<int:track_id>/ai-suggest", methods=["POST"])
+def api_ai_suggest(track_id):
+    """Ask Claude for alternative slskd search queries for a failed track."""
+    api_key = (get_setting("anthropic_api_key") or "").strip()
+    if not api_key:
+        return jsonify({"ok": False, "error": "Set Anthropic API key in Settings to use AI suggestions"})
+    if not _HAS_ANTHROPIC:
+        return jsonify({"ok": False, "error": "anthropic package not installed"}), 500
+
+    conn = get_conn()
+    track = conn.execute(
+        "SELECT artist, album, title, slskd_error, slskd_download_filename, custom_search"
+        " FROM tracks WHERE id=?", (track_id,)
+    ).fetchone()
+    conn.close()
+    if not track:
+        return jsonify({"ok": False, "error": "Track not found"}), 404
+
+    parts = [
+        f"Artist: {track['artist'] or '(unknown)'}",
+        f"Title:  {track['title'] or '(unknown)'}",
+    ]
+    if track["album"]:
+        parts.append(f"Album:  {track['album']}")
+    if track["slskd_error"]:
+        parts.append(f"Error:  {track['slskd_error'][:200]}")
+    if track["slskd_download_filename"]:
+        parts.append(f"Wrong file downloaded: {track['slskd_download_filename']}")
+    if track["custom_search"]:
+        parts.append(f"Last custom search tried: {track['custom_search']}")
+    context = "\n".join(parts)
+
+    system = (
+        "You suggest alternative slskd (Soulseek daemon) search queries for tracks that failed to download.\n"
+        "slskd queries match against peer file paths — shorter, cleaner terms beat exact metadata.\n"
+        "Tips: drop 'feat.'/'ft.'/'remaster'/'deluxe'/'live'/'acoustic' noise; "
+        "try 'Artist Title', 'Album Artist', romanized spellings for non-Latin names, "
+        "or strip parentheticals."
+    )
+    user_msg = f"Suggest 2-4 alternative search queries for:\n{context}"
+
+    try:
+        client = _anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=512,
+            system=system,
+            messages=[{"role": "user", "content": user_msg}],
+            output_config={"format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "suggestions",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "queries": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "q":   {"type": "string"},
+                                        "why": {"type": "string"},
+                                    },
+                                    "required": ["q", "why"],
+                                    "additionalProperties": False,
+                                },
+                            }
+                        },
+                        "required": ["queries"],
+                        "additionalProperties": False,
+                    },
+                },
+            }},
+        )
+        data = json.loads(response.content[0].text)
+        return jsonify({"ok": True, "suggestions": data.get("queries", [])})
+    except Exception as ex:
+        logger.warning(f"[ai-suggest] track {track_id}: {ex}")
+        return jsonify({"ok": False, "error": str(ex)})
 
 
 @app.route("/api/library/scan", methods=["POST"])

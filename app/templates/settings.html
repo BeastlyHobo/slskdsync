@@ -166,6 +166,27 @@
 
   <div class="settings-group">
     <div class="settings-group-title">
+      Spotify <span class="optional-label">(optional — required for Spotify imports)</span>
+    </div>
+    <p class="hint">
+      Create a free app at
+      <a href="https://developer.spotify.com/dashboard" target="_blank">developer.spotify.com/dashboard</a>
+      to get a Client ID and Secret. The redirect URI can be anything (e.g. <code>http://localhost</code>).
+    </p>
+    <div class="field">
+      <label>Client ID</label>
+      <input name="spotify_client_id" value="{{ settings.spotify_client_id }}"
+             placeholder="your-spotify-client-id" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Client Secret</label>
+      <input name="spotify_client_secret" value="{{ settings.spotify_client_secret }}"
+             placeholder="your-spotify-client-secret" type="password" autocomplete="off">
+    </div>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-group-title">
       AcoustID <span class="optional-label">(optional — audio fingerprint verification)</span>
     </div>
     <p class="hint">
@@ -179,6 +200,21 @@
       <label>AcoustID API key</label>
       <input name="acoustid_api_key" value="{{ settings.acoustid_api_key }}"
              placeholder="your-acoustid-api-key" autocomplete="off">
+    </div>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-group-title">
+      AI search assist <span class="optional-label">(optional — suggests alternative search queries)</span>
+    </div>
+    <p class="hint">
+      When a track fails to download, the ✨ AI button suggests alternative slskd queries.
+      Get a free API key at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.
+    </p>
+    <div class="field">
+      <label>Anthropic API key</label>
+      <input name="anthropic_api_key" value="{{ settings.anthropic_api_key }}"
+             placeholder="sk-ant-…" autocomplete="off">
     </div>
   </div>
 

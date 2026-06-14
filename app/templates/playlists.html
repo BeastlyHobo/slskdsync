@@ -70,6 +70,8 @@
           placeholder="Search query…"
           onkeydown="if(event.key==='Enter')plSearch(this,{{ t.id }})">
         <button class="ms-btn" onclick="plSearch(this.previousElementSibling,{{ t.id }})">Search</button>
+        <button class="ms-btn" onclick="aiSuggestPl(this,{{ t.id }})">✨ AI</button>
+        <div class="ai-chips" id="ai-chips-{{ t.id }}"></div>
       </div>
     </div>
     {% endfor %}
@@ -169,6 +171,29 @@ function queueNewTrack(btn, artist, album, title) {
       if (!d.ok) btn.disabled = false;
     })
     .catch(() => { btn.textContent = '✗'; btn.disabled = false; });
+}
+
+function aiSuggestPl(btn, trackId) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  const msDiv = btn.closest('.missing-search');
+  const chipsDiv = msDiv.querySelector('.ai-chips');
+  chipsDiv.innerHTML = '';
+  fetch(`/api/tracks/${trackId}/ai-suggest`, { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      btn.disabled = false; btn.textContent = '✨ AI';
+      if (!d.ok) {
+        chipsDiv.innerHTML = `<span style="color:var(--err);font-size:.72rem">${esc(d.error)}</span>`;
+        return;
+      }
+      chipsDiv.innerHTML = d.suggestions.map(s =>
+        `<button class="af-chip" style="margin:.2rem .2rem 0 0;font-size:.7rem"
+           title="${esc(s.why)}"
+           onclick="this.closest('.missing-search').querySelector('.ms-input').value=${JSON.stringify(s.q)}">${esc(s.q)}</button>`
+      ).join('');
+    })
+    .catch(() => { btn.disabled = false; btn.textContent = '✨ AI'; });
 }
 
 function plSearch(input, trackId) {
