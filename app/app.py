@@ -287,27 +287,28 @@ def _is_live(text: str) -> bool:
 class SpotifyProvider:
     name = "spotify"
 
-    def __init__(self):
-        self.client = None
-        cid = os.getenv("SPOTIFY_CLIENT_ID")
-        secret = os.getenv("SPOTIFY_CLIENT_SECRET")
-        if cid and secret:
-            import spotipy
-            from spotipy.oauth2 import SpotifyClientCredentials
-            self.client = spotipy.Spotify(
-                auth_manager=SpotifyClientCredentials(client_id=cid, client_secret=secret)
-            )
-
     def supports(self, url: str) -> bool:
         return "open.spotify.com" in url
 
+    def _get_client(self):
+        cid    = (get_setting("spotify_client_id")    or "").strip() or os.getenv("SPOTIFY_CLIENT_ID", "")
+        secret = (get_setting("spotify_client_secret") or "").strip() or os.getenv("SPOTIFY_CLIENT_SECRET", "")
+        if not cid or not secret:
+            return None
+        import spotipy
+        from spotipy.oauth2 import SpotifyClientCredentials
+        return spotipy.Spotify(
+            auth_manager=SpotifyClientCredentials(client_id=cid, client_secret=secret)
+        )
+
     def parse(self, url: str) -> tuple[str, list[TrackMeta]]:
-        if not self.client:
-            raise RuntimeError("Spotify credentials missing — set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET.")
+        client = self._get_client()
+        if not client:
+            raise RuntimeError("Spotify credentials missing — add them in Settings → Spotify.")
 
         if "/playlist/" in url:
             pid = url.split("/playlist/")[1].split("?")[0]
-            data = self.client.playlist_items(pid, additional_types=["track"])
+            data = client.playlist_items(pid, additional_types=["track"])
             tracks = []
             for item in data.get("items", []):
                 t = item.get("track") or {}
@@ -321,7 +322,7 @@ class SpotifyProvider:
 
         if "/album/" in url:
             aid = url.split("/album/")[1].split("?")[0]
-            album = self.client.album(aid)
+            album = client.album(aid)
             album_name = album.get("name") or "Unknown Album"
             cover = (album.get("images") or [{}])[0].get("url", "")
             tracks = []
@@ -334,7 +335,7 @@ class SpotifyProvider:
 
         if "/track/" in url:
             tid = url.split("/track/")[1].split("?")[0]
-            t = self.client.track(tid)
+            t = client.track(tid)
             artist = ", ".join(a["name"] for a in t.get("artists", [])) or "Unknown Artist"
             album = (t.get("album") or {}).get("name") or "Unknown Album"
             cover = ((t.get("album") or {}).get("images") or [{}])[0].get("url", "")
@@ -344,7 +345,7 @@ class SpotifyProvider:
 
         if "/artist/" in url:
             aid = url.split("/artist/")[1].split("?")[0]
-            top = self.client.artist_top_tracks(aid)
+            top = client.artist_top_tracks(aid)
             tracks = []
             for t in top.get("tracks", []):
                 artist = ", ".join(a["name"] for a in t.get("artists", [])) or "Unknown Artist"
@@ -3080,6 +3081,7 @@ def settings():
         "navidrome_url", "navidrome_user", "navidrome_pass",
         "apple_team_id", "apple_key_id", "apple_private_key",
         "listenbrainz_username",
+        "spotify_client_id", "spotify_client_secret",
         "acoustid_api_key",
         "anthropic_api_key",
         "quality", "replace_existing",

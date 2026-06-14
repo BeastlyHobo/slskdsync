@@ -166,6 +166,27 @@
 
   <div class="settings-group">
     <div class="settings-group-title">
+      Spotify <span class="optional-label">(optional — required for Spotify imports)</span>
+    </div>
+    <p class="hint">
+      Create a free app at
+      <a href="https://developer.spotify.com/dashboard" target="_blank">developer.spotify.com/dashboard</a>
+      to get a Client ID and Secret. The redirect URI can be anything (e.g. <code>http://localhost</code>).
+    </p>
+    <div class="field">
+      <label>Client ID</label>
+      <input name="spotify_client_id" value="{{ settings.spotify_client_id }}"
+             placeholder="your-spotify-client-id" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Client Secret</label>
+      <input name="spotify_client_secret" value="{{ settings.spotify_client_secret }}"
+             placeholder="your-spotify-client-secret" type="password" autocomplete="off">
+    </div>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-group-title">
       AcoustID <span class="optional-label">(optional — audio fingerprint verification)</span>
     </div>
     <p class="hint">
