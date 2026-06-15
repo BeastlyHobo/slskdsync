@@ -1670,36 +1670,37 @@ def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: s
     ).fetchall()
 
     # --- Full track list for this playlist ---
-    # Priority 1: playlist_tracks table (stored at import time, includes dedup-skipped songs)
-    pt_rows = conn.execute(
-        "SELECT artist, title FROM playlist_tracks WHERE job_id=?", (job_id,)
-    ).fetchall()
-
-    if pt_rows:
-        pl_tracks = [{"artist": r["artist"], "title": r["title"]} for r in pt_rows]
-        logger.info(f"[m3u] Using {len(pl_tracks)} tracks from stored playlist_tracks")
-    elif allow_refetch:
-        # Priority 2: re-fetch from the source URL (handles playlists imported before playlist_tracks existed)
-        pl_tracks = []
+    pl_tracks: list[dict] = []
+    if allow_refetch and source_url:
+        # Manual regenerate: re-fetch from the source so the M3U reflects the
+        # current playlist, and replace any stale stored rows (e.g. left over
+        # from a failed earlier import where metadata came back as "Unknown").
         provider = next((p for p in _providers if p.supports(source_url)), None)
-        if provider and source_url:
+        if provider:
             try:
                 _, fetched = provider.parse(source_url)
-                pl_tracks = [{"artist": t.artist, "title": t.title} for t in fetched]
                 if fetched:
+                    pl_tracks = [{"artist": t.artist, "title": t.title} for t in fetched]
+                    conn.execute("DELETE FROM playlist_tracks WHERE job_id=?", (job_id,))
                     conn.executemany(
                         "INSERT INTO playlist_tracks(job_id, artist, title, album, track_number) VALUES(?,?,?,?,?)",
                         [(job_id, t.artist, t.title, t.album, t.track_number) for t in fetched],
                     )
                     conn.commit()
-                    logger.info(f"[m3u] Re-fetched {len(fetched)} tracks from source and cached in playlist_tracks")
+                    logger.info(f"[m3u] Re-fetched {len(fetched)} tracks from source")
             except Exception as ex:
                 logger.warning(f"[m3u] Could not re-fetch playlist from {source_url}: {ex}")
-        if not pl_tracks:
+
+    if not pl_tracks:
+        # Stored track list (saved at import time), else what was queued for download.
+        pt_rows = conn.execute(
+            "SELECT artist, title FROM playlist_tracks WHERE job_id=?", (job_id,)
+        ).fetchall()
+        if pt_rows:
+            pl_tracks = [{"artist": r["artist"], "title": r["title"]} for r in pt_rows]
+            logger.info(f"[m3u] Using {len(pl_tracks)} tracks from stored playlist_tracks")
+        else:
             pl_tracks = _playlist_tracks_fallback(conn, playlist_name, source_url)
-    else:
-        # Priority 3: fall back to tracks table (only what was queued for download)
-        pl_tracks = _playlist_tracks_fallback(conn, playlist_name, source_url)
 
     # --- All library_index entries (may be missing paths for older scans) ---
     lib_all = conn.execute("SELECT artist, title, path FROM library_index").fetchall()
@@ -3760,6 +3761,52 @@ def api_download():
     conn.close()
     logger.info(f"[queue] User queued '{artist} — {title}' via {dl_source}")
     return jsonify({"ok": True, "message": f"Queued \"{title}\" via {dl_source}"})
+
+
+@app.route("/api/download/batch", methods=["POST"])
+def api_download_batch():
+    """Queue multiple individual tracks (e.g. the 'new' tracks from a playlist
+    diff). Each track becomes its own track-type job so heterogeneous tracks are
+    searched individually rather than batched into one album search.
+
+    Returns a per-track ``results`` array aligned to the input order, with each
+    entry one of: 'queued', 'in_library', 'error'.
+    """
+    data = request.get_json(force=True) or {}
+    tracks = data.get("tracks") or []
+    source = data.get("source", "slskd")
+    conn = get_conn()
+    cur = conn.cursor()
+    results = []
+    queued = skipped = 0
+    for t in tracks:
+        artist = (t.get("artist") or "").strip()
+        title = (t.get("title") or "").strip()
+        if not artist or not title:
+            results.append("error")
+            continue
+        if _already_in_library(conn, artist, title):
+            results.append("in_library")
+            skipped += 1
+            continue
+        src_id = "" if source == "monochrome" else (t.get("source_id") or "").strip()
+        cur.execute(
+            "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
+            ("search", "track", "", 0, "queued"),
+        )
+        jid = cur.lastrowid
+        cur.execute(
+            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (jid, artist, (t.get("album") or "").strip(), title, 0, src_id,
+             (t.get("cover_url") or t.get("cover") or "").strip(), source),
+        )
+        results.append("queued")
+        queued += 1
+    conn.commit()
+    conn.close()
+    logger.info(f"[queue] Batch queued {queued} track(s) via {source} ({skipped} already in library)")
+    return jsonify({"ok": True, "queued": queued, "skipped": skipped, "results": results})
 
 
 @app.route("/import", methods=["POST"])

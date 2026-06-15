@@ -136,41 +136,86 @@ function checkFresh(jobId, btn) {
     .then(d => {
       btn.textContent = '⟳ New?';
       btn.disabled = false;
-      if (!d.ok) { panel.style.display=''; panel.innerHTML=`<span style="color:var(--err);font-size:.75rem">✗ ${d.error}</span>`; return; }
+      if (!d.ok) { panel.style.display=''; panel.innerHTML=`<span style="color:var(--err);font-size:.75rem">✗ ${esc(d.error)}</span>`; return; }
       if (d.new_tracks.length === 0) {
         panel.style.display='';
         panel.innerHTML=`<span style="color:var(--text-muted);font-size:.75rem">✓ Up to date (${d.total_source} tracks in source)</span>`;
         return;
       }
-      const rows = d.new_tracks.map(t => `
+      panel._newTracks = d.new_tracks;
+      const rows = d.new_tracks.map((t, i) => `
         <div style="display:flex;align-items:center;gap:.5rem;padding:.3rem 0;border-bottom:1px solid var(--border);font-size:.8rem">
           <div style="flex:1;min-width:0">
             <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
             <div style="font-size:.7rem;color:var(--text-muted)">${esc(t.artist)}</div>
           </div>
-          <button class="pl-regen-btn" style="color:#5a9aee;border-color:rgba(90,154,238,0.3)"
-            onclick="queueNewTrack(this,'${esc(t.artist)}','${esc(t.album)}','${esc(t.title)}')">+ Queue</button>
+          <button class="pl-regen-btn nt-q" data-i="${i}" style="color:#5a9aee;border-color:rgba(90,154,238,0.3)">+ Queue</button>
         </div>`).join('');
       panel.style.display='';
-      panel.innerHTML=`<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.4rem">${d.new_tracks.length} new track${d.new_tracks.length!==1?'s':''} in source playlist:</div>${rows}`;
+      panel.innerHTML =
+        `<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem">
+           <span style="font-size:.75rem;color:var(--text-muted)">${d.new_tracks.length} new track${d.new_tracks.length!==1?'s':''} in source playlist:</span>
+           <button class="pl-regen-btn nt-qall" style="margin-left:auto;color:#5a9aee;border-color:rgba(90,154,238,0.3)">+ Queue all</button>
+         </div>${rows}`;
+      panel.querySelectorAll('.nt-q').forEach(b =>
+        b.addEventListener('click', () => queueOneNew(jobId, b)));
+      panel.querySelector('.nt-qall').addEventListener('click', e => queueAllNew(jobId, e.currentTarget));
     })
     .catch(() => { btn.textContent = '⟳ New?'; btn.disabled = false; });
 }
 
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-function queueNewTrack(btn, artist, album, title) {
+function markQueueBtn(btn, status, msg) {
+  if (status === 'queued') {
+    btn.textContent = '✓'; btn.style.color = 'var(--ok)'; btn.disabled = true; btn.dataset.done = '1';
+  } else if (status === 'in_library') {
+    btn.textContent = '✓ in library'; btn.style.color = 'var(--text-muted)'; btn.disabled = true; btn.dataset.done = '1';
+  } else {
+    btn.textContent = '✗'; btn.style.color = 'var(--err)'; btn.disabled = false;
+    btn.title = msg || 'Failed to queue';
+  }
+}
+
+function queueOneNew(jobId, btn) {
+  const panel = document.getElementById('new-tracks-' + jobId);
+  const track = (panel._newTracks || [])[parseInt(btn.dataset.i, 10)];
+  if (!track) return;
   btn.disabled = true; btn.textContent = '…';
-  fetch('/api/download', {
+  fetch('/api/download/batch', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({artist, album, title, source: 'slskd'}),
+    body: JSON.stringify({tracks: [track], source: 'slskd'}),
   }).then(r => r.json())
     .then(d => {
-      btn.textContent = d.ok ? '✓' : '✗';
-      if (!d.ok) btn.disabled = false;
+      if (!d.ok) { markQueueBtn(btn, 'error', d.error); return; }
+      markQueueBtn(btn, (d.results || [])[0] || 'queued');
     })
-    .catch(() => { btn.textContent = '✗'; btn.disabled = false; });
+    .catch(() => markQueueBtn(btn, 'error', 'Network error'));
+}
+
+function queueAllNew(jobId, btn) {
+  const panel = document.getElementById('new-tracks-' + jobId);
+  const all = panel._newTracks || [];
+  // Only send tracks not already queued / flagged in-library.
+  const pending = [];
+  panel.querySelectorAll('.nt-q').forEach(b => {
+    if (!b.dataset.done) pending.push({b, track: all[parseInt(b.dataset.i, 10)]});
+  });
+  if (!pending.length) return;
+  btn.disabled = true; btn.textContent = '…';
+  fetch('/api/download/batch', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({tracks: pending.map(p => p.track), source: 'slskd'}),
+  }).then(r => r.json())
+    .then(d => {
+      if (!d.ok) { btn.textContent = '✗ ' + esc(d.error || 'Error'); btn.style.color = 'var(--err)'; btn.disabled = false; return; }
+      (d.results || []).forEach((st, k) => markQueueBtn(pending[k].b, st));
+      btn.textContent = `✓ ${d.queued} queued`;
+      btn.style.color = 'var(--ok)';
+    })
+    .catch(() => { btn.textContent = '+ Queue all'; btn.disabled = false; });
 }
 
 function aiSuggestPl(btn, trackId) {
