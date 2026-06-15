@@ -1,0 +1,166 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="page-head" style="margin-bottom:.5rem">
+  <h1 class="page-title">Logs</h1>
+</div>
+
+<!-- Filter bar -->
+<div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;margin-bottom:.4rem">
+  <input id="log-search" type="search" placeholder="Filter logs…" oninput="renderLogs()"
+         style="flex:1;min-width:160px">
+  <select id="log-component" style="font-size:.72rem;padding:.3rem .5rem;background:var(--surface2);
+          color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer"
+          onchange="renderLogs()">
+    <option value="">All components</option>
+  </select>
+  <label style="display:flex;align-items:center;gap:.3rem;font-size:.72rem;color:var(--text-muted);white-space:nowrap">
+    <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
+  </label>
+</div>
+
+<!-- Level chips -->
+<div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.4rem">
+  <button class="af-chip active" onclick="setLevel('all',this)">All</button>
+  <button class="af-chip" onclick="setLevel('debug',this)">DEBUG</button>
+  <button class="af-chip" onclick="setLevel('info',this)">INFO</button>
+  <button class="af-chip" onclick="setLevel('warning',this)">WARN</button>
+  <button class="af-chip" onclick="setLevel('error',this)">ERROR</button>
+</div>
+
+<!-- Toolbar -->
+<div class="log-toolbar" style="margin-bottom:.3rem">
+  <button type="button" class="log-toolbar-btn" id="log-copy-btn" onclick="copyLogs()">Copy</button>
+  <a id="log-dl-btn" class="log-toolbar-btn" download="slskdsync.log">Download</a>
+  <button type="button" class="log-toolbar-btn" onclick="clearDisplay()">Clear display</button>
+  <span class="log-count" id="log-count"></span>
+</div>
+
+<!-- Log output -->
+<div id="log-box" class="log-box" style="height:calc(100dvh - 290px);min-height:200px"></div>
+
+<script>
+let _allLines   = [];
+let _level      = 'all';
+let _pollTimer  = null;
+
+const LEVEL_RE  = /\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]/;
+const COMP_RE   = /\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]\s+(\[[^\]]+\])/;
+
+function levelOf(line) {
+  const m = line.match(LEVEL_RE);
+  return m ? m[1].toLowerCase() : 'info';
+}
+function componentOf(line) {
+  const m = line.match(COMP_RE);
+  return m ? m[2] : '';
+}
+function logClass(line) {
+  const lv = levelOf(line);
+  return lv === 'critical' ? 'log-error' : 'log-' + lv;
+}
+function escHtml(s) {
+  return String(s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+}
+
+function setLevel(val, btn) {
+  _level = val;
+  document.querySelectorAll('.af-chip').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderLogs();
+}
+
+function renderLogs() {
+  const q    = (document.getElementById('log-search').value || '').toLowerCase();
+  const comp = document.getElementById('log-component').value;
+  const box  = document.getElementById('log-box');
+
+  const visible = _allLines.filter(line => {
+    if (_level !== 'all' && !line.toLowerCase().includes('[' + _level + ']') &&
+        !(_level === 'error' && line.toLowerCase().includes('[critical]'))) return false;
+    if (comp && componentOf(line) !== comp) return false;
+    if (q && !line.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  document.getElementById('log-count').textContent =
+    visible.length + ' / ' + _allLines.length + ' lines';
+
+  const sel = window.getSelection();
+  if (sel && sel.toString().length > 0 && box.contains(sel.anchorNode)) return;
+
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  if (!visible.length) {
+    box.innerHTML = '<span class="log-empty">' + (
+      _allLines.length ? 'No lines match the current filter.' : '(no log entries yet)'
+    ) + '</span>';
+    return;
+  }
+  box.innerHTML = visible.map(line =>
+    `<div class="log-line ${logClass(line)}">${escHtml(line)}</div>`
+  ).join('');
+  updateDownloadLink(visible);
+  if (atBottom && document.getElementById('log-autoscroll').checked)
+    box.scrollTop = box.scrollHeight;
+}
+
+function rebuildComponentSelect(lines) {
+  const comps = [...new Set(lines.map(componentOf).filter(Boolean))].sort();
+  const sel   = document.getElementById('log-component');
+  const prev  = sel.value;
+  sel.innerHTML = '<option value="">All components</option>'
+    + comps.map(c => `<option value="${escHtml(c)}"${c===prev?' selected':''}>${escHtml(c)}</option>`).join('');
+}
+
+function fetchLogs() {
+  fetch('/api/logs?n=1000')
+    .then(r => r.json())
+    .then(d => {
+      _allLines = d.lines || [];
+      rebuildComponentSelect(_allLines);
+      renderLogs();
+    })
+    .catch(() => {});
+}
+
+function copyLogs() {
+  const btn = document.getElementById('log-copy-btn');
+  const q   = (document.getElementById('log-search').value || '').toLowerCase();
+  const comp = document.getElementById('log-component').value;
+  const visible = _allLines.filter(line => {
+    if (_level !== 'all' && !line.toLowerCase().includes('[' + _level + ']')) return false;
+    if (comp && componentOf(line) !== comp) return false;
+    if (q && !line.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  navigator.clipboard.writeText(visible.join('\n')).then(() => {
+    btn.textContent = 'Copied!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  }).catch(() => {
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById('log-box'));
+    const s = window.getSelection(); s.removeAllRanges(); s.addRange(range);
+  });
+}
+
+function updateDownloadLink(lines) {
+  const blob = new Blob([lines.join('\n')], {type:'text/plain'});
+  const a = document.getElementById('log-dl-btn');
+  if (a._blobUrl) URL.revokeObjectURL(a._blobUrl);
+  a._blobUrl = URL.createObjectURL(blob);
+  a.href = a._blobUrl;
+}
+
+function clearDisplay() {
+  _allLines = [];
+  document.getElementById('log-box').innerHTML =
+    '<span class="log-empty">(display cleared — live logs continue below on next poll)</span>';
+  document.getElementById('log-count').textContent = '';
+}
+
+// Initial load then poll every 3s
+fetchLogs();
+_pollTimer = setInterval(fetchLogs, 3000);
+</script>
+
+{% endblock %}

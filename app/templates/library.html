@@ -16,7 +16,7 @@
 </div>
 {% endif %}
 
-<!-- Top bar: back button (hidden on home) + search -->
+<!-- Top bar: back button (hidden on home) + search + sort -->
 <div id="top-bar" style="margin-bottom:.6rem">
   <div id="back-row" style="display:none">
     <button onclick="goBack()" id="back-btn">
@@ -24,7 +24,17 @@
     </button>
     <span id="view-title"></span>
   </div>
-  <input id="lib-search" type="search" placeholder="Search library…" oninput="applyFilters()">
+  <div style="display:flex;gap:.4rem;align-items:center">
+    <input id="lib-search" type="search" placeholder="Search library…" oninput="applyFilters()" style="flex:1">
+    <select id="lib-sort" style="display:none;font-size:.72rem;padding:.3rem .5rem;background:var(--surface2);
+            color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer"
+            onchange="setSortBy(this.value)">
+      <option value="title">Title A–Z</option>
+      <option value="artist">Artist A–Z</option>
+      <option value="album">Album A–Z</option>
+      <option value="added">Recently added</option>
+    </select>
+  </div>
 </div>
 
 <!-- AcoustID filter chips (shown only on track views) -->
@@ -76,6 +86,9 @@ let ctx          = {};       // {artist, album, jobId, name} depending on view
 let aidFilter    = 'all';
 let ratingFilter = 'all';
 let fmtFilter    = 'all';
+let sortBy       = 'artist';
+let songsPage    = 1;
+const PAGE_SIZE  = 300;
 let aidRunning   = false;
 
 // ── AcoustID ─────────────────────────────────────────────────────────────
@@ -351,18 +364,38 @@ function renderAlbumTracks() {
     : '<div class="empty-lib">No tracks match filter.</div>';
 }
 
+// ── Sort comparator ───────────────────────────────────────────────────────
+function sortComparator(a, b) {
+  if (sortBy === 'title') return (a.title||'').localeCompare(b.title||'');
+  if (sortBy === 'album') return (a.album||'').localeCompare(b.album||'') || (a.title||'').localeCompare(b.title||'');
+  if (sortBy === 'added') return (b.indexed_at||'').localeCompare(a.indexed_at||'');
+  return (a.artist||'').localeCompare(b.artist||'') || (a.album||'').localeCompare(b.album||'') || (a.title||'').localeCompare(b.title||'');
+}
+function setSortBy(val) { sortBy = val; songsPage = 1; render(); }
+
 // ── Songs list ────────────────────────────────────────────────────────────
 function renderSongs() {
   setNav(true, 'Library', 'Songs');
   showVerifyRow();
+  document.getElementById('lib-sort').style.display = '';
+  document.getElementById('lib-sort').value = sortBy;
   const q = searchVal();
-  const tracks = ALL_TRACKS.filter(t => {
+  const filtered = ALL_TRACKS.filter(t => {
     if (q && !((t.artist+' '+t.album+' '+t.title).toLowerCase().includes(q))) return false;
     return aidPassesFilter(t.acoustid_score) && ratingPassesFilter(t.user_rating) && fmtPassesFilter(t.ext);
   });
-  document.getElementById('lib-content').innerHTML = tracks.length
-    ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${tracks.length} song${tracks.length===1?'':'s'}</div>`
-      + tracks.map(t=>trackRowHtml(t)).join('')
+  const sorted  = [...filtered].sort(sortComparator);
+  const visible  = sorted.slice(0, songsPage * PAGE_SIZE);
+  const remaining = sorted.length - visible.length;
+  const moreBtn  = remaining > 0
+    ? `<div style="text-align:center;padding:.75rem 0">
+         <button class="lib-sm-btn" style="padding:.3rem .9rem;font-size:.75rem"
+           onclick="songsPage++;renderSongs()">Load ${Math.min(remaining,PAGE_SIZE)} more of ${remaining}</button>
+       </div>`
+    : '';
+  document.getElementById('lib-content').innerHTML = sorted.length
+    ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${sorted.length} song${sorted.length===1?'':'s'}</div>`
+      + visible.map(t=>trackRowHtml(t)).join('') + moreBtn
     : '<div class="empty-lib">No songs match.</div>';
 }
 
@@ -482,7 +515,10 @@ function jumpTo(id) {
 
 // ── Filters ───────────────────────────────────────────────────────────────
 function searchVal() { return (document.getElementById('lib-search').value||'').toLowerCase().trim(); }
-function applyFilters() { if (view==='home' && searchVal()) navTo('songs'); else render(); }
+function applyFilters() {
+  songsPage = 1;
+  if (view==='home' && searchVal()) navTo('songs'); else render();
+}
 function setAidFilter(val,btn) {
   aidFilter=val;
   document.querySelectorAll('#aid-filter-row .af-chip').forEach(b=>b.classList.remove('active'));
@@ -524,6 +560,7 @@ function render() {
   document.getElementById('rating-filter-row').style.display = 'none';
   document.getElementById('fmt-filter-row').style.display = 'none';
   document.getElementById('verify-row').style.display = 'none';
+  document.getElementById('lib-sort').style.display = 'none';
   if (view==='home')             renderHome();
   else if (view==='artists')     renderArtists();
   else if (view==='albums')      renderAlbums();

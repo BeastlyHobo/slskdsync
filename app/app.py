@@ -27,8 +27,8 @@ logging.basicConfig(
 logger = logging.getLogger("slskdsync")
 logger.info(f"Log level: {_log_level} (override with LOG_LEVEL env var)")
 
-# In-memory rolling log buffer — last 200 lines surfaced in Settings log viewer
-_log_buffer: collections.deque = collections.deque(maxlen=200)
+# In-memory rolling log buffer — last 500 lines surfaced in log viewer
+_log_buffer: collections.deque = collections.deque(maxlen=500)
 _log_buffer_lock = threading.Lock()
 
 class _BufferHandler(logging.Handler):
@@ -40,12 +40,23 @@ class _BufferHandler(logging.Handler):
         except Exception:
             pass
 
+_LOG_FMT = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+
 _buf_handler = _BufferHandler()
-_buf_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
+_buf_handler.setFormatter(_LOG_FMT)
 logging.getLogger().addHandler(_buf_handler)
 
-# Silence Werkzeug access-log spam for the high-frequency polling endpoints
-# (the Settings page hits these every couple of seconds).
+# Rotating log file — survives restarts, max 5 MB × 2 backups
+import logging.handlers as _lh
+_LOG_DIR = Path(__file__).resolve().parent / "data" / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_file_handler = _lh.RotatingFileHandler(
+    _LOG_DIR / "app.log", maxBytes=5 * 1024 * 1024, backupCount=2, encoding="utf-8"
+)
+_file_handler.setFormatter(_LOG_FMT)
+logging.getLogger().addHandler(_file_handler)
+
+# Silence Werkzeug access-log spam for high-frequency polling endpoints.
 _QUIET_PATHS = ("/api/logs", "/api/queue/status", "/api/library/acoustid/status", "/api/library/cover/")
 
 class _AccessLogFilter(logging.Filter):
@@ -2952,9 +2963,19 @@ def api_playlist_diff(job_id):
 
 @app.route("/api/logs")
 def api_logs():
-    """Return the last N lines from the in-memory log buffer."""
+    """Return the last N log lines. Reads from the log file when available
+    (so history survives restarts), falls back to the in-memory buffer."""
+    n = min(int(request.args.get("n", 500)), 2000)
+    log_file = _LOG_DIR / "app.log"
+    if log_file.exists():
+        try:
+            text = log_file.read_text(encoding="utf-8", errors="replace")
+            lines = [l for l in text.splitlines() if l.strip()][-n:]
+            return jsonify({"lines": lines})
+        except Exception:
+            pass
     with _log_buffer_lock:
-        lines = list(_log_buffer)
+        lines = list(_log_buffer)[-n:]
     return jsonify({"lines": lines})
 
 
@@ -3032,7 +3053,7 @@ def library():
     music_path_str = str(get_setting("library_path") or "/music")
     conn = get_conn()
     lib_rows = conn.execute(
-        "SELECT id, artist, title, album, path, user_rating, cover_art_id, acoustid_score"
+        "SELECT id, artist, title, album, path, user_rating, cover_art_id, acoustid_score, indexed_at"
         " FROM library_index"
     ).fetchall()
     playlist_rows = conn.execute("""
@@ -3063,6 +3084,7 @@ def library():
                 "user_rating": r["user_rating"],
                 "cover_url":   f"/api/library/cover/{r['cover_art_id']}" if r["cover_art_id"] else "",
                 "acoustid_score": r["acoustid_score"],
+                "indexed_at":  r["indexed_at"] or "",
             })
     else:
         needs_scan = True
@@ -3117,6 +3139,11 @@ def api_library_cover(cover_art_id):
         return resp
     except Exception:
         return "", 404
+
+
+@app.route("/logs")
+def logs_page():
+    return render_template("logs.html", title="Logs")
 
 
 @app.route("/settings", methods=["GET", "POST"])
