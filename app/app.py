@@ -361,32 +361,34 @@ class SpotifyProvider:
         from spotify_scraper import SpotifyClient
 
         def _track_meta(t) -> TrackMeta:
-            artist    = ", ".join(a.name for a in (getattr(t, "artists", None) or [])) or "Unknown Artist"
-            album_obj = getattr(t, "album", None)
-            album     = getattr(album_obj, "name", None) or "Unknown Album"
-            images    = getattr(album_obj, "images", None) or []
-            cover     = images[0].url if images else ""
+            # t is a spotify_scraper Track dataclass
+            artist = ", ".join(a.name for a in t.artists) or "Unknown Artist"
+            album  = t.album.name if t.album else "Unknown Album"
+            # t.album may be None from embed data; t.images is always populated
+            images = (t.album.images if t.album else ()) or t.images
+            cover  = images[0].url if images else ""
             return TrackMeta(artist=artist, album=album,
-                title=getattr(t, "name", None) or "Unknown",
-                track_number=getattr(t, "track_number", None) or 0,
-                source_id=getattr(t, "id", None) or "", cover_url=cover)
+                title=t.name or "Unknown",
+                track_number=t.track_number or 0,
+                source_id=t.id or "", cover_url=cover)
 
         with SpotifyClient() as client:
             if "/playlist/" in url:
                 pid      = url.split("/playlist/")[1].split("?")[0]
                 playlist = client.get_playlist(pid)
-                return "playlist", [_track_meta(t) for t in (getattr(playlist, "tracks", None) or [])]
+                # playlist.tracks yields PlaylistTrack objects; .track is the Track
+                return "playlist", [_track_meta(pt.track) for pt in playlist.tracks]
             if "/album/" in url:
                 aid   = url.split("/album/")[1].split("?")[0]
                 album = client.get_album(aid)
-                return "album", [_track_meta(t) for t in (getattr(album, "tracks", None) or [])]
+                return "album", [_track_meta(t) for t in album.tracks]
             if "/track/" in url:
                 tid = url.split("/track/")[1].split("?")[0]
                 return "track", [_track_meta(client.get_track(tid))]
             if "/artist/" in url:
                 aid    = url.split("/artist/")[1].split("?")[0]
                 artist = client.get_artist(aid)
-                return "artist", [_track_meta(t) for t in (getattr(artist, "top_tracks", None) or [])]
+                return "artist", [_track_meta(t) for t in artist.top_tracks]
         raise RuntimeError("Unsupported Spotify URL type")
 
     def parse(self, url: str) -> tuple[str, list[TrackMeta]]:
