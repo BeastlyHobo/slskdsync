@@ -159,6 +159,12 @@ def init_db():
             FOREIGN KEY(job_id) REFERENCES import_jobs(id)
         );
         CREATE INDEX IF NOT EXISTS idx_playlist_tracks_job ON playlist_tracks(job_id);
+        CREATE TABLE IF NOT EXISTS bad_flags (
+            path TEXT PRIMARY KEY,
+            artist TEXT,
+            title TEXT,
+            flagged_at TEXT DEFAULT (datetime('now'))
+        );
     """)
     # Migrate existing databases
     existing_cols = {row[1] for row in cur.execute("PRAGMA table_info(tracks)")}
@@ -3056,6 +3062,7 @@ def library():
         "SELECT id, artist, title, album, path, user_rating, cover_art_id, acoustid_score, indexed_at"
         " FROM library_index"
     ).fetchall()
+    bad_paths = {r["path"] for r in conn.execute("SELECT path FROM bad_flags")}
     playlist_rows = conn.execute("""
         SELECT j.id, j.playlist_name, j.source, j.source_url, j.created_at,
                COUNT(t.id) AS total,
@@ -3085,6 +3092,7 @@ def library():
                 "cover_url":   f"/api/library/cover/{r['cover_art_id']}" if r["cover_art_id"] else "",
                 "acoustid_score": r["acoustid_score"],
                 "indexed_at":  r["indexed_at"] or "",
+                "flagged_bad": (p in bad_paths),
             })
     else:
         needs_scan = True
@@ -3111,6 +3119,8 @@ def library():
                     "user_rating": None,
                     "cover_url":   "",
                     "acoustid_score": None,
+                    "indexed_at":  "",
+                    "flagged_bad": (str(f) in bad_paths),
                 })
     playlists = [dict(r) for r in playlist_rows]
     return render_template("library.html", tracks=tracks, playlists=playlists,
@@ -3494,8 +3504,31 @@ def api_library_playlist(job_id):
         " FROM tracks WHERE job_id=? AND slskd_state='completed' ORDER BY track_number, id",
         (job_id,)
     ).fetchall()
+    bad_paths = {r["path"] for r in conn.execute("SELECT path FROM bad_flags")}
     conn.close()
-    return jsonify([dict(r) for r in rows])
+    return jsonify([{**dict(r), "flagged_bad": (r["local_path"] in bad_paths)} for r in rows])
+
+
+@app.route("/api/library/flag-bad", methods=["POST"])
+def api_library_flag_bad():
+    """Mark/unmark a downloaded file as a bad/wrong grab. Keyed by path so the
+    flag survives library rescans (which rebuild library_index)."""
+    data = request.get_json(force=True) or {}
+    path = (data.get("path") or "").strip()
+    flagged = bool(data.get("flagged"))
+    if not path:
+        return jsonify({"ok": False, "error": "path required"}), 400
+    conn = get_conn()
+    if flagged:
+        conn.execute(
+            "INSERT OR REPLACE INTO bad_flags(path, artist, title) VALUES(?,?,?)",
+            (path, (data.get("artist") or "").strip(), (data.get("title") or "").strip()),
+        )
+    else:
+        conn.execute("DELETE FROM bad_flags WHERE path=?", (path,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "flagged": flagged})
 
 
 @app.route("/api/library/redownload", methods=["POST"])

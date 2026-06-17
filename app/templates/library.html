@@ -60,6 +60,13 @@
   <button class="af-chip" onclick="setFmtFilter('lossy',this)">Lossy</button>
 </div>
 
+<!-- Bad / wrong-grab filter chips -->
+<div id="bad-filter-row" style="display:none">
+  <button class="af-chip active" onclick="setBadFilter('all',this)">All</button>
+  <button class="af-chip" onclick="setBadFilter('bad',this)">⚑ Bad only</button>
+  <button class="af-chip" onclick="setBadFilter('good',this)">Hide bad</button>
+</div>
+
 <!-- Verify-all + progress (shown during verification) -->
 <div id="verify-row" style="display:none">
   <button id="verify-view-btn" class="lib-sm-btn" onclick="verifyCurrentView()">↻ Verify all in view</button>
@@ -90,6 +97,7 @@
     </div>
     <div id="tm-meta" class="tm-meta"></div>
     <div class="tm-actions">
+      <button id="tm-flag-btn" class="lib-sm-btn tm-flag" onclick="toggleBad()">⚑ Flag as bad</button>
       <div class="tm-redl-label">Re-download / fix wrong file</div>
       <div class="tm-redl-row">
         <input id="tm-query" type="text" placeholder="search query…">
@@ -130,6 +138,10 @@
 .tm-redl-row .lib-sm-btn { flex-shrink:0; white-space:nowrap; }
 .tm-hint { font-size:.68rem; color:var(--text-faint); margin-top:.45rem; line-height:1.4; }
 .tm-result { font-size:.76rem; margin-top:.5rem; }
+.tm-flag { width:100%; margin-bottom:.9rem; }
+.tm-flag.on { background:var(--err); color:#fff; border-color:transparent; }
+.bad-mark { color:var(--err); font-size:.82rem; }
+.lib-row.bad .lib-row-title { color:var(--err); }
 </style>
 
 <script>
@@ -142,10 +154,12 @@ let ctx          = {};       // {artist, album, jobId, name} depending on view
 let aidFilter    = 'all';
 let ratingFilter = 'all';
 let fmtFilter    = 'all';
+let flaggedBadFilter = 'all';
 let sortBy       = 'artist';
 let songsPage    = 1;
 const PAGE_SIZE  = 300;
 let aidRunning   = false;
+let _plTracks    = [];   // tracks currently shown in playlist-tracks view
 
 // ── AcoustID ─────────────────────────────────────────────────────────────
 
@@ -235,13 +249,14 @@ function trackRowHtml(t, showArtist=true) {
   const verifyBtn = t.id!=null
     ? `<button class="lib-sm-btn" style="font-size:.6rem;padding:.15rem .4rem" title="Verify"
          onclick="event.stopPropagation();verifyLib('track',{id:${t.id}},this)">↻ ID</button>` : '';
-  return `<div class="lib-row${t.user_rating===1?' flagged':''}" data-path="${esc(t.path)}"${t.id!=null?` data-tid="${t.id}"`:''} onclick="showTrackInfo(this)" style="cursor:pointer">
+  return `<div class="lib-row${t.user_rating===1?' flagged':''}${t.flagged_bad?' bad':''}" data-path="${esc(t.path)}"${t.id!=null?` data-tid="${t.id}"`:''} onclick="showTrackInfo(this)" style="cursor:pointer">
     ${coverHtml(t)}
     <div class="lib-row-info">
       <div class="lib-row-title">${esc(t.title||'—')}</div>
       <div class="lib-row-sub">${sub}</div>
     </div>
     <div class="lib-row-right">
+      ${t.flagged_bad?'<span class="bad-mark" title="Flagged as bad">⚑</span>':''}
       ${aidBadgeHtml(t.acoustid_score)}
       <span class="${extClass(t.ext)}">${esc(t.ext||'?')}</span>
       ${verifyBtn}
@@ -414,7 +429,8 @@ function renderAlbumTracks() {
     .filter(t => t.artist===ctx.artist && t.album===ctx.album)
     .filter(t => aidPassesFilter(t.acoustid_score))
     .filter(t => ratingPassesFilter(t.user_rating))
-    .filter(t => fmtPassesFilter(t.ext));
+    .filter(t => fmtPassesFilter(t.ext))
+    .filter(t => badPassesFilter(t));
   document.getElementById('lib-content').innerHTML = tracks.length
     ? tracks.map(t=>trackRowHtml(t,false)).join('')
     : '<div class="empty-lib">No tracks match filter.</div>';
@@ -438,7 +454,7 @@ function renderSongs() {
   const q = searchVal();
   const filtered = ALL_TRACKS.filter(t => {
     if (q && !((t.artist+' '+t.album+' '+t.title).toLowerCase().includes(q))) return false;
-    return aidPassesFilter(t.acoustid_score) && ratingPassesFilter(t.user_rating) && fmtPassesFilter(t.ext);
+    return aidPassesFilter(t.acoustid_score) && ratingPassesFilter(t.user_rating) && fmtPassesFilter(t.ext) && badPassesFilter(t);
   });
   const sorted  = [...filtered].sort(sortComparator);
   const visible  = sorted.slice(0, songsPage * PAGE_SIZE);
@@ -494,26 +510,33 @@ function renderPlaylistTracks() {
   showVerifyRow();
   document.getElementById('lib-content').innerHTML = '<div class="empty-lib">Loading…</div>';
   fetch(`/api/library/playlist/${ctx.jobId}`)
-    .then(r=>r.json()).then(tracks => {
-      if (!tracks.length) {
+    .then(r=>r.json()).then(raw => {
+      // Normalise to library-track shape so the detail modal and filters work.
+      _plTracks = raw.map(t => {
+        const lp = t.local_path || '';
+        return {
+          id: null,                                  // not a library_index id
+          artist: t.artist||'', album: t.album||'', title: t.title||'',
+          path: lp,
+          ext: lp.includes('.') ? lp.split('.').pop().toUpperCase() : '',
+          cover_url: t.cover_url||'',
+          acoustid_score: t.acoustid_score,
+          user_rating: null, indexed_at: '',
+          flagged_bad: !!t.flagged_bad,
+        };
+      });
+      if (!_plTracks.length) {
         document.getElementById('lib-content').innerHTML =
           '<div class="empty-lib">No downloaded tracks yet — check Queue for progress.</div>';
         return;
       }
-      const f = tracks.filter(t=>aidPassesFilter(t.acoustid_score)&&ratingPassesFilter(t.user_rating)&&fmtPassesFilter(t.ext));
+      const f = _plTracks.filter(t =>
+        aidPassesFilter(t.acoustid_score) && ratingPassesFilter(t.user_rating) &&
+        fmtPassesFilter(t.ext) && badPassesFilter(t));
       document.getElementById('lib-content').innerHTML = f.length
-        ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${tracks.length} track${tracks.length===1?'':'s'}</div>`
-          + f.map(t=>`<div class="lib-row">
-            ${t.cover_url
-              ? `<img class="lib-cover" src="${esc(t.cover_url)}" width="38" height="38" alt="" loading="lazy" onerror="this.style.display='none'">`
-              : '<div class="lib-cover-ph">🎵</div>'}
-            <div class="lib-row-info">
-              <div class="lib-row-title">${esc(t.title||'—')}</div>
-              <div class="lib-row-sub">${esc(t.artist||'')}${t.album?' · '+esc(t.album):''}</div>
-            </div>
-            <div class="lib-row-right">${aidBadgeHtml(t.acoustid_score)}</div>
-          </div>`).join('')
-        : `<div class="empty-lib">${tracks.length} track${tracks.length===1?'':'s'} downloaded but none match the current filter.</div>`;
+        ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${_plTracks.length} track${_plTracks.length===1?'':'s'}</div>`
+          + f.map(t=>trackRowHtml(t)).join('')
+        : `<div class="empty-lib">${_plTracks.length} track${_plTracks.length===1?'':'s'} downloaded but none match the current filter.</div>`;
     }).catch(()=>{ document.getElementById('lib-content').innerHTML='<div class="empty-lib">Failed to load.</div>'; });
 }
 
@@ -562,6 +585,7 @@ function showVerifyRow() {
   document.getElementById('aid-filter-row').style.display = 'flex';
   document.getElementById('rating-filter-row').style.display = 'flex';
   document.getElementById('fmt-filter-row').style.display = 'flex';
+  document.getElementById('bad-filter-row').style.display = 'flex';
 }
 
 function jumpTo(id) {
@@ -610,11 +634,25 @@ function fmtPassesFilter(ext) {
   return true;
 }
 
+function setBadFilter(val,btn) {
+  flaggedBadFilter=val;
+  document.querySelectorAll('#bad-filter-row .af-chip').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  songsPage=1;
+  render();
+}
+function badPassesFilter(t) {
+  if (flaggedBadFilter==='bad')  return !!t.flagged_bad;
+  if (flaggedBadFilter==='good') return !t.flagged_bad;
+  return true;
+}
+
 // ── Main render ───────────────────────────────────────────────────────────
 function render() {
   document.getElementById('aid-filter-row').style.display = 'none';
   document.getElementById('rating-filter-row').style.display = 'none';
   document.getElementById('fmt-filter-row').style.display = 'none';
+  document.getElementById('bad-filter-row').style.display = 'none';
   document.getElementById('verify-row').style.display = 'none';
   document.getElementById('lib-sort').style.display = 'none';
   if (view==='home')             renderHome();
@@ -669,7 +707,9 @@ function renderModalMeta(t, d) {
 
 function showTrackInfo(rowEl) {
   const path = rowEl.dataset.path || '';
-  const t = ALL_TRACKS.find(x => x.path === path) || {path, ext:'', acoustid_score:null};
+  const t = ALL_TRACKS.find(x => x.path === path)
+         || _plTracks.find(x => x.path === path)
+         || {path, ext:'', acoustid_score:null};
   _modalTrack = t;
   document.getElementById('tm-cover').innerHTML = coverHtml(t, 72);
   document.getElementById('tm-title').textContent = t.title || '—';
@@ -679,6 +719,7 @@ function showTrackInfo(rowEl) {
   document.getElementById('tm-query').value = ((t.artist||'')+' '+(t.title||'')).trim();
   const res = document.getElementById('tm-redl-result'); res.textContent = ''; res.style.color = '';
   const btn = document.getElementById('tm-redl-btn'); btn.disabled = false; btn.textContent = '↺ Re-download';
+  updateFlagBtn();
   renderModalMeta(t, null);
   document.getElementById('track-modal').style.display = 'flex';
   if (t.id != null) {
@@ -691,6 +732,39 @@ function showTrackInfo(rowEl) {
 function closeTrackModal() {
   document.getElementById('track-modal').style.display = 'none';
   _modalTrack = null;
+}
+
+function updateFlagBtn() {
+  const btn = document.getElementById('tm-flag-btn');
+  if (!_modalTrack || !_modalTrack.path) { btn.style.display = 'none'; return; }
+  btn.style.display = '';
+  if (_modalTrack.flagged_bad) {
+    btn.textContent = '⚑ Flagged bad — click to clear';
+    btn.classList.add('on');
+  } else {
+    btn.textContent = '⚑ Flag as bad';
+    btn.classList.remove('on');
+  }
+}
+
+function toggleBad() {
+  if (!_modalTrack || !_modalTrack.path) return;
+  const next = !_modalTrack.flagged_bad;
+  const btn = document.getElementById('tm-flag-btn');
+  btn.disabled = true;
+  fetch('/api/library/flag-bad', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({path:_modalTrack.path, artist:_modalTrack.artist, title:_modalTrack.title, flagged:next}),
+  }).then(r=>r.json()).then(d=>{
+    btn.disabled = false;
+    if (!d.ok) return;
+    _modalTrack.flagged_bad = d.flagged;
+    // Keep the underlying ALL_TRACKS object in sync (same ref if from there)
+    const lib = ALL_TRACKS.find(x => x.path === _modalTrack.path);
+    if (lib) lib.flagged_bad = d.flagged;
+    updateFlagBtn();
+    render();
+  }).catch(()=>{ btn.disabled = false; });
 }
 
 function doRedownload() {
