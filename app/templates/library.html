@@ -76,6 +76,62 @@
 <!-- Content area -->
 <div id="lib-content"></div>
 
+<!-- Track detail modal -->
+<div id="track-modal" class="tm-overlay" style="display:none" onclick="if(event.target===this)closeTrackModal()">
+  <div class="tm-card">
+    <button class="tm-close" onclick="closeTrackModal()" aria-label="Close">✕</button>
+    <div class="tm-head">
+      <div id="tm-cover"></div>
+      <div class="tm-head-info">
+        <div id="tm-title" class="tm-title"></div>
+        <div id="tm-sub" class="tm-sub"></div>
+        <div id="tm-badges" class="tm-badges"></div>
+      </div>
+    </div>
+    <div id="tm-meta" class="tm-meta"></div>
+    <div class="tm-actions">
+      <div class="tm-redl-label">Re-download / fix wrong file</div>
+      <div class="tm-redl-row">
+        <input id="tm-query" type="text" placeholder="search query…">
+        <button id="tm-redl-btn" class="lib-sm-btn" onclick="doRedownload()">↺ Re-download</button>
+      </div>
+      <div class="tm-hint">If the wrong song was grabbed, edit the query and re-download. The existing file is overwritten once a match is found.</div>
+      <div id="tm-redl-result" class="tm-result"></div>
+    </div>
+  </div>
+</div>
+
+<style>
+.tm-overlay { position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:1000;
+  display:flex; align-items:flex-end; justify-content:center; padding:0; }
+@media(min-width:600px){ .tm-overlay{ align-items:center; padding:1rem; } }
+.tm-card { background:var(--surface-solid); border:1px solid var(--border);
+  border-radius:var(--radius-sm) var(--radius-sm) 0 0; width:100%; max-width:480px;
+  padding:1.1rem; position:relative; max-height:88dvh; overflow-y:auto; }
+@media(min-width:600px){ .tm-card{ border-radius:var(--radius-sm); } }
+.tm-close { position:absolute; top:.55rem; right:.6rem; background:none; border:none;
+  color:var(--text-muted); font-size:1rem; cursor:pointer; padding:.25rem .45rem; line-height:1; }
+.tm-close:hover { color:var(--text); }
+.tm-head { display:flex; gap:.8rem; align-items:flex-start; margin-bottom:.9rem; padding-right:1.4rem; }
+.tm-head-info { min-width:0; flex:1; }
+.tm-title { font-size:1.05rem; font-weight:700; line-height:1.25; }
+.tm-sub { font-size:.82rem; color:var(--text-muted); margin-top:.15rem; }
+.tm-badges { margin-top:.45rem; display:flex; gap:.35rem; flex-wrap:wrap; align-items:center; }
+.tm-meta { display:grid; grid-template-columns:auto 1fr; gap:.32rem .8rem; font-size:.76rem;
+  margin-bottom:1rem; padding:.7rem .8rem; background:var(--surface2); border-radius:var(--radius-sm); }
+.tm-meta .k { color:var(--text-faint); white-space:nowrap; }
+.tm-meta .v { color:var(--text); overflow-wrap:anywhere; font-family:var(--font-mono); }
+.tm-redl-label { font-size:.78rem; font-weight:600; margin-bottom:.45rem; }
+.tm-redl-row { display:flex; gap:.4rem; }
+.tm-redl-row input { flex:1; min-width:0; padding:.45rem .7rem; border-radius:var(--radius-sm);
+  border:1px solid var(--border); background:var(--surface2); color:var(--text);
+  font-size:.8rem; font-family:var(--font-mono); }
+.tm-redl-row input:focus { border-color:var(--accent); outline:none; }
+.tm-redl-row .lib-sm-btn { flex-shrink:0; white-space:nowrap; }
+.tm-hint { font-size:.68rem; color:var(--text-faint); margin-top:.45rem; line-height:1.4; }
+.tm-result { font-size:.76rem; margin-top:.5rem; }
+</style>
+
 <script>
 const ALL_TRACKS    = {{ tracks | tojson }};
 const ALL_PLAYLISTS = {{ playlists | tojson }};
@@ -179,7 +235,7 @@ function trackRowHtml(t, showArtist=true) {
   const verifyBtn = t.id!=null
     ? `<button class="lib-sm-btn" style="font-size:.6rem;padding:.15rem .4rem" title="Verify"
          onclick="event.stopPropagation();verifyLib('track',{id:${t.id}},this)">↻ ID</button>` : '';
-  return `<div class="lib-row${t.user_rating===1?' flagged':''}">
+  return `<div class="lib-row${t.user_rating===1?' flagged':''}" data-path="${esc(t.path)}"${t.id!=null?` data-tid="${t.id}"`:''} onclick="showTrackInfo(this)" style="cursor:pointer">
     ${coverHtml(t)}
     <div class="lib-row-info">
       <div class="lib-row-title">${esc(t.title||'—')}</div>
@@ -585,6 +641,85 @@ function redownload(btn,artist,album,title) {
     setTimeout(()=>{btn.disabled=false;btn.textContent='↺';},3000);
   }).catch(()=>{btn.disabled=false;btn.textContent='↺';});
 }
+
+// ── Track detail modal ──────────────────────────────────────────────────────
+let _modalTrack = null;
+
+function fmtDuration(s) {
+  const m = Math.floor(s/60), sec = s%60;
+  return m + ':' + String(sec).padStart(2,'0');
+}
+
+function renderModalMeta(t, d) {
+  const rows = [];
+  const fmt = (d && d.format) || t.ext || '';
+  if (fmt) rows.push(['Format', fmt]);
+  if (d && d.size_mb != null)  rows.push(['Size', d.size_mb + ' MB']);
+  if (d && d.bitrate)          rows.push(['Bitrate', d.bitrate + ' kbps']);
+  if (d && d.duration)         rows.push(['Duration', fmtDuration(d.duration)]);
+  if (t.acoustid_score != null)
+    rows.push(['AcoustID', t.acoustid_score < 0 ? 'Not identified' : Math.round(t.acoustid_score*100)+'% match']);
+  const added = (d && d.indexed_at) || t.indexed_at || '';
+  if (added) rows.push(['Added', added.slice(0,10)]);
+  const path = (d && d.path) || t.path || '';
+  if (path) rows.push(['Path', path]);
+  document.getElementById('tm-meta').innerHTML = rows.map(([k,v]) =>
+    `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join('');
+}
+
+function showTrackInfo(rowEl) {
+  const path = rowEl.dataset.path || '';
+  const t = ALL_TRACKS.find(x => x.path === path) || {path, ext:'', acoustid_score:null};
+  _modalTrack = t;
+  document.getElementById('tm-cover').innerHTML = coverHtml(t, 72);
+  document.getElementById('tm-title').textContent = t.title || '—';
+  document.getElementById('tm-sub').textContent = (t.artist||'') + (t.album ? ' · '+t.album : '');
+  document.getElementById('tm-badges').innerHTML =
+    aidBadgeHtml(t.acoustid_score) + ` <span class="${extClass(t.ext)}">${esc(t.ext||'?')}</span>`;
+  document.getElementById('tm-query').value = ((t.artist||'')+' '+(t.title||'')).trim();
+  const res = document.getElementById('tm-redl-result'); res.textContent = ''; res.style.color = '';
+  const btn = document.getElementById('tm-redl-btn'); btn.disabled = false; btn.textContent = '↺ Re-download';
+  renderModalMeta(t, null);
+  document.getElementById('track-modal').style.display = 'flex';
+  if (t.id != null) {
+    fetch(`/api/library/track-info/${t.id}`).then(r=>r.json()).then(d=>{
+      if (d.ok && _modalTrack === t) renderModalMeta(t, d);
+    }).catch(()=>{});
+  }
+}
+
+function closeTrackModal() {
+  document.getElementById('track-modal').style.display = 'none';
+  _modalTrack = null;
+}
+
+function doRedownload() {
+  if (!_modalTrack) return;
+  const btn = document.getElementById('tm-redl-btn');
+  const res = document.getElementById('tm-redl-result');
+  const query = document.getElementById('tm-query').value.trim();
+  btn.disabled = true; btn.textContent = '…';
+  fetch('/api/library/redownload', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({artist:_modalTrack.artist, album:_modalTrack.album, title:_modalTrack.title, query}),
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok) {
+      btn.textContent = '✓ Queued';
+      res.style.color = 'var(--ok)';
+      res.textContent = 'Re-download queued — track the progress in the Queue tab.';
+    } else {
+      btn.disabled = false; btn.textContent = '↺ Re-download';
+      res.style.color = 'var(--err)';
+      res.textContent = '✗ ' + (d.error || 'Failed');
+    }
+  }).catch(() => {
+    btn.disabled = false; btn.textContent = '↺ Re-download';
+    res.style.color = 'var(--err)';
+    res.textContent = '✗ Network error';
+  });
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTrackModal(); });
 
 // Restore last navigation state from this session (e.g. after switching tabs)
 try {

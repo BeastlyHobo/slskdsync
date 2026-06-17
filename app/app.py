@@ -3504,6 +3504,7 @@ def api_library_redownload():
     artist = (data.get("artist") or "").strip()
     title  = (data.get("title")  or "").strip()
     album  = (data.get("album")  or "").strip()
+    query  = (data.get("query")  or "").strip()
     if not artist or not title:
         return jsonify({"ok": False, "error": "artist and title required"}), 400
     conn = get_conn()
@@ -3513,14 +3514,50 @@ def api_library_redownload():
         ("library", "redownload", "", 0, "queued"),
     )
     cur.execute(
-        "INSERT INTO tracks(job_id,artist,album,title,download_source,force_overwrite)"
-        " VALUES(?,?,?,?,?,?)",
-        (cur.lastrowid, artist, album, title, "slskd", 1),
+        "INSERT INTO tracks(job_id,artist,album,title,download_source,force_overwrite,custom_search)"
+        " VALUES(?,?,?,?,?,?,?)",
+        (cur.lastrowid, artist, album, title, "slskd", 1, query or None),
     )
     conn.commit()
     conn.close()
-    logger.info(f"[library] Re-download queued: {artist} — {title}")
+    logger.info(f"[library] Re-download queued: {artist} — {title}"
+                + (f" (custom search: {query!r})" if query else ""))
     return jsonify({"ok": True})
+
+
+@app.route("/api/library/track-info/<int:lib_id>")
+def api_library_track_info(lib_id):
+    """Return stored metadata plus on-disk details (size, format, bitrate,
+    duration) for a single library track, for the detail modal."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT artist, title, album, path, acoustid_score, indexed_at"
+        " FROM library_index WHERE id=?", (lib_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    info = {
+        "artist": row["artist"] or "", "title": row["title"] or "",
+        "album": row["album"] or "", "path": row["path"] or "",
+        "acoustid_score": row["acoustid_score"], "indexed_at": row["indexed_at"] or "",
+        "size_mb": None, "duration": None, "bitrate": None, "format": "",
+    }
+    p = row["path"] or ""
+    try:
+        fp = Path(p)
+        if fp.is_file():
+            info["size_mb"] = round(fp.stat().st_size / 1_048_576, 1)
+            info["format"]  = fp.suffix[1:].upper()
+            mf = mutagen.File(p)
+            if mf is not None and getattr(mf, "info", None) is not None:
+                if getattr(mf.info, "length", None):
+                    info["duration"] = int(mf.info.length)
+                if getattr(mf.info, "bitrate", None):
+                    info["bitrate"] = round(mf.info.bitrate / 1000)
+    except Exception as ex:
+        logger.debug(f"[library] track-info read failed for {p}: {ex}")
+    return jsonify({"ok": True, **info})
 
 
 # ---------------------------------------------------------------------------
