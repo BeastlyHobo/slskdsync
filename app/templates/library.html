@@ -158,8 +158,10 @@ let flaggedBadFilter = 'all';
 let sortBy       = 'artist';
 let songsPage    = 1;
 const PAGE_SIZE  = 300;
-let aidRunning   = false;
-let _plTracks    = [];   // tracks currently shown in playlist-tracks view
+let aidRunning        = false;
+let _verifyingTrackId = null;   // id of the single track currently being verified
+let _verifyingBtn     = null;   // button that triggered single-track verify
+let _plTracks         = [];     // tracks currently shown in playlist-tracks view
 
 // ── AcoustID ─────────────────────────────────────────────────────────────
 
@@ -189,16 +191,25 @@ function groupWorstAid(tracks) {
 function verifyLib(scope, params, btn) {
   if (aidRunning) return;
   if (btn) { btn.disabled=true; btn.textContent='…'; }
+  if (scope === 'track' && params.id != null) {
+    _verifyingTrackId = params.id;
+    _verifyingBtn     = btn || null;
+  } else {
+    _verifyingTrackId = null;
+    _verifyingBtn     = null;
+  }
   fetch('/api/library/acoustid', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({scope, ...params}),
   }).then(r=>r.json()).then(d => {
-    if (d.error) { alert(d.error); if(btn){btn.disabled=false;btn.textContent='↻ Verify';} return; }
+    if (d.error) { alert(d.error); if(btn){btn.disabled=false;btn.textContent='↻ ID';} return; }
     aidRunning = true;
-    document.getElementById('aid-progress-wrap').style.display = '';
-    showProgress(0, d.total);
+    if (!_verifyingTrackId) {
+      document.getElementById('aid-progress-wrap').style.display = '';
+      showProgress(0, d.total);
+    }
     pollAid();
-  }).catch(() => { if(btn){btn.disabled=false;btn.textContent='↻ Verify';} });
+  }).catch(() => { if(btn){btn.disabled=false;btn.textContent='↻ ID';} });
 }
 
 function verifyCurrentView() {
@@ -216,7 +227,7 @@ function showProgress(done, total) {
 
 function pollAid() {
   fetch('/api/library/acoustid/status').then(r=>r.json()).then(d => {
-    showProgress(d.done, d.total);
+    if (!_verifyingTrackId) showProgress(d.done, d.total);
     if (d.in_progress) { setTimeout(pollAid, 2000); return; }
     aidRunning = false;
     document.getElementById('aid-progress-wrap').style.display = 'none';
@@ -225,7 +236,43 @@ function pollAid() {
         if (t.id !== null && Object.prototype.hasOwnProperty.call(scores, t.id))
           t.acoustid_score = scores[t.id];
       });
-      render();
+
+      const tid  = _verifyingTrackId;
+      const vBtn = _verifyingBtn;
+      _verifyingTrackId = null;
+      _verifyingBtn     = null;
+
+      if (tid != null && Object.prototype.hasOwnProperty.call(scores, tid)) {
+        const score   = scores[tid];
+        const newHtml = aidBadgeHtml(score);
+
+        // Update the row badge in-place
+        const row = document.querySelector(`.lib-row[data-tid="${tid}"]`);
+        if (row) {
+          const old = row.querySelector('.aid-badge');
+          if (old) { if (newHtml) old.outerHTML = newHtml; else old.remove(); }
+          else if (newHtml) {
+            const extSpan = row.querySelector('.lib-ext');
+            if (extSpan) extSpan.insertAdjacentHTML('beforebegin', newHtml);
+          }
+        }
+
+        // Update modal if it's showing this track
+        if (_modalTrack && _modalTrack.id === tid) {
+          _modalTrack.acoustid_score = score;
+          const badges = document.getElementById('tm-badges');
+          if (badges) {
+            const old = badges.querySelector('.aid-badge');
+            if (old) { if (newHtml) old.outerHTML = newHtml; else old.remove(); }
+            else if (newHtml) badges.insertAdjacentHTML('afterbegin', newHtml);
+          }
+          renderModalMeta(_modalTrack, _modalDiskInfo);
+        }
+
+        if (vBtn) { vBtn.disabled = false; vBtn.textContent = '↻ ID'; }
+      } else {
+        render();
+      }
     });
   }).catch(() => setTimeout(pollAid, 5000));
 }
@@ -681,7 +728,8 @@ function redownload(btn,artist,album,title) {
 }
 
 // ── Track detail modal ──────────────────────────────────────────────────────
-let _modalTrack = null;
+let _modalTrack    = null;
+let _modalDiskInfo = null;   // last disk-info response for the open modal
 
 function fmtDuration(s) {
   const m = Math.floor(s/60), sec = s%60;
@@ -710,7 +758,8 @@ function showTrackInfo(rowEl) {
   const t = ALL_TRACKS.find(x => x.path === path)
          || _plTracks.find(x => x.path === path)
          || {path, ext:'', acoustid_score:null};
-  _modalTrack = t;
+  _modalTrack    = t;
+  _modalDiskInfo = null;
   document.getElementById('tm-cover').innerHTML = coverHtml(t, 72);
   document.getElementById('tm-title').textContent = t.title || '—';
   document.getElementById('tm-sub').textContent = (t.artist||'') + (t.album ? ' · '+t.album : '');
@@ -724,14 +773,15 @@ function showTrackInfo(rowEl) {
   document.getElementById('track-modal').style.display = 'flex';
   if (t.id != null) {
     fetch(`/api/library/track-info/${t.id}`).then(r=>r.json()).then(d=>{
-      if (d.ok && _modalTrack === t) renderModalMeta(t, d);
+      if (d.ok && _modalTrack === t) { _modalDiskInfo = d; renderModalMeta(t, d); }
     }).catch(()=>{});
   }
 }
 
 function closeTrackModal() {
   document.getElementById('track-modal').style.display = 'none';
-  _modalTrack = null;
+  _modalTrack    = null;
+  _modalDiskInfo = null;
 }
 
 function updateFlagBtn() {
