@@ -47,6 +47,11 @@
       <p class="hint">How often to scan your library and index tracks for duplicate detection. Set to 0 to disable automatic scans.</p>
     </div>
     <div class="field">
+      <label>Playlist sync interval (hours, 0 = disabled)</label>
+      <input name="playlist_sync_interval" value="{{ settings.playlist_sync_interval }}" placeholder="24" style="width:5rem">
+      <p class="hint">How often to re-check imported playlists at their source (Spotify/Apple/TIDAL), download any new songs, and refresh the M3U + Navidrome playlist.</p>
+    </div>
+    <div class="field">
       <label>Library index</label>
       <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
         <span style="color:var(--text-muted);font-size:.82rem">

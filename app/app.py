@@ -1624,6 +1624,7 @@ def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
 def run_worker(stop_event: threading.Event):
     logger.info("Worker started")
     _scan_running = False
+    _psync_running = False
 
     def _maybe_scan():
         nonlocal _scan_running
@@ -1654,12 +1655,42 @@ def run_worker(stop_event: threading.Event):
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _maybe_sync_playlists():
+        nonlocal _psync_running
+        if _psync_running:
+            return
+        try:
+            interval_h = int(get_setting("playlist_sync_interval") or "24")
+        except ValueError:
+            interval_h = 24
+        if interval_h <= 0:
+            return
+        last = get_setting("last_playlist_sync") or ""
+        if last:
+            try:
+                elapsed = (datetime.utcnow() - datetime.fromisoformat(last)).total_seconds()
+                if elapsed < interval_h * 3600:
+                    return
+            except ValueError:
+                pass
+        _psync_running = True
+
+        def _run():
+            nonlocal _psync_running
+            try:
+                sync_playlists()
+            finally:
+                _psync_running = False
+
+        threading.Thread(target=_run, daemon=True).start()
+
     while not stop_event.is_set():
         try:
             _worker_tick()
         except Exception as ex:
             logger.error(f"Worker tick error: {ex}")
         _maybe_scan()
+        _maybe_sync_playlists()
         time.sleep(20)
 
 
@@ -1859,7 +1890,7 @@ def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
     if not merged:
         return
     n_dl = len(merged) - idx_count - fs_count
-    lines = ["#EXTM3U"]
+    lines = ["#EXTM3U", f"#PLAYLIST:{playlist_name}"]
     for r in merged:
         lines.append(f"#EXTINF:0,{r['artist'] or ''} - {r['title'] or ''}")
         lines.append(r["path"])
@@ -1868,148 +1899,99 @@ def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
         f"[m3u] {safe}.m3u updated — {len(merged)} tracks "
         f"({n_dl} downloads + {idx_count} index + {fs_count} fs-walk, {miss_count} missing)"
     )
-    _update_navidrome_playlist(playlist_name, merged)
+    _sync_navidrome_after_m3u(playlist_name)
 
 
-def _update_navidrome_playlist(playlist_name: str, tracks: list[dict]) -> None:
-    """Create or update a Navidrome playlist directly via the Subsonic API.
-    Uses POST (not GET) to avoid URL-length limits with large song-ID lists.
-    Delete-then-create avoids the ambiguous mixed add+remove semantics of
-    updatePlaylist when replacing all songs at once."""
+def _sync_navidrome_after_m3u(playlist_name: str) -> None:
+    """The M3U file is the single source of truth for Navidrome: Navidrome
+    auto-imports M3Us found in the music folder and keeps the playlist in sync
+    with the file on every scan. Creating the playlist via the Subsonic API as
+    well (the old behavior) produced a second copy of every playlist. Here we
+    only (a) delete duplicate same-name playlists left over from that path and
+    (b) trigger a scan so the freshly written M3U is picked up right away."""
     nav_url = (get_setting("navidrome_url") or "").rstrip("/")
     nav_user = get_setting("navidrome_user") or ""
     nav_pass = get_setting("navidrome_pass") or ""
-    if not (nav_url and nav_user and tracks):
+    if not (nav_url and nav_user):
         return
-
     base = {"u": nav_user, "p": nav_pass, "v": "1.16.1", "c": "slskdsync", "f": "json"}
-
-    def _subsonic_ok(resp, what: str) -> bool:
-        try:
-            body = resp.json().get("subsonic-response", {})
-        except Exception:
-            body = {}
-        if resp.status_code != 200 or body.get("status") != "ok":
-            err = body.get("error", {}).get("message") or resp.text[:200]
-            logger.warning(f"[nav] {what} failed (HTTP {resp.status_code}): {err}")
-            return False
-        return True
-
-    # Normaliser shared with the regenerate matching logic
-    _paren = re.compile(r'\s*[\(\[][^\)\]]*[\)\]]')
-    _punct = re.compile(r"[^\w\s]")
-    def _n(s: str) -> str:
-        s = _paren.sub("", s or "")
-        s = _punct.sub(" ", s)
-        return " ".join(s.lower().split())
-
-    # Fetch all songs from Navidrome via POST to build an id lookup
-    song_lookup: dict[tuple[str, str], str] = {}  # (norm_artist, norm_title) -> id
-    offset = 0
-    while True:
-        try:
-            r = requests.post(f"{nav_url}/rest/search3",
-                              data={**base, "query": "", "songCount": 500, "songOffset": offset,
-                                    "artistCount": 0, "albumCount": 0}, timeout=20)
-            if not _subsonic_ok(r, f"search3 offset={offset}"):
-                break
-            songs = r.json().get("subsonic-response", {}).get("searchResult3", {}).get("song", [])
-            for s in songs:
-                key = (_n(s.get("artist", "")), _n(s.get("title", "")))
-                song_lookup.setdefault(key, s["id"])
-            if len(songs) < 500:
-                break
-            offset += 500
-        except Exception as ex:
-            logger.warning(f"[nav] search3 failed at offset {offset}: {ex}")
-            break
-
-    # Resolve each playlist track to a Navidrome song ID
-    song_ids: list[str] = []
-    for t in tracks:
-        na = _n(t["artist"] or "")
-        na1 = _n((t["artist"] or "").split(",")[0].split("&")[0])
-        nt = _n(t["title"] or "")
-        if not nt:
-            continue
-        sid = song_lookup.get((na, nt)) or song_lookup.get((na1, nt))
-        if not sid:
-            # title-only fallback
-            for (ea, et), s_id in song_lookup.items():
-                if et == nt:
-                    sid = s_id
-                    break
-        if sid:
-            song_ids.append(sid)
-
-    if not song_ids:
-        logger.warning(f"[nav] Could not resolve any Navidrome IDs for '{playlist_name}' — playlist not updated")
-        return
-
-    # Find existing Navidrome playlist by name
     try:
         r = requests.post(f"{nav_url}/rest/getPlaylists", data=base, timeout=10)
-        if not _subsonic_ok(r, "getPlaylists"):
-            return
         playlists = r.json().get("subsonic-response", {}).get("playlists", {}).get("playlist", [])
         if isinstance(playlists, dict):
             playlists = [playlists]
+        matches = [p for p in playlists
+                   if p.get("name", "").strip().lower() == playlist_name.strip().lower()]
+        if len(matches) > 1:
+            # Duplicates (old API-created copy + M3U-imported copy). Delete them
+            # all — the scan below re-imports a single playlist from the M3U.
+            for p in matches:
+                requests.post(f"{nav_url}/rest/deletePlaylist",
+                              data={**base, "id": p["id"]}, timeout=10)
+            logger.info(f"[nav] Removed {len(matches)} duplicate '{playlist_name}' playlists — "
+                        "re-importing one from the M3U")
     except Exception as ex:
-        logger.warning(f"[nav] getPlaylists failed: {ex}")
-        return
-
-    existing_id: str | None = next(
-        (p["id"] for p in playlists
-         if p.get("name", "").strip().lower() == playlist_name.strip().lower()),
-        None
-    )
-
+        logger.warning(f"[nav] Playlist dedupe check failed: {ex}")
     try:
-        if existing_id:
-            # Get current entry count so we know how many to remove from the front.
-            r_get = requests.post(f"{nav_url}/rest/getPlaylist",
-                                  data={**base, "id": existing_id}, timeout=10)
-            if not _subsonic_ok(r_get, "getPlaylist"):
-                return
-            current = r_get.json().get("subsonic-response", {}).get("playlist", {}).get("entry", [])
-            n_existing = len(current) if isinstance(current, list) else (1 if current else 0)
-
-            # Shrink guard: refuse to replace a large playlist with a much smaller one.
-            # This is a backstop against any code path feeding an incomplete list here —
-            # the real fix is that callers build the full list via _build_playlist_entries().
-            if n_existing > 10 and len(song_ids) <= n_existing * 0.5:
-                logger.warning(
-                    f"[nav] Refusing to shrink playlist '{playlist_name}': "
-                    f"{n_existing} existing → {len(song_ids)} resolved. Leaving it unchanged."
-                )
-                return
-
-            # Step 1: append all new songs to the end of the existing playlist.
-            r_add = requests.post(f"{nav_url}/rest/updatePlaylist",
-                                  data={**base, "playlistId": existing_id, "songIdToAdd": song_ids},
-                                  timeout=20)
-            if not _subsonic_ok(r_add, "updatePlaylist (add)"):
-                return
-
-            # Step 2: remove the original entries from the front (indices 0..n_existing-1).
-            # The new songs were appended after them so their indices are unaffected.
-            if n_existing:
-                r_rm = requests.post(f"{nav_url}/rest/updatePlaylist",
-                                     data={**base, "playlistId": existing_id,
-                                           "songIndexToRemove": list(range(n_existing))},
-                                     timeout=20)
-                if not _subsonic_ok(r_rm, "updatePlaylist (remove)"):
-                    return
-
-            logger.info(f"[nav] Updated Navidrome playlist '{playlist_name}' → {len(song_ids)} songs")
-        else:
-            r_create = requests.post(f"{nav_url}/rest/createPlaylist",
-                                     data={**base, "name": playlist_name, "songId": song_ids},
-                                     timeout=20)
-            if _subsonic_ok(r_create, "createPlaylist"):
-                logger.info(f"[nav] Created Navidrome playlist '{playlist_name}' with {len(song_ids)} songs")
+        requests.post(f"{nav_url}/rest/startScan", data=base, timeout=10)
+        logger.info(f"[nav] Triggered Navidrome scan to import '{playlist_name}' from M3U")
     except Exception as ex:
-        logger.warning(f"[nav] Failed to update Navidrome playlist '{playlist_name}': {ex}")
+        logger.warning(f"[nav] startScan failed: {ex}")
+
+
+def sync_playlists() -> None:
+    """Scheduled job: re-fetch every imported playlist from its source
+    (Spotify/Apple/TIDAL/Deezer), queue any new songs for download, and
+    rewrite the M3U so removals/reorders are reflected too."""
+    conn = get_conn()
+    jobs = conn.execute(
+        "SELECT MAX(id) AS id, playlist_name, source_url FROM import_jobs"
+        " WHERE source_type='playlist' AND playlist_name IS NOT NULL AND playlist_name != ''"
+        " AND source_url LIKE 'http%'"
+        " GROUP BY playlist_name, source_url"
+    ).fetchall()
+    conn.close()
+    logger.info(f"[psync] Playlist sync started — {len(jobs)} playlist(s) to check")
+    for job in jobs:
+        try:
+            _sync_one_playlist(job["id"], job["playlist_name"], job["source_url"])
+        except Exception as ex:
+            logger.warning(f"[psync] Sync failed for '{job['playlist_name']}': {ex}")
+    set_setting("last_playlist_sync", datetime.utcnow().isoformat())
+    logger.info("[psync] Playlist sync finished")
+
+
+def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str) -> None:
+    provider = next((p for p in _providers if p.supports(source_url)), None)
+    if not provider:
+        return
+    _, fetched = provider.parse(source_url)
+    if not fetched:
+        return
+    conn = get_conn()
+    # Refresh the stored snapshot so the M3U reflects the current source list/order
+    conn.execute("DELETE FROM playlist_tracks WHERE job_id=?", (job_id,))
+    conn.executemany(
+        "INSERT INTO playlist_tracks(job_id, artist, title, album, track_number) VALUES(?,?,?,?,?)",
+        [(job_id, t.artist, t.title, t.album, t.track_number) for t in fetched],
+    )
+    # Queue songs we've never downloaded and don't already own
+    existing = {((r["artist"] or "").lower().strip(), (r["title"] or "").lower().strip())
+                for r in conn.execute("SELECT artist, title FROM tracks").fetchall()}
+    new = [t for t in fetched
+           if ((t.artist or "").lower().strip(), (t.title or "").lower().strip()) not in existing
+           and not _already_in_library(conn, t.artist, t.title)]
+    for t in new:
+        conn.execute(
+            "INSERT INTO tracks(job_id, artist, album, title, track_number, source_id, cover_url)"
+            " VALUES(?,?,?,?,?,?,?)",
+            (job_id, t.artist, t.album, t.title, t.track_number, t.source_id, t.cover_url),
+        )
+    conn.commit()
+    conn.close()
+    if new:
+        logger.info(f"[psync] '{playlist_name}': {len(new)} new song(s) queued for download")
+    write_playlist_m3u(job_id, playlist_name)
 
 
 def scan_library() -> None:
@@ -2889,7 +2871,7 @@ def api_regenerate_m3u(job_id):
     library = get_setting("library_path") or "/music"
     safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
     m3u_path = Path(library) / f"{safe}.m3u"
-    lines = ["#EXTM3U"]
+    lines = ["#EXTM3U", f"#PLAYLIST:{playlist_name}"]
     for r in merged:
         lines.append(f"#EXTINF:0,{r['artist'] or ''} - {r['title'] or ''}")
         lines.append(r["path"])
@@ -2898,7 +2880,7 @@ def api_regenerate_m3u(job_id):
         f"[m3u] Regenerated {safe}.m3u — {len(merged)} tracks "
         f"({n_dl} downloads + {idx_count} index + {fs_count} fs-walk, {miss_count} missing)"
     )
-    _update_navidrome_playlist(playlist_name, merged)
+    _sync_navidrome_after_m3u(playlist_name)
     return jsonify({"ok": True, "count": len(merged), "path": str(m3u_path), "missing": miss_count})
 
 
@@ -3169,7 +3151,7 @@ def settings():
         "acoustid_api_key",
         "anthropic_api_key",
         "quality", "replace_existing",
-        "library_scan_interval",
+        "library_scan_interval", "playlist_sync_interval",
         "app_username", "app_password_hash",
     ]
     if request.method == "POST":
