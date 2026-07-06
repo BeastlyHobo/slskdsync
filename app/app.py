@@ -541,6 +541,39 @@ class AppleProvider:
         raise RuntimeError("Could not parse this Apple Music link. Paste an album, track, or playlist URL.")
 
 
+def _monochrome_all_items(base: str, endpoint: str, obj_id: str) -> tuple[dict, list]:
+    """Fetch ALL track items from a monochrome /album/ or /playlist/ endpoint,
+    paginating with offset (the endpoints cap at ~100 items per request, which
+    silently truncated larger playlists). Returns (first_response, items).
+
+    Instances that ignore `offset` return the same first page repeatedly —
+    detected by id dedup, so this degrades to the old single-page behavior."""
+    first: dict = {}
+    items: list = []
+    seen: set[str] = set()
+    offset = 0
+    for _ in range(20):  # hard cap: 2000 tracks
+        r = requests.get(f"{base}{endpoint}",
+                         params={"id": obj_id, "limit": 100, "offset": offset}, timeout=15)
+        if r.status_code != 200:
+            if not items:
+                raise RuntimeError(f"Monochrome API error {r.status_code}")
+            break
+        d = r.json()
+        if not first:
+            first = d
+        batch = d.get("items") or (d.get("tracks") or {}).get("items", [])
+        new = [t for t in batch if str(t.get("id", "")) not in seen]
+        if not new:
+            break
+        seen.update(str(t.get("id", "")) for t in new)
+        items.extend(new)
+        if len(batch) < 100:
+            break
+        offset += 100
+    return first, items
+
+
 class TidalProvider:
     name = "tidal"
 
@@ -574,13 +607,9 @@ class TidalProvider:
                 raise RuntimeError("Could not parse TIDAL album ID from URL")
             aid = m.group(1)
             # /album/?id=… returns combined album info + tracks
-            r = requests.get(f"{base}/album/", params={"id": aid, "limit": 100}, timeout=15)
-            if r.status_code != 200:
-                raise RuntimeError(f"Monochrome API error {r.status_code}")
-            d = r.json()
+            d, items = _monochrome_all_items(base, "/album/", aid)
             album_name = d.get("title", "Unknown Album")
             cover = _tidal_cover_url(d.get("cover", ""))
-            items = d.get("items") or (d.get("tracks") or {}).get("items", [])
             tracks = []
             for t in items:
                 tracks.append(TrackMeta(
@@ -598,11 +627,7 @@ class TidalProvider:
             if not m:
                 raise RuntimeError("Could not parse TIDAL playlist ID")
             pid = m.group(1)
-            r = requests.get(f"{base}/playlist/", params={"id": pid, "limit": 100}, timeout=15)
-            if r.status_code != 200:
-                raise RuntimeError(f"Monochrome API error {r.status_code}")
-            d = r.json()
-            items = d.get("items") or (d.get("tracks") or {}).get("items", [])
+            _, items = _monochrome_all_items(base, "/playlist/", pid)
             tracks = []
             for t in items:
                 cover = _tidal_cover_url((t.get("album") or {}).get("cover", ""))
@@ -1982,6 +2007,19 @@ def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str) -> None
     if not fetched:
         return
     conn = get_conn()
+    # Shrink guard: a partial fetch (provider hiccup, pagination failure) must not
+    # replace a full snapshot. A deliberate large removal at the source can be
+    # forced through with the playlist's manual Regenerate button.
+    stored = conn.execute(
+        "SELECT COUNT(*) FROM playlist_tracks WHERE job_id=?", (job_id,)
+    ).fetchone()[0]
+    if stored > 10 and len(fetched) < stored * 0.5:
+        conn.close()
+        logger.warning(
+            f"[psync] '{playlist_name}': source returned {len(fetched)} tracks but "
+            f"{stored} are stored — refusing to shrink (partial fetch?). "
+            "Use the playlist's Regenerate button to force it.")
+        return
     # Refresh the stored snapshot so the M3U reflects the current source list/order
     conn.execute("DELETE FROM playlist_tracks WHERE job_id=?", (job_id,))
     conn.executemany(
