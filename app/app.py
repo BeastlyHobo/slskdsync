@@ -2862,8 +2862,35 @@ def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
         _lib_acoustid_state["in_progress"] = False
     logger.info(f"[AcoustID] verification complete for {len(ids)} tracks")
 
+def _app_secret() -> str:
+    """Session-signing key: APP_SECRET env var if set, else a random key
+    generated once and persisted under DATA_DIR. The old fallback was the
+    literal "change-me", which made session cookies forgeable."""
+    env = os.getenv("APP_SECRET")
+    if env:
+        return env
+    import secrets
+    f = DATA_DIR / "secret_key"
+    try:
+        if f.exists():
+            existing = f.read_text().strip()
+            if existing:
+                return existing
+        key = secrets.token_hex(32)
+        f.write_text(key)
+        try:
+            f.chmod(0o600)
+        except Exception:
+            pass
+        return key
+    except Exception as ex:
+        logger.warning(f"[auth] Could not persist secret key ({ex}); "
+                       "sessions will not survive restarts")
+        return secrets.token_hex(32)
+
+
 app = Flask(__name__)
-app.secret_key = os.getenv("APP_SECRET", "change-me")
+app.secret_key = _app_secret()
 app.permanent_session_lifetime = timedelta(days=30)
 
 init_db()
