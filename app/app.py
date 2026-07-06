@@ -1924,7 +1924,7 @@ def _playlist_tracks_fallback(conn, playlist_name: str, source_url: str) -> list
     return tracks
 
 
-def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
+def write_playlist_m3u(job_id: int, playlist_name: str, trigger_scan: bool = True) -> None:
     """Write/update an M3U with the full playlist (completed downloads + already-owned
     library songs) and sync it to Navidrome. Uses the same list-building logic as the
     manual regenerate button so the two paths can never diverge."""
@@ -1950,10 +1950,24 @@ def write_playlist_m3u(job_id: int, playlist_name: str) -> None:
         f"[m3u] {safe}.m3u updated — {len(merged)} tracks "
         f"({n_dl} downloads + {idx_count} index + {fs_count} fs-walk, {miss_count} missing)"
     )
-    _sync_navidrome_after_m3u(playlist_name)
+    _sync_navidrome_after_m3u(playlist_name, trigger_scan=trigger_scan)
 
 
-def _sync_navidrome_after_m3u(playlist_name: str) -> None:
+def _navidrome_start_scan() -> None:
+    nav_url = (get_setting("navidrome_url") or "").rstrip("/")
+    nav_user = get_setting("navidrome_user") or ""
+    nav_pass = get_setting("navidrome_pass") or ""
+    if not (nav_url and nav_user):
+        return
+    base = {"u": nav_user, "p": nav_pass, "v": "1.16.1", "c": "slskdsync", "f": "json"}
+    try:
+        requests.post(f"{nav_url}/rest/startScan", data=base, timeout=10)
+        logger.info("[nav] Triggered Navidrome scan")
+    except Exception as ex:
+        logger.warning(f"[nav] startScan failed: {ex}")
+
+
+def _sync_navidrome_after_m3u(playlist_name: str, trigger_scan: bool = True) -> None:
     """The M3U file is the single source of truth for Navidrome: Navidrome
     auto-imports M3Us found in the music folder and keeps the playlist in sync
     with the file on every scan. Creating the playlist via the Subsonic API as
@@ -1996,11 +2010,8 @@ def _sync_navidrome_after_m3u(playlist_name: str) -> None:
                     "auto-imported — not deleting any (can't tell duplicates from user playlists)")
     except Exception as ex:
         logger.warning(f"[nav] Playlist dedupe check failed: {ex}")
-    try:
-        requests.post(f"{nav_url}/rest/startScan", data=base, timeout=10)
-        logger.info(f"[nav] Triggered Navidrome scan to import '{playlist_name}' from M3U")
-    except Exception as ex:
-        logger.warning(f"[nav] startScan failed: {ex}")
+    if trigger_scan:
+        _navidrome_start_scan()
 
 
 def sync_playlists() -> None:
@@ -2018,14 +2029,19 @@ def sync_playlists() -> None:
     logger.info(f"[psync] Playlist sync started — {len(jobs)} playlist(s) to check")
     for job in jobs:
         try:
-            _sync_one_playlist(job["id"], job["playlist_name"], job["source_url"])
+            _sync_one_playlist(job["id"], job["playlist_name"], job["source_url"],
+                               trigger_scan=False)
         except Exception as ex:
             logger.warning(f"[psync] Sync failed for '{job['playlist_name']}': {ex}")
+    if jobs:
+        # One scan for the whole batch instead of one per playlist
+        _navidrome_start_scan()
     set_setting("last_playlist_sync", datetime.utcnow().isoformat())
     logger.info("[psync] Playlist sync finished")
 
 
-def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str) -> None:
+def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str,
+                       trigger_scan: bool = True) -> None:
     provider = next((p for p in _providers if p.supports(source_url)), None)
     if not provider:
         return
@@ -2068,7 +2084,7 @@ def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str) -> None
     conn.close()
     if new:
         logger.info(f"[psync] '{playlist_name}': {len(new)} new song(s) queued for download")
-    write_playlist_m3u(job_id, playlist_name)
+    write_playlist_m3u(job_id, playlist_name, trigger_scan=trigger_scan)
 
 
 def scan_library() -> None:
