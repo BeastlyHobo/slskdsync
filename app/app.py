@@ -2947,21 +2947,31 @@ def manifest():
 # Pages
 # ---------------------------------------------------------------------------
 
+def _queue_stats(conn) -> dict:
+    """Aggregate queue counters over the WHOLE tracks table (the visible list
+    is capped at 100 rows, but the numbers must not be)."""
+    stats = {"total": 0, "pending": 0, "downloading": 0, "completed": 0,
+             "failed": 0, "needs_search": 0}
+    for r in conn.execute(
+        "SELECT COALESCE(slskd_state,'pending') AS s, COUNT(*) AS c FROM tracks GROUP BY s"
+    ).fetchall():
+        s, c = r["s"], r["c"]
+        stats["total"] += c
+        if s in ("pending", "queued", "album_queued"):
+            stats["pending"] += c
+        elif s == "needs_search":
+            stats["needs_search"] += c
+        elif s in stats:
+            stats[s] += c
+    return stats
+
+
 @app.route("/")
 def index():
     conn = get_conn()
     tracks = conn.execute("SELECT * FROM tracks ORDER BY id DESC LIMIT 100").fetchall()
+    stats = _queue_stats(conn)
     conn.close()
-    stats = {"total": 0, "pending": 0, "downloading": 0, "completed": 0, "failed": 0, "needs_search": 0}
-    for t in tracks:
-        s = t["slskd_state"] or "pending"
-        stats["total"] += 1
-        if s in ("pending", "queued", "album_queued"):
-            stats["pending"] += 1
-        elif s == "needs_search":
-            stats["needs_search"] += 1
-        elif s in stats:
-            stats[s] += 1
     return render_template("index.html", tracks=tracks, stats=stats, title="Queue")
 
 
@@ -3829,22 +3839,11 @@ def api_queue_status():
     rows = conn.execute(
         "SELECT id, slskd_state, slskd_error, acoustid_score FROM tracks ORDER BY id DESC LIMIT 100"
     ).fetchall()
+    stats = _queue_stats(conn)
     conn.close()
-    stats = {"total": 0, "pending": 0, "downloading": 0, "completed": 0,
-             "failed": 0, "needs_search": 0}
-    tracks = []
-    for r in rows:
-        s = r["slskd_state"] or "pending"
-        stats["total"] += 1
-        if s in ("pending", "queued", "album_queued"):
-            stats["pending"] += 1
-        elif s == "needs_search":
-            stats["needs_search"] += 1
-        elif s in stats:
-            stats[s] += 1
-        tracks.append({"id": r["id"], "state": s,
-                        "error": (r["slskd_error"] or "")[:80],
-                        "acoustid_score": r["acoustid_score"]})
+    tracks = [{"id": r["id"], "state": r["slskd_state"] or "pending",
+               "error": (r["slskd_error"] or "")[:80],
+               "acoustid_score": r["acoustid_score"]} for r in rows]
     return jsonify({"stats": stats, "tracks": tracks})
 
 
