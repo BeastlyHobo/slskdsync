@@ -190,7 +190,8 @@ function groupWorstAid(tracks) {
 
 function verifyLib(scope, params, btn) {
   if (aidRunning) return;
-  if (btn) { btn.disabled=true; btn.textContent='…'; }
+  if (btn) { btn._orig = btn.textContent; btn.disabled=true; btn.textContent='…'; }
+  const restore = () => { if(btn){ btn.disabled=false; btn.textContent = btn._orig || '↻'; } };
   if (scope === 'track' && params.id != null) {
     _verifyingTrackId = params.id;
     _verifyingBtn     = btn || null;
@@ -202,14 +203,14 @@ function verifyLib(scope, params, btn) {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({scope, ...params}),
   }).then(r=>r.json()).then(d => {
-    if (d.error) { alert(d.error); if(btn){btn.disabled=false;btn.textContent='↻ ID';} return; }
+    if (d.error) { alert(d.error); restore(); return; }
     aidRunning = true;
     if (!_verifyingTrackId) {
       document.getElementById('aid-progress-wrap').style.display = '';
       showProgress(0, d.total);
     }
     pollAid();
-  }).catch(() => { if(btn){btn.disabled=false;btn.textContent='↻ ID';} });
+  }).catch(restore);
 }
 
 function verifyCurrentView() {
@@ -269,7 +270,7 @@ function pollAid() {
           renderModalMeta(_modalTrack, _modalDiskInfo);
         }
 
-        if (vBtn) { vBtn.disabled = false; vBtn.textContent = '↻ ID'; }
+        if (vBtn) { vBtn.disabled = false; vBtn.textContent = vBtn._orig || '↻ ID'; }
       } else {
         render();
       }

@@ -149,6 +149,8 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_library_index
             ON library_index(lower(trim(artist)), lower(trim(title)));
+        CREATE INDEX IF NOT EXISTS idx_tracks_artist_title
+            ON tracks(lower(trim(artist)), lower(trim(title)));
         CREATE TABLE IF NOT EXISTS playlist_tracks (
             id INTEGER PRIMARY KEY,
             job_id INTEGER NOT NULL,
@@ -2027,16 +2029,20 @@ def sync_playlists() -> None:
     ).fetchall()
     conn.close()
     logger.info(f"[psync] Playlist sync started — {len(jobs)} playlist(s) to check")
+    failed = 0
     for job in jobs:
         try:
             _sync_one_playlist(job["id"], job["playlist_name"], job["source_url"],
                                trigger_scan=False)
         except Exception as ex:
+            failed += 1
             logger.warning(f"[psync] Sync failed for '{job['playlist_name']}': {ex}")
     if jobs:
         # One scan for the whole batch instead of one per playlist
         _navidrome_start_scan()
     set_setting("last_playlist_sync", datetime.utcnow().isoformat())
+    if failed and failed == len(jobs):
+        logger.error(f"[psync] All {failed} playlist sync(s) failed — next attempt at the regular interval")
     logger.info("[psync] Playlist sync finished")
 
 
@@ -2420,7 +2426,7 @@ def _worker_tick():
     # pending slskd → start search (limit 3 per tick to avoid overwhelming slskd)
     for t in conn.execute(
         "SELECT * FROM tracks WHERE slskd_state='pending'"
-        " AND (download_source='slskd' OR download_source IS NULL) LIMIT 3"
+        " AND (download_source IN ('slskd','') OR download_source IS NULL) LIMIT 3"
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
                          t["track_number"] or 0, t["source_id"] or "")
@@ -3616,6 +3622,9 @@ def api_library_acoustid():
     conn = get_conn()
     table = "library_index"
     if scope == "track":
+        if data.get("id") is None:
+            conn.close()
+            return jsonify({"error": "id required for track scope"}), 400
         ids = [data["id"]]
     elif scope == "album":
         ids = [r["id"] for r in conn.execute(
