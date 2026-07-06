@@ -180,6 +180,7 @@ def init_db():
         ("slskd_download_user", "TEXT DEFAULT NULL"),
         ("slskd_download_filename", "TEXT DEFAULT NULL"),
         ("acoustid_score", "REAL DEFAULT NULL"),
+        ("replace_path", "TEXT DEFAULT NULL"),
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
@@ -2171,6 +2172,25 @@ def scan_library() -> None:
             _scan_state.update({"in_progress": False, "source": source})
 
 
+def _cleanup_replaced_file(conn, track: sqlite3.Row, new_path: str) -> None:
+    """After a re-download lands, remove the file it replaced when the new
+    target differs (a different extension lands at a different path, leaving
+    the old file to be double-indexed on the next scan)."""
+    keys = track.keys() if hasattr(track, "keys") else []
+    old = (track["replace_path"] or "").strip() if "replace_path" in keys else ""
+    if not old or old == new_path:
+        return
+    try:
+        p = Path(old)
+        if p.is_file():
+            p.unlink()
+            logger.info(f"[organizer] Removed replaced file: {old}")
+    except Exception as ex:
+        logger.warning(f"[organizer] Could not remove replaced file {old}: {ex}")
+    conn.execute("DELETE FROM bad_flags WHERE path=?", (old,))
+    conn.execute("DELETE FROM library_index WHERE path=?", (old,))
+
+
 def _already_in_library(conn, artist: str, title: str) -> bool:
     """Return True if this artist+title exists in completed downloads or the library index."""
     if conn.execute(
@@ -2522,6 +2542,7 @@ def _worker_tick():
                 logger.info(f"[slskd] Organized to: {result}")
                 tag_file(Path(result), t)
                 aid_score = _acoustid.verify(Path(result), t["artist"] or "", t["title"] or "")
+                _cleanup_replaced_file(conn, t, result)
                 conn.execute(
                     "UPDATE tracks SET slskd_state='completed', local_path=?, acoustid_score=?,"
                     " slskd_download_user=NULL, slskd_download_filename=NULL WHERE id=?",
@@ -2601,6 +2622,7 @@ def _worker_tick():
                 aid_score = _acoustid.verify(Path(final), t["artist"] or "", t["title"] or "")
             else:
                 aid_score = None
+            _cleanup_replaced_file(conn, t, final)
             conn.execute("UPDATE tracks SET slskd_state='completed', local_path=?, acoustid_score=? WHERE id=?",
                          (final, aid_score, t["id"]))
         else:
@@ -3596,6 +3618,7 @@ def api_library_redownload():
     title  = (data.get("title")  or "").strip()
     album  = (data.get("album")  or "").strip()
     query  = (data.get("query")  or "").strip()
+    old_path = (data.get("old_path") or "").strip()
     if not artist or not title:
         return jsonify({"ok": False, "error": "artist and title required"}), 400
     conn = get_conn()
@@ -3605,9 +3628,9 @@ def api_library_redownload():
         ("library", "redownload", "", 0, "queued"),
     )
     cur.execute(
-        "INSERT INTO tracks(job_id,artist,album,title,download_source,force_overwrite,custom_search)"
-        " VALUES(?,?,?,?,?,?,?)",
-        (cur.lastrowid, artist, album, title, "slskd", 1, query or None),
+        "INSERT INTO tracks(job_id,artist,album,title,download_source,force_overwrite,custom_search,replace_path)"
+        " VALUES(?,?,?,?,?,?,?,?)",
+        (cur.lastrowid, artist, album, title, "slskd", 1, query or None, old_path or None),
     )
     conn.commit()
     conn.close()

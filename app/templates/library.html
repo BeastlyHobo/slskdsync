@@ -720,8 +720,10 @@ function triggerScan(btn) {
 }
 function redownload(btn,artist,album,title) {
   btn.disabled=true; btn.textContent='…';
+  const row = btn.closest('.lib-row');
+  const old_path = row ? (row.dataset.path || '') : '';
   fetch('/api/library/redownload',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({artist,album,title})}).then(r=>r.json()).then(d=>{
+    body:JSON.stringify({artist,album,title,old_path})}).then(r=>r.json()).then(d=>{
     btn.textContent = d.ok?'✓':'!';
     setTimeout(()=>{btn.disabled=false;btn.textContent='↺';},3000);
   }).catch(()=>{btn.disabled=false;btn.textContent='↺';});
@@ -825,7 +827,8 @@ function doRedownload() {
   btn.disabled = true; btn.textContent = '…';
   fetch('/api/library/redownload', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({artist:_modalTrack.artist, album:_modalTrack.album, title:_modalTrack.title, query}),
+    body: JSON.stringify({artist:_modalTrack.artist, album:_modalTrack.album, title:_modalTrack.title,
+                          query, old_path:_modalTrack.path || ''}),
   }).then(r=>r.json()).then(d=>{
     if (d.ok) {
       btn.textContent = '✓ Queued';
