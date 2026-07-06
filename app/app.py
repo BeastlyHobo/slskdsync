@@ -2226,24 +2226,46 @@ def _worker_tick():
     conn.commit()
 
     # Reset tracks stuck in 'downloading' for >30 min (stalled transfer).
+    # A transfer that slskd reports as actively InProgress (big file, slow
+    # peer) is spared and given another window instead of being cancelled
+    # into a retry loop; anything else (remote queue, unknown) fails over.
     stuck_dl = conn.execute("""
-        SELECT id, slskd_search_id FROM tracks
+        SELECT id, title, slskd_search_id, slskd_download_user,
+               slskd_download_filename, slskd_tried_users
+        FROM tracks
         WHERE slskd_state='downloading'
           AND slskd_queued_at IS NOT NULL
           AND datetime(slskd_queued_at, '+30 minutes') < datetime('now')
     """).fetchall()
+    _stuck_transfers: dict[str, dict] = {}
     for row in stuck_dl:
+        user = row["slskd_download_user"] or ""
+        state = ""
+        if user and row["slskd_download_filename"]:
+            if user not in _stuck_transfers:
+                _stuck_transfers[user] = slskd.get_user_transfers(user)
+            state = _stuck_transfers[user].get(row["slskd_download_filename"], "")
+        if "InProgress" in state:
+            conn.execute("UPDATE tracks SET slskd_queued_at=datetime('now') WHERE id=?",
+                         (row["id"],))
+            logger.info(f"[worker] Track {row['id']} '{row['title']}' still transferring "
+                        "after 30 min — extending instead of resetting")
+            continue
         if row["slskd_search_id"]:
             try:
                 slskd.cancel_search(row["slskd_search_id"])
             except Exception:
                 pass
+        tried = set(u for u in (row["slskd_tried_users"] or "").split(",") if u)
+        if user:
+            tried.add(user)
         conn.execute(
             "UPDATE tracks SET slskd_state='pending', slskd_search_id=NULL,"
             " slskd_download_user=NULL, slskd_download_filename=NULL,"
+            " slskd_tried_users=?,"
             " slskd_error='Download stalled after 30 min — retrying'"
             " WHERE id=?",
-            (row["id"],),
+            (",".join(tried), row["id"]),
         )
         logger.warning(f"[worker] Track {row['id']} stuck downloading >30 min, reset to pending")
     if stuck_dl:
