@@ -2272,8 +2272,11 @@ def _worker_tick():
         conn.commit()
 
     # ── ALBUM SEARCH: start ────────────────────────────────────────────────
-    # Jobs with 3+ pending slskd tracks get one "Artist Album" search instead
-    # of N individual searches; all tracks hold in 'album_queued' state.
+    # Jobs with 3+ pending slskd tracks that all belong to ONE album get one
+    # "Artist Album" search instead of N individual searches; all tracks hold
+    # in 'album_queued' state. Multi-album jobs (playlists, nightly-sync
+    # additions) skip this — the bare t.artist/t.album below come from an
+    # arbitrary row, which would produce a nonsense query for mixed albums.
     for job in conn.execute("""
         SELECT j.id, t.artist, t.album, COUNT(*) as cnt
         FROM import_jobs j
@@ -2282,7 +2285,7 @@ def _worker_tick():
           AND t.slskd_state = 'pending'
           AND j.album_search_id IS NULL
         GROUP BY j.id
-        HAVING cnt >= 3
+        HAVING cnt >= 3 AND COUNT(DISTINCT t.album) = 1
         LIMIT 3
     """).fetchall():
         artist = re.split(r',|&|\bfeat\.|\bft\.', job["artist"] or "",
