@@ -1923,13 +1923,26 @@ def _sync_navidrome_after_m3u(playlist_name: str) -> None:
         matches = [p for p in playlists
                    if p.get("name", "").strip().lower() == playlist_name.strip().lower()]
         if len(matches) > 1:
-            # Duplicates (old API-created copy + M3U-imported copy). Delete them
-            # all — the scan below re-imports a single playlist from the M3U.
-            for p in matches:
-                requests.post(f"{nav_url}/rest/deletePlaylist",
-                              data={**base, "id": p["id"]}, timeout=10)
-            logger.info(f"[nav] Removed {len(matches)} duplicate '{playlist_name}' playlists — "
-                        "re-importing one from the M3U")
+            # Duplicates: old API-created copy + M3U-imported copy. Navidrome marks
+            # playlists it imported from an M3U with an "Auto-imported" comment —
+            # keep that one and delete only the extras. If none carries the marker
+            # we can't tell a stale copy from a playlist the user made by hand with
+            # the same name, so leave everything alone rather than risk deleting
+            # someone's curation.
+            imported = [p for p in matches
+                        if "auto-imported" in (p.get("comment") or "").lower()]
+            if imported:
+                keep_id = imported[0]["id"]
+                extras = [p for p in matches if p["id"] != keep_id]
+                for p in extras:
+                    requests.post(f"{nav_url}/rest/deletePlaylist",
+                                  data={**base, "id": p["id"]}, timeout=10)
+                logger.info(f"[nav] Removed {len(extras)} duplicate '{playlist_name}' playlist(s), "
+                            "kept the M3U-imported copy")
+            else:
+                logger.warning(
+                    f"[nav] {len(matches)} playlists named '{playlist_name}' but none is marked "
+                    "auto-imported — not deleting any (can't tell duplicates from user playlists)")
     except Exception as ex:
         logger.warning(f"[nav] Playlist dedupe check failed: {ex}")
     try:
