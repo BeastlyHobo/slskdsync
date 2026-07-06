@@ -42,7 +42,7 @@
   {% if job.playlist_name or job.needs_fix or job.source_url %}
   <div class="pl-actions-row">
     {% if job.playlist_name %}
-    <button class="pl-regen-btn" onclick="regenM3u({{ job.id }},'{{ job.playlist_name|e }}',this)" title="Rebuild M3U">♻ M3U</button>
+    <button class="pl-regen-btn" data-name="{{ job.playlist_name|e }}" onclick="regenM3u({{ job.id }},this.dataset.name,this)" title="Rebuild M3U">♻ M3U</button>
     <span class="pl-regen-result" id="regen-{{ job.id }}"></span>
     {% endif %}
     {% if job.needs_fix %}
