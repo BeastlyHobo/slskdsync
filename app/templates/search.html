@@ -435,9 +435,13 @@ function queueDl(btn, item, source) {
       btn.textContent = '✓';
       btn.classList.add('btn-queued');
       showToast('Queued: ' + item.title);
+    } else if (d.skipped) {
+      btn.textContent = '✓';
+      btn.classList.add('btn-queued');
+      showToast(d.message || 'Already in your library');
     } else {
       btn.textContent = '✗';
-      showToast('Error: ' + (d.error || 'Unknown'), 3500);
+      showToast('Error: ' + (d.message || d.error || 'Unknown'), 3500);
       setTimeout(() => { btn.textContent = source === 'slskd' ? 'Soulseek' : 'TIDAL'; btn.disabled = false; }, 2000);
     }
   })
