@@ -1508,7 +1508,14 @@ class Organizer:
     def move_file(src: Path, dst: Path, force_overwrite: bool = False) -> tuple[bool, str]:
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists() and not force_overwrite and get_setting("replace_existing") != "1":
-            return True, str(dst)  # already there — treat as success
+            # Already there — treat as success, but still remove the downloaded
+            # copy: left in the watch folder it gets title-matched to future
+            # tracks and organized as the wrong song.
+            try:
+                src.unlink()
+            except Exception as ex:
+                logger.debug(f"[organizer] Could not remove skipped source file: {ex}")
+            return True, str(dst)
         shutil.copyfile(str(src), str(dst))
         try:
             src.unlink()
@@ -1606,9 +1613,11 @@ def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
 
     def _norm(s: str) -> str:
         # Strip quote characters that differ between DB titles and peer filenames
-        return s.replace('"', '').replace('“', '').replace('”', '').replace('‘', '').replace('’', '')
+        return (s.replace('"', '').replace('“', '').replace('”', '')
+                 .replace('‘', '').replace('’', '').replace("'", ''))
 
     title_norm = _norm(title)
+    artist_norm = _norm(artist)
 
     # Collect all audio files once so we can log useful diagnostics
     audio_files = [f for f in watch.glob("**/*")
@@ -1617,25 +1626,41 @@ def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
         logger.warning(f"[discover] Watch path {watch} exists but contains no audio files")
         return None
 
-    title_match = None
-    path_match = None  # title found in full path but not filename
+    if not title_norm:
+        return None
+
+    # Word-boundary containment so "home" can't match "homewrecker".
+    title_re = re.compile(rf"(?<![a-z0-9]){re.escape(title_norm)}(?![a-z0-9])")
+
+    title_matches: list[Path] = []  # title in the filename
+    path_matches: list[Path] = []   # title only in a parent folder name
     for f in audio_files:
         n = _norm(f.name.lower())
         full_l = _norm(str(f).lower().replace("\\", "/"))
-        if title_norm and title_norm in n:
-            artist_norm = _norm(artist)
+        if title_re.search(n):
             if artist_norm and artist_norm in n:
                 logger.debug(f"[discover] Exact match: {f.name}")
                 return f
-            if title_match is None:
-                title_match = f
-        elif title_norm and title_norm in full_l and path_match is None:
-            path_match = f  # title is in a parent folder name
+            title_matches.append(f)
+        elif title_re.search(full_l):
+            path_matches.append(f)
 
-    best = title_match or path_match
-    if best:
-        logger.debug(f"[discover] Fuzzy match for '{title}': {best.name}")
-        return best
+    candidates = title_matches or path_matches
+    if len(candidates) == 1:
+        logger.debug(f"[discover] Fuzzy match for '{title}': {candidates[0].name}")
+        return candidates[0]
+    if candidates:
+        # Several files carry this title and none pairs it with the artist in the
+        # filename — use the artist elsewhere in the path to disambiguate, else
+        # wait: grabbing one at random organizes the wrong song.
+        if artist_norm:
+            with_artist = [f for f in candidates
+                           if artist_norm in _norm(str(f).lower().replace("\\", "/"))]
+            if with_artist:
+                logger.debug(f"[discover] Path-artist match for '{title}': {with_artist[0].name}")
+                return with_artist[0]
+        logger.info(f"[discover] {len(candidates)} ambiguous matches for '{title}' — waiting for a clearer match")
+        return None
 
     sample = [f.name for f in audio_files[:5]]
     logger.info(f"[discover] No match for '{title}' among {len(audio_files)} files. Sample: {sample}")
