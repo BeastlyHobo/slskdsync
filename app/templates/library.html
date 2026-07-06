@@ -308,7 +308,7 @@ function trackRowHtml(t, showArtist=true) {
       <span class="${extClass(t.ext)}">${esc(t.ext||'?')}</span>
       ${verifyBtn}
       <button class="lib-sm-btn" style="font-size:.6rem;padding:.15rem .4rem" title="Re-download"
-        onclick="event.stopPropagation();redownload(this,${JSON.stringify(t.artist)},${JSON.stringify(t.album)},${JSON.stringify(t.title)})">↺</button>
+        onclick="event.stopPropagation();redownload(this,${esc(JSON.stringify(t.artist))},${esc(JSON.stringify(t.album))},${esc(JSON.stringify(t.title))})">↺</button>
     </div>
   </div>`;
 }
@@ -374,7 +374,7 @@ function renderArtists() {
       const tracks = map[a];
       const albums = [...new Set(tracks.map(t=>t.album).filter(Boolean))];
       const sub = `${albums.length} album${albums.length===1?'':'s'} · ${tracks.length} track${tracks.length===1?'':'s'}`;
-      const aJ  = JSON.stringify(a);
+      const aJ  = esc(JSON.stringify(a));
       return `<div class="artist-row" onclick="navTo('artist-albums',{artist:${aJ}})">
         <div class="artist-avatar">🎤</div>
         <div class="artist-info">
@@ -411,10 +411,10 @@ function renderArtistAlbums() {
     if (!map[al]) map[al] = {cover_url:t.cover_url, tracks:[]};
     map[al].tracks.push(t);
   });
-  const aJ = JSON.stringify(ctx.artist);
+  const aJ = esc(JSON.stringify(ctx.artist));
   const html = Object.keys(map).sort().map(al => {
     const {cover_url, tracks:at} = map[al];
-    const alJ = JSON.stringify(al);
+    const alJ = esc(JSON.stringify(al));
     const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">💿</div></div>`;
     return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:ctx.artist,album:${alJ}})">
       ${cover}
@@ -451,7 +451,7 @@ function renderAlbums() {
   if (!keys.length) { document.getElementById('lib-content').innerHTML='<div class="empty-lib">No albums match.</div>'; return; }
   const html = keys.map(k => {
     const {artist,album,cover_url,tracks} = map[k];
-    const aJ=JSON.stringify(artist), alJ=JSON.stringify(album);
+    const aJ=esc(JSON.stringify(artist)), alJ=esc(JSON.stringify(album));
     const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">💿</div></div>`;
     return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:${aJ},album:${alJ}})">
       ${cover}
@@ -531,7 +531,7 @@ function renderPlaylists() {
   const colors = {spotify:'#1DB954',apple:'#fc3c44',tidal:'#000',deezer:'#EF5466',search:'#555'};
   const rows = ALL_PLAYLISTS.filter(p => !q||(p.playlist_name||p.source_url||'').toLowerCase().includes(q)).map(p => {
     const name = p.playlist_name || p.source_url || `Import #${p.id}`;
-    const nJ   = JSON.stringify(name);
+    const nJ   = esc(JSON.stringify(name));
     const src  = p.source || 'search';
     const bg   = colors[src] || 'var(--surface3)';
     const done = p.done || 0;

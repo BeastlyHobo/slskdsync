@@ -235,7 +235,7 @@ function aiSuggestPl(btn, trackId) {
       chipsDiv.innerHTML = d.suggestions.map(s =>
         `<button class="af-chip" style="margin:.2rem .2rem 0 0;font-size:.7rem"
            title="${esc(s.why)}"
-           onclick="this.closest('.missing-search').querySelector('.ms-input').value=${JSON.stringify(s.q)}">${esc(s.q)}</button>`
+           onclick="this.closest('.missing-search').querySelector('.ms-input').value=${esc(JSON.stringify(s.q))}">${esc(s.q)}</button>`
       ).join('');
     })
     .catch(() => { btn.disabled = false; btn.textContent = '✨ AI'; });
