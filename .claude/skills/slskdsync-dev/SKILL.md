@@ -35,6 +35,7 @@ edit the CREATE TABLE only.**
 | `library_index` | scanned library files | **WIPED on every rescan** (`DELETE FROM library_index` in `scan_library()`) — never store user data here that must persist |
 | `playlist_tracks` | playlist membership snapshot at import time | replaced on manual M3U regen (DELETE+INSERT in `_build_playlist_entries`) |
 | `bad_flags` | user "wrong grab" flags, **keyed by file path** | permanent — deliberately survives rescans; join by path, not id |
+| `download_history` | append-only record of every completed download (peer, format, score) | permanent — powers `/stats`; queue rows get cleared, this doesn't |
 
 `tracks` notable columns: `force_overwrite` (re-downloads overwrite existing file),
 `custom_search` (user-edited search query, cleared after use), `slskd_tried_users`
@@ -106,6 +107,22 @@ All providers return `(kind, list[TrackMeta])`. `TrackMeta` dataclass ~line 285.
 - `POST /api/download/batch` — one job **per track** (deliberate: avoids the
   album-batching optimization grouping them into one search).
 - `GET /api/logs?n=1000` — last N lines from log file, falls back to ring buffer.
+- `POST /api/playlists/<job_id>/sync` — full on-demand sync (fetch → queue new →
+  M3U → Navidrome), same path as nightly; stamps `import_jobs.last_synced_at/last_sync_new`.
+- `GET /api/library/index` — owned keys PLUS in-flight queue items flagged `q:1`
+  (Search/Discover render "queued" and hide download buttons).
+- `GET /api/status/sources` — cached (5 min) monochrome health; UI adds `no-mono`
+  body class to hide TIDAL buttons when down.
+- Pages: `/attention` (needs_search + bad flags + AcoustID <50% triage),
+  `/stats` (history/format/AcoustID breakdown, linked from Settings).
+
+## Frontend gotcha #1 (bugs already paid for — twice)
+
+NEVER interpolate `JSON.stringify(x)` bare into a double-quoted HTML attribute
+(`onclick="fn(${aJ})"`) — the JSON's own quotes terminate the attribute and the
+handler becomes a syntax error for EVERY value. Wrap it: `${esc(JSON.stringify(x))}`,
+or better, use `data-*` attributes + `addEventListener`. Same trap via Jinja:
+`onclick="fn('{{ x|e }}')"` breaks on apostrophes — use `data-name="{{ x|e }}"`.
 
 ## Settings keys (settings table, via `get_setting`/`set_setting`)
 
