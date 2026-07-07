@@ -3038,13 +3038,47 @@ def _queue_stats(conn) -> dict:
     return stats
 
 
+def _attention_items(conn) -> dict:
+    """The three manual-intervention buckets, gathered in one place:
+    tracks needing a custom search, files flagged as bad grabs, and
+    files whose AcoustID fingerprint says they're the wrong song."""
+    needs = conn.execute(
+        "SELECT id, artist, title, album, slskd_error FROM tracks"
+        " WHERE slskd_state='needs_search' ORDER BY id DESC"
+    ).fetchall()
+    flagged = conn.execute(
+        "SELECT b.path, COALESCE(l.artist, b.artist) AS artist,"
+        " COALESCE(l.title, b.title) AS title, l.album AS album, b.flagged_at"
+        " FROM bad_flags b LEFT JOIN library_index l ON l.path = b.path"
+        " ORDER BY b.flagged_at DESC"
+    ).fetchall()
+    low = conn.execute(
+        "SELECT id, artist, title, album, path, acoustid_score FROM library_index"
+        " WHERE acoustid_score IS NOT NULL AND acoustid_score >= 0 AND acoustid_score < 0.5"
+        " AND path NOT IN (SELECT path FROM bad_flags)"
+        " ORDER BY acoustid_score"
+    ).fetchall()
+    return {"needs": needs, "flagged": flagged, "low": low}
+
+
 @app.route("/")
 def index():
     conn = get_conn()
     tracks = conn.execute("SELECT * FROM tracks ORDER BY id DESC LIMIT 100").fetchall()
     stats = _queue_stats(conn)
+    att = _attention_items(conn)
+    attention_count = len(att["needs"]) + len(att["flagged"]) + len(att["low"])
     conn.close()
-    return render_template("index.html", tracks=tracks, stats=stats, title="Queue")
+    return render_template("index.html", tracks=tracks, stats=stats,
+                           attention_count=attention_count, title="Queue")
+
+
+@app.route("/attention")
+def attention_page():
+    conn = get_conn()
+    att = _attention_items(conn)
+    conn.close()
+    return render_template("attention.html", title="Needs attention", **att)
 
 
 @app.route("/search")
@@ -3232,6 +3266,13 @@ def api_status_slskd():
         conn.close()
     except Exception:
         pass
+    # Free space on the library volume — a music downloader that fills the
+    # disk silently is a classic self-hosting failure mode.
+    try:
+        usage = shutil.disk_usage(get_setting("library_path") or "/music")
+        result["disk_free_gb"] = round(usage.free / 1_073_741_824, 1)
+    except Exception:
+        result["disk_free_gb"] = None
     return jsonify(result)
 
 

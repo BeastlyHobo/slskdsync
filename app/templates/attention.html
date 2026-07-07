@@ -1,0 +1,199 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="page-head">
+  <h1 class="page-title">Needs attention</h1>
+  <p class="page-sub">Everything waiting on you, in one place: failed searches, flagged bad grabs, and fingerprint mismatches.</p>
+</div>
+
+{% if not needs and not flagged and not low %}
+<div class="empty-state">
+  <div class="empty-icon">✅</div>
+  <p>Nothing needs attention. Everything downloaded, verified, and unflagged.</p>
+</div>
+{% endif %}
+
+{% if needs %}
+<div class="att-section">
+  <div class="att-head">
+    <span class="att-title">🔍 Needs a custom search <span class="att-count">{{ needs|length }}</span></span>
+    <button class="ms-btn" onclick="aiSuggestAll(this)">✨ Suggest all</button>
+  </div>
+  <p class="att-hint">Automatic searches found nothing. Edit the query and retry, or let AI suggest alternatives.</p>
+  {% for t in needs %}
+  <div class="missing-row att-row" id="ns-{{ t.id }}" data-tid="{{ t.id }}">
+    <div class="missing-info">
+      <div class="missing-title">{{ t.title or '—' }}</div>
+      <div class="missing-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
+      {% if t.slskd_error %}<div class="missing-sub" style="color:var(--err)">{{ t.slskd_error[:80] }}</div>{% endif %}
+    </div>
+    <div class="missing-search">
+      <input class="ms-input" type="text" value="{{ (t.artist ~ ' ' ~ t.title) | trim }}"
+        placeholder="Search query…" onkeydown="if(event.key==='Enter')nsSearch(this,{{ t.id }})">
+      <button class="ms-btn" onclick="nsSearch(this.previousElementSibling,{{ t.id }})">Search</button>
+      <button class="ms-btn ns-ai" onclick="aiSuggest(this,{{ t.id }})">✨ AI</button>
+      <div class="ai-chips" id="ai-chips-{{ t.id }}"></div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if flagged %}
+<div class="att-section">
+  <div class="att-head">
+    <span class="att-title">⚑ Flagged as bad <span class="att-count">{{ flagged|length }}</span></span>
+  </div>
+  <p class="att-hint">Wrong grabs you flagged. Re-download replaces the file; unflag if it's actually fine.</p>
+  {% for t in flagged %}
+  <div class="missing-row att-row" data-path="{{ t.path }}">
+    <div class="missing-info">
+      <div class="missing-title">{{ t.title or '—' }}</div>
+      <div class="missing-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
+    </div>
+    <div class="missing-search">
+      <input class="ms-input" type="text" value="{{ ((t.artist or '') ~ ' ' ~ (t.title or '')) | trim }}"
+        placeholder="Search query…">
+      <button class="ms-btn" onclick="attRedl(this)">↺ Re-download</button>
+      <button class="ms-btn" onclick="attUnflag(this)">Unflag</button>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if low %}
+<div class="att-section">
+  <div class="att-head">
+    <span class="att-title">🎯 Fingerprint says wrong song <span class="att-count">{{ low|length }}</span></span>
+  </div>
+  <p class="att-hint">AcoustID matched these files to a different song than their tags claim (&lt;50% confidence).</p>
+  {% for t in low %}
+  <div class="missing-row att-row" data-path="{{ t.path }}">
+    <div class="missing-info">
+      <div class="missing-title">{{ t.title or '—' }}
+        <span class="aid-badge aid-red">ID {{ (t.acoustid_score * 100) | int }}%</span>
+      </div>
+      <div class="missing-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
+    </div>
+    <div class="missing-search">
+      <input class="ms-input" type="text" value="{{ ((t.artist or '') ~ ' ' ~ (t.title or '')) | trim }}"
+        placeholder="Search query…">
+      <button class="ms-btn" onclick="attRedl(this)">↺ Re-download</button>
+      <button class="ms-btn" onclick="attFlag(this)">⚑ Flag bad</button>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<style>
+.att-section { margin-bottom: 1.4rem; }
+.att-head { display:flex; align-items:center; gap:.6rem; margin-bottom:.15rem; }
+.att-title { font-size:.92rem; font-weight:700; }
+.att-count { display:inline-block; background:var(--surface2); border:1px solid var(--border);
+  border-radius:var(--radius-pill); font-size:.7rem; padding:.05rem .5rem; margin-left:.25rem;
+  color:var(--text-muted); }
+.att-hint { font-size:.72rem; color:var(--text-faint); margin:0 0 .55rem; }
+.att-row { background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-sm); padding:.55rem .7rem; margin-bottom:.45rem; }
+.att-row.done { opacity:.45; }
+</style>
+
+<script>
+function _rowMeta(btn) {
+  const row = btn.closest('.att-row');
+  return {
+    row,
+    path:   row.dataset.path || '',
+    artist: (row.querySelector('.missing-sub')?.textContent || '').split('·')[0].trim(),
+    title:  (row.querySelector('.missing-title')?.childNodes[0]?.textContent || '').trim(),
+    album:  ((row.querySelector('.missing-sub')?.textContent || '').split('·')[1] || '').trim(),
+    query:  (row.querySelector('.ms-input')?.value || '').trim(),
+  };
+}
+
+function nsSearch(input, trackId) {
+  const query = input.value.trim();
+  if (!query) return;
+  const btn = input.nextElementSibling;
+  btn.disabled = true; btn.textContent = '…';
+  fetch(`/api/tracks/${trackId}/retry`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({query}),
+  }).then(r=>r.json()).then(d => {
+    btn.disabled = false;
+    btn.textContent = d.ok ? 'Queued ✓' : 'Search';
+    if (d.ok) input.closest('.att-row').classList.add('done');
+  }).catch(() => { btn.disabled = false; btn.textContent = 'Search'; });
+}
+
+function attRedl(btn) {
+  const m = _rowMeta(btn);
+  if (!m.artist || !m.title) { btn.textContent = '✗ no metadata'; return; }
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = '…';
+  fetch('/api/library/redownload', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({artist:m.artist, album:m.album, title:m.title,
+                          query:m.query, old_path:m.path}),
+  }).then(r=>r.json()).then(d => {
+    btn.textContent = d.ok ? '✓ Queued' : '✗ ' + (d.error || 'Failed');
+    if (d.ok) m.row.classList.add('done'); else btn.disabled = false;
+  }).catch(() => { btn.disabled = false; btn.textContent = orig; });
+}
+
+function attUnflag(btn) {
+  const m = _rowMeta(btn);
+  btn.disabled = true; btn.textContent = '…';
+  fetch('/api/library/flag-bad', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({path:m.path, flagged:false}),
+  }).then(r=>r.json()).then(d => {
+    if (d.ok) m.row.remove(); else { btn.disabled = false; btn.textContent = 'Unflag'; }
+  }).catch(() => { btn.disabled = false; btn.textContent = 'Unflag'; });
+}
+
+function attFlag(btn) {
+  const m = _rowMeta(btn);
+  btn.disabled = true; btn.textContent = '…';
+  fetch('/api/library/flag-bad', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({path:m.path, artist:m.artist, title:m.title, flagged:true}),
+  }).then(r=>r.json()).then(d => {
+    btn.textContent = d.ok ? '⚑ Flagged' : '⚑ Flag bad';
+    if (!d.ok) btn.disabled = false;
+  }).catch(() => { btn.disabled = false; btn.textContent = '⚑ Flag bad'; });
+}
+
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+function aiSuggest(btn, trackId) {
+  btn.disabled = true; btn.textContent = '…';
+  const chipsDiv = document.getElementById('ai-chips-' + trackId);
+  chipsDiv.innerHTML = '';
+  return fetch(`/api/tracks/${trackId}/ai-suggest`, { method:'POST' })
+    .then(r=>r.json()).then(d => {
+      btn.disabled = false; btn.textContent = '✨ AI';
+      if (!d.ok) { chipsDiv.innerHTML = `<span style="color:var(--err);font-size:.72rem">${esc(d.error)}</span>`; return; }
+      chipsDiv.innerHTML = d.suggestions.map(s =>
+        `<button class="af-chip" style="margin:.2rem .2rem 0 0;font-size:.7rem" title="${esc(s.why)}"
+           onclick="this.closest('.missing-search').querySelector('.ms-input').value=${esc(JSON.stringify(s.q))}">${esc(s.q)}</button>`
+      ).join('');
+    })
+    .catch(() => { btn.disabled = false; btn.textContent = '✨ AI'; });
+}
+
+async function aiSuggestAll(btn) {
+  const rows = [...document.querySelectorAll('.att-row[data-tid]:not(.done)')];
+  if (!rows.length) return;
+  btn.disabled = true;
+  for (let i = 0; i < rows.length; i++) {
+    btn.textContent = `✨ ${i + 1}/${rows.length}…`;
+    await aiSuggest(rows[i].querySelector('.ns-ai'), rows[i].dataset.tid);
+  }
+  btn.textContent = '✨ Suggest all';
+  btn.disabled = false;
+}
+</script>
+
+{% endblock %}

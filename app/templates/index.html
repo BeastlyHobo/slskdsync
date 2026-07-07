@@ -5,6 +5,16 @@
   <h1 class="page-title">Queue</h1>
 </div>
 
+{% if attention_count %}
+<a href="/attention" style="display:flex;align-items:center;gap:.5rem;background:var(--surface2);
+   border:1px solid rgba(240,180,60,.4);border-radius:var(--radius-sm);padding:.55rem .8rem;
+   margin-bottom:.7rem;font-size:.8rem;color:var(--text);text-decoration:none">
+  ⚠ <strong>{{ attention_count }}</strong> track{{ '' if attention_count == 1 else 's' }}
+  need{{ 's' if attention_count == 1 else '' }} attention
+  <span style="margin-left:auto;color:var(--text-muted)">Review ›</span>
+</a>
+{% endif %}
+
 <!-- Import URL -->
 <div class="import-section">
   <span class="label">Import from URL</span>
@@ -407,7 +417,10 @@ function aiSuggestQ(btn, trackId) {
           if (chip.textContent.includes('need search')) el.textContent = s.needs_search;
         });
 
-        hasActive = (s.pending + s.downloading) > 0;
+        const act = s.pending + s.downloading;
+        document.title = act > 0 ? `(${act}↓) slskdsync` : 'slskdsync';
+
+        hasActive = act > 0;
         if (hasActive) setTimeout(poll, 5000);
         else setTimeout(poll, 20000);
       })
@@ -455,6 +468,7 @@ function toggleM3uName() {
           const parts = ['slskd connected'];
           if (d.version) parts.push(`v${d.version}`);
           if (d.active > 0) parts.push(`${d.active} active download${d.active !== 1 ? 's' : ''}`);
+          if (d.disk_free_gb != null) parts.push(`${d.disk_free_gb} GB free`);
           txt.textContent = parts.join(' · ');
         } else {
           dot.style.background = 'var(--err)';
