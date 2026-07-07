@@ -1,0 +1,142 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="page-head">
+  <h1 class="page-title">Stats</h1>
+  <p class="page-sub">Library makeup and download history. History starts recording from the first download after this feature was added.</p>
+</div>
+
+<!-- Headline tiles -->
+<div class="st-tiles">
+  <div class="st-tile"><div class="st-num">{{ lib_total }}</div><div class="st-label">tracks in library</div></div>
+  <div class="st-tile"><div class="st-num">{{ hist_7 }}</div><div class="st-label">downloads · 7 days</div></div>
+  <div class="st-tile"><div class="st-num">{{ hist_30 }}</div><div class="st-label">downloads · 30 days</div></div>
+  <div class="st-tile"><div class="st-num">{{ hist_total }}</div><div class="st-label">downloads · all time</div></div>
+</div>
+
+<div class="st-grid">
+
+  <div class="st-card">
+    <div class="st-card-title">Library formats</div>
+    {% if fmts %}
+    {% set fmax = fmts[0][1] %}
+    {% for name, c in fmts[:8] %}
+    <div class="st-bar-row">
+      <span class="st-bar-name">{{ name }}</span>
+      <div class="st-bar-track"><div class="st-bar" style="width:{{ (c / fmax * 100) | round | int }}%"></div></div>
+      <span class="st-bar-val">{{ c }}</span>
+    </div>
+    {% endfor %}
+    {% else %}<div class="st-empty">Library not indexed yet.</div>{% endif %}
+  </div>
+
+  <div class="st-card">
+    <div class="st-card-title">AcoustID verification</div>
+    {% set arows = [('Verified ≥80%', aid.verified, 'var(--ok)'),
+                    ('Uncertain 50–79%', aid.uncertain, 'var(--warn)'),
+                    ('Wrong song <50%', aid.mismatch, 'var(--err)'),
+                    ('Not in AcoustID DB', aid.unknown, 'var(--text-faint)'),
+                    ('Not checked', aid.unchecked, 'var(--text-faint)')] %}
+    {% set amax = [aid.verified, aid.uncertain, aid.mismatch, aid.unknown, aid.unchecked] | max %}
+    {% for name, c, color in arows %}
+    <div class="st-bar-row">
+      <span class="st-bar-name">{{ name }}</span>
+      <div class="st-bar-track"><div class="st-bar" style="width:{{ (c / amax * 100) | round | int if amax else 0 }}%;background:{{ color }}"></div></div>
+      <span class="st-bar-val">{{ c }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="st-card">
+    <div class="st-card-title">Downloads by source</div>
+    {% if sources %}
+    {% set smax = sources[0]['c'] %}
+    {% for s in sources %}
+    <div class="st-bar-row">
+      <span class="st-bar-name">{{ s['source'] or '?' }}</span>
+      <div class="st-bar-track"><div class="st-bar" style="width:{{ (s['c'] / smax * 100) | round | int }}%"></div></div>
+      <span class="st-bar-val">{{ s['c'] }}</span>
+    </div>
+    {% endfor %}
+    {% else %}<div class="st-empty">No downloads recorded yet.</div>{% endif %}
+    <div class="st-foot">
+      Queue lifetime: {{ outcomes.done or 0 }} completed · {{ outcomes.failed or 0 }} failed · {{ outcomes.needs or 0 }} need search
+    </div>
+  </div>
+
+  <div class="st-card">
+    <div class="st-card-title">Top Soulseek peers</div>
+    {% if top_peers %}
+    {% set pmax = top_peers[0]['c'] %}
+    {% for p in top_peers %}
+    <div class="st-bar-row">
+      <span class="st-bar-name" title="{{ p['peer'] }}">{{ p['peer'] }}</span>
+      <div class="st-bar-track"><div class="st-bar" style="width:{{ (p['c'] / pmax * 100) | round | int }}%"></div></div>
+      <span class="st-bar-val">{{ p['c'] }}</span>
+    </div>
+    {% endfor %}
+    {% else %}<div class="st-empty">No peer data yet.</div>{% endif %}
+  </div>
+
+</div>
+
+{% if recent %}
+<div class="st-card" style="margin-top:.8rem">
+  <div class="st-card-title">Recent downloads</div>
+  {% for r in recent %}
+  <div class="st-recent-row">
+    <div class="st-recent-info">
+      <div class="st-recent-title">{{ r['title'] or '—' }}</div>
+      <div class="st-recent-sub">{{ r['artist'] or '' }}{% if r['peer'] %} · from {{ r['peer'] }}{% endif %}</div>
+    </div>
+    {% if r['ext'] %}<span class="lib-ext">{{ r['ext'] }}</span>{% endif %}
+    <span class="st-recent-when sync-ago" data-ts="{{ r['completed_at'] }}">{{ r['completed_at'] }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<style>
+.st-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:.55rem; margin-bottom:.8rem; }
+.st-tile { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:.7rem .8rem; }
+.st-num { font-size:1.35rem; font-weight:800; line-height:1.1; }
+.st-label { font-size:.68rem; color:var(--text-muted); margin-top:.2rem; }
+.st-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:.8rem; }
+.st-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:.8rem .9rem; }
+.st-card-title { font-size:.8rem; font-weight:700; margin-bottom:.6rem; }
+.st-bar-row { display:flex; align-items:center; gap:.5rem; margin-bottom:.4rem; font-size:.74rem; }
+.st-bar-name { width:34%; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  color:var(--text-muted); }
+.st-bar-track { flex:1; height:8px; background:var(--surface2); border-radius:var(--radius-pill);
+  overflow:hidden; }
+.st-bar { height:100%; background:var(--accent); border-radius:var(--radius-pill); min-width:2px; }
+.st-bar-val { width:2.6rem; text-align:right; font-variant-numeric:tabular-nums; }
+.st-empty { font-size:.74rem; color:var(--text-faint); }
+.st-foot { font-size:.68rem; color:var(--text-faint); margin-top:.5rem; }
+.st-recent-row { display:flex; align-items:center; gap:.6rem; padding:.35rem 0;
+  border-bottom:1px solid var(--border); font-size:.78rem; }
+.st-recent-row:last-child { border-bottom:none; }
+.st-recent-info { flex:1; min-width:0; }
+.st-recent-title { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.st-recent-sub { font-size:.68rem; color:var(--text-muted); white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; }
+.st-recent-when { font-size:.66rem; color:var(--text-faint); white-space:nowrap; }
+</style>
+
+<script>
+function timeAgo(utcStr) {
+  const d = new Date(utcStr.replace(' ', 'T') + (utcStr.endsWith('Z') ? '' : 'Z'));
+  const s = Math.max(0, (Date.now() - d.getTime()) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 129600) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+document.querySelectorAll('.sync-ago').forEach(el => {
+  if (el.dataset.ts) el.textContent = timeAgo(el.dataset.ts);
+});
+</script>
+
+{% endblock %}

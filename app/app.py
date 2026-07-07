@@ -2251,6 +2251,22 @@ def scan_library() -> None:
             _scan_state.update({"in_progress": False, "source": source})
 
 
+def _record_history(conn, track: sqlite3.Row, path: str, source: str,
+                    peer: str, score) -> None:
+    """Append-only record of completed downloads. The queue's completed rows
+    get deleted by 'Clear done', so this is the durable answer to 'what did
+    last night's sync grab, from whom, at what quality'."""
+    try:
+        conn.execute(
+            "INSERT INTO download_history(artist, album, title, source, peer, path, ext,"
+            " acoustid_score, job_id) VALUES(?,?,?,?,?,?,?,?,?)",
+            (track["artist"], track["album"], track["title"], source, peer or "",
+             path, Path(path).suffix.lstrip(".").upper(), score, track["job_id"]),
+        )
+    except Exception as ex:
+        logger.debug(f"[history] insert failed: {ex}")
+
+
 def _cleanup_replaced_file(conn, track: sqlite3.Row, new_path: str) -> None:
     """After a re-download lands, remove the file it replaced when the new
     target differs (a different extension lands at a different path, leaving
@@ -2677,6 +2693,7 @@ def _worker_tick():
                 tag_file(Path(result), t)
                 aid_score = _acoustid.verify(Path(result), t["artist"] or "", t["title"] or "")
                 _cleanup_replaced_file(conn, t, result)
+                _record_history(conn, t, result, "slskd", t["slskd_download_user"] or "", aid_score)
                 conn.execute(
                     "UPDATE tracks SET slskd_state='completed', local_path=?, acoustid_score=?,"
                     " slskd_download_user=NULL, slskd_download_filename=NULL WHERE id=?",
@@ -2757,6 +2774,7 @@ def _worker_tick():
             else:
                 aid_score = None
             _cleanup_replaced_file(conn, t, final)
+            _record_history(conn, t, final, "monochrome", "", aid_score)
             conn.execute("UPDATE tracks SET slskd_state='completed', local_path=?, acoustid_score=? WHERE id=?",
                          (final, aid_score, t["id"]))
         else:
@@ -3473,6 +3491,62 @@ def api_library_cover(cover_art_id):
 @app.route("/logs")
 def logs_page():
     return render_template("logs.html", title="Logs")
+
+
+@app.route("/stats")
+def stats_page():
+    conn = get_conn()
+    lib_rows = conn.execute("SELECT path, acoustid_score FROM library_index").fetchall()
+
+    fmt_counts: dict[str, int] = {}
+    aid = {"verified": 0, "uncertain": 0, "mismatch": 0, "unknown": 0, "unchecked": 0}
+    for r in lib_rows:
+        ext = (Path(r["path"]).suffix.lstrip(".").upper() if r["path"] else "") or "?"
+        fmt_counts[ext] = fmt_counts.get(ext, 0) + 1
+        s = r["acoustid_score"]
+        if s is None:
+            aid["unchecked"] += 1
+        elif s < 0:
+            aid["unknown"] += 1
+        elif s < 0.5:
+            aid["mismatch"] += 1
+        elif s < 0.8:
+            aid["uncertain"] += 1
+        else:
+            aid["verified"] += 1
+    fmts = sorted(fmt_counts.items(), key=lambda kv: -kv[1])
+
+    hist_total = conn.execute("SELECT COUNT(*) FROM download_history").fetchone()[0]
+    hist_7 = conn.execute(
+        "SELECT COUNT(*) FROM download_history WHERE completed_at >= datetime('now','-7 day')"
+    ).fetchone()[0]
+    hist_30 = conn.execute(
+        "SELECT COUNT(*) FROM download_history WHERE completed_at >= datetime('now','-30 day')"
+    ).fetchone()[0]
+    sources = conn.execute(
+        "SELECT source, COUNT(*) AS c FROM download_history GROUP BY source ORDER BY c DESC"
+    ).fetchall()
+    top_peers = conn.execute(
+        "SELECT peer, COUNT(*) AS c FROM download_history"
+        " WHERE peer IS NOT NULL AND peer != '' GROUP BY peer ORDER BY c DESC LIMIT 5"
+    ).fetchall()
+    outcomes = conn.execute(
+        "SELECT SUM(CASE WHEN slskd_state='completed' THEN 1 ELSE 0 END) AS done,"
+        " SUM(CASE WHEN slskd_state='failed' THEN 1 ELSE 0 END) AS failed,"
+        " SUM(CASE WHEN slskd_state='needs_search' THEN 1 ELSE 0 END) AS needs"
+        " FROM tracks"
+    ).fetchone()
+    recent = conn.execute(
+        "SELECT artist, title, source, peer, ext, completed_at"
+        " FROM download_history ORDER BY id DESC LIMIT 12"
+    ).fetchall()
+    conn.close()
+    return render_template(
+        "stats.html", title="Stats",
+        lib_total=len(lib_rows), fmts=fmts, aid=aid,
+        hist_total=hist_total, hist_7=hist_7, hist_30=hist_30,
+        sources=sources, top_peers=top_peers, outcomes=outcomes, recent=recent,
+    )
 
 
 @app.route("/settings", methods=["GET", "POST"])
