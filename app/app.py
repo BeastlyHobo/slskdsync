@@ -167,6 +167,19 @@ def init_db():
             title TEXT,
             flagged_at TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS download_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            artist TEXT,
+            album TEXT,
+            title TEXT,
+            source TEXT,
+            peer TEXT,
+            path TEXT,
+            ext TEXT,
+            acoustid_score REAL,
+            job_id INTEGER,
+            completed_at TEXT DEFAULT (datetime('now'))
+        );
     """)
     # Migrate existing databases
     existing_cols = {row[1] for row in cur.execute("PRAGMA table_info(tracks)")}
@@ -202,6 +215,8 @@ def init_db():
         ("album_search_id", "TEXT DEFAULT NULL"),
         ("preferred_username", "TEXT DEFAULT NULL"),
         ("playlist_name", "TEXT DEFAULT NULL"),
+        ("last_synced_at", "TEXT DEFAULT NULL"),
+        ("last_sync_new", "INTEGER DEFAULT NULL"),
     ]:
         if col not in existing_job_cols:
             cur.execute(f"ALTER TABLE import_jobs ADD COLUMN {col} {ddl}")
@@ -2047,13 +2062,15 @@ def sync_playlists() -> None:
 
 
 def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str,
-                       trigger_scan: bool = True) -> None:
+                       trigger_scan: bool = True) -> dict:
+    """Sync one playlist from its source. Returns {"new": n, "total": n} plus an
+    optional "skipped" reason when nothing was changed."""
     provider = next((p for p in _providers if p.supports(source_url)), None)
     if not provider:
-        return
+        return {"new": 0, "total": 0, "skipped": "no provider for this URL"}
     _, fetched = provider.parse(source_url)
     if not fetched:
-        return
+        return {"new": 0, "total": 0, "skipped": "source returned no tracks"}
     conn = get_conn()
     # Shrink guard: a partial fetch (provider hiccup, pagination failure) must not
     # replace a full snapshot. A deliberate large removal at the source can be
@@ -2067,7 +2084,8 @@ def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str,
             f"[psync] '{playlist_name}': source returned {len(fetched)} tracks but "
             f"{stored} are stored — refusing to shrink (partial fetch?). "
             "Use the playlist's Regenerate button to force it.")
-        return
+        return {"new": 0, "total": len(fetched),
+                "skipped": f"source returned {len(fetched)} < {stored} stored (shrink guard)"}
     # Refresh the stored snapshot so the M3U reflects the current source list/order
     conn.execute("DELETE FROM playlist_tracks WHERE job_id=?", (job_id,))
     conn.executemany(
@@ -2086,11 +2104,16 @@ def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str,
             " VALUES(?,?,?,?,?,?,?)",
             (job_id, t.artist, t.album, t.title, t.track_number, t.source_id, t.cover_url),
         )
+    conn.execute(
+        "UPDATE import_jobs SET last_synced_at=datetime('now'), last_sync_new=? WHERE id=?",
+        (len(new), job_id),
+    )
     conn.commit()
     conn.close()
     if new:
         logger.info(f"[psync] '{playlist_name}': {len(new)} new song(s) queued for download")
     write_playlist_m3u(job_id, playlist_name, trigger_scan=trigger_scan)
+    return {"new": len(new), "total": len(fetched)}
 
 
 def scan_library() -> None:
@@ -3066,6 +3089,29 @@ def api_regenerate_m3u(job_id):
     return jsonify({"ok": True, "count": len(merged), "path": str(m3u_path), "missing": miss_count})
 
 
+@app.route("/api/playlists/<int:job_id>/sync", methods=["POST"])
+def api_playlist_sync(job_id):
+    """Run the full sync pipeline for one playlist on demand: re-fetch the
+    source, queue new songs, rewrite the M3U, refresh Navidrome. Same code
+    path as the nightly job."""
+    conn = get_conn()
+    job = conn.execute("SELECT playlist_name, source_url FROM import_jobs WHERE id=?",
+                       (job_id,)).fetchone()
+    conn.close()
+    if not job:
+        return jsonify({"ok": False, "error": "Job not found"}), 404
+    name = job["playlist_name"] or ""
+    url = job["source_url"] or ""
+    if not name or not url.startswith("http"):
+        return jsonify({"ok": False, "error": "This import has no playlist name or source URL to sync"}), 400
+    try:
+        res = _sync_one_playlist(job_id, name, url)
+    except Exception as ex:
+        logger.warning(f"[psync] Manual sync failed for '{name}': {ex}")
+        return jsonify({"ok": False, "error": str(ex)}), 500
+    return jsonify({"ok": True, **res})
+
+
 @app.route("/api/playlists/<int:job_id>/retry-missing", methods=["POST"])
 def api_retry_missing(job_id):
     """Reset all needs_search tracks for a playlist to pending so the worker re-tries them."""
@@ -3194,7 +3240,7 @@ def playlists():
     conn = get_conn()
     jobs = conn.execute("""
         SELECT j.id, j.source, j.source_type, j.source_url,
-               j.playlist_name, j.created_at,
+               j.playlist_name, j.created_at, j.last_synced_at, j.last_sync_new,
                COUNT(t.id) AS total,
                SUM(CASE WHEN t.slskd_state='completed' THEN 1 ELSE 0 END) AS done,
                SUM(CASE WHEN t.slskd_state='needs_search' THEN 1 ELSE 0 END) AS needs_fix,

@@ -25,6 +25,9 @@
       </div>
       <div class="pl-sub">
         {{ job.source }} · {{ job.source_type }} · {{ job.created_at[:10] if job.created_at else '—' }}
+        {% if job.last_synced_at %}
+        · synced <span class="sync-ago" data-ts="{{ job.last_synced_at }}">{{ job.last_synced_at }}</span>{% if job.last_sync_new %} · <span style="color:var(--ok)">{{ job.last_sync_new }} new</span>{% endif %}
+        {% endif %}
       </div>
     </div>
     <span class="pl-source-badge {{ src_class }}">{{ job.source }}</span>
@@ -41,6 +44,10 @@
   </div>
   {% if job.playlist_name or job.needs_fix or job.source_url %}
   <div class="pl-actions-row">
+    {% if job.playlist_name and job.source_url %}
+    <button class="pl-regen-btn" style="color:var(--ok);border-color:rgba(80,200,120,0.35)"
+      onclick="syncNow({{ job.id }},this)" title="Re-check source, queue new songs, refresh M3U + Navidrome">⟳ Sync</button>
+    {% endif %}
     {% if job.playlist_name %}
     <button class="pl-regen-btn" data-name="{{ job.playlist_name|e }}" onclick="regenM3u({{ job.id }},this.dataset.name,this)" title="Rebuild M3U">♻ M3U</button>
     <span class="pl-regen-result" id="regen-{{ job.id }}"></span>
@@ -86,6 +93,40 @@
 function togglePl(id, hasMissing) {
   if (!hasMissing) return;
   document.getElementById('plcard-' + id).classList.toggle('open');
+}
+
+function timeAgo(utcStr) {
+  // Timestamps come from SQLite datetime('now') / isoformat — UTC without a zone
+  const d = new Date(utcStr.replace(' ', 'T') + (utcStr.endsWith('Z') ? '' : 'Z'));
+  const s = Math.max(0, (Date.now() - d.getTime()) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 129600) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+document.querySelectorAll('.sync-ago').forEach(el => {
+  if (el.dataset.ts) el.textContent = timeAgo(el.dataset.ts);
+});
+
+function syncNow(jobId, btn) {
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = '…';
+  const result = document.getElementById('regen-' + jobId);
+  fetch(`/api/playlists/${jobId}/sync`, { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      btn.disabled = false;
+      btn.textContent = orig;
+      if (result) {
+        if (!d.ok)            { result.textContent = '✗ ' + (d.error || 'Sync failed'); result.style.color = 'var(--err)'; }
+        else if (d.skipped)   { result.textContent = '⚠ ' + d.skipped; result.style.color = 'var(--warn)'; }
+        else if (d.new > 0)   { result.textContent = `✓ ${d.new} new song${d.new!==1?'s':''} queued`; result.style.color = 'var(--ok)'; }
+        else                  { result.textContent = `✓ up to date (${d.total} tracks)`; result.style.color = 'var(--ok)'; }
+      }
+    })
+    .catch(() => { btn.disabled = false; btn.textContent = orig;
+      if (result) { result.textContent = '✗ Network error'; result.style.color = 'var(--err)'; } });
 }
 
 function regenM3u(jobId, name, btn) {
