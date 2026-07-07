@@ -3645,17 +3645,47 @@ def api_library_scan_status():
 
 @app.route("/api/library/index")
 def api_library_index():
-    """Lightweight list of downloaded track keys for the search page to check."""
+    """Lightweight list of track keys for the search page: owned tracks, plus
+    in-flight queue items (flagged "q":1) so the UI can show 'queued' instead
+    of offering a second download."""
     conn = get_conn()
     rows = conn.execute(
         "SELECT artist, title FROM tracks WHERE slskd_state='completed'"
         " UNION SELECT artist, title FROM library_index"
     ).fetchall()
+    inflight = conn.execute(
+        "SELECT DISTINCT artist, title FROM tracks WHERE slskd_state IN"
+        " ('pending','queued','album_queued','downloading','needs_search')"
+    ).fetchall()
     conn.close()
-    return jsonify([
-        {"a": (r["artist"] or "").lower().strip(), "t": (r["title"] or "").lower().strip()}
-        for r in rows
-    ])
+    lib_keys = {((r["artist"] or "").lower().strip(), (r["title"] or "").lower().strip())
+                for r in rows}
+    items = [{"a": a, "t": t} for a, t in lib_keys]
+    for r in inflight:
+        key = ((r["artist"] or "").lower().strip(), (r["title"] or "").lower().strip())
+        if key not in lib_keys:
+            items.append({"a": key[0], "t": key[1], "q": 1})
+    return jsonify(items)
+
+
+_mono_health = {"at": 0.0, "ok": True}
+
+
+@app.route("/api/status/sources")
+def api_status_sources():
+    """Cached health of the monochrome/TIDAL proxy so the UI can hide TIDAL
+    buttons when the configured instance is dead (public proxies churn)."""
+    now = time.time()
+    if now - _mono_health["at"] > 300:
+        ok = False
+        try:
+            mc = MonochromeClient()
+            r = requests.get(f"{mc.base}/search/", params={"s": "test", "limit": 1}, timeout=5)
+            ok = r.status_code < 300
+        except Exception:
+            ok = False
+        _mono_health.update(at=now, ok=ok)
+    return jsonify({"monochrome": _mono_health["ok"]})
 
 
 @app.route("/api/library/acoustid", methods=["POST"])

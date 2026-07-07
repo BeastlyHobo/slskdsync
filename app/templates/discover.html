@@ -60,8 +60,16 @@
 <script>
 // ── Library index ─────────────────────────────────────────────────────────
 let libIndex = new Set();
+let queuedIndex = new Set();
 fetch('/api/library/index').then(r => r.json()).then(items => {
-  libIndex = new Set(items.map(i => (i.a||'').toLowerCase().trim() + '||' + (i.t||'').toLowerCase().trim()));
+  const key = i => (i.a||'').toLowerCase().trim() + '||' + (i.t||'').toLowerCase().trim();
+  libIndex    = new Set(items.filter(i => !i.q).map(key));
+  queuedIndex = new Set(items.filter(i => i.q).map(key));
+}).catch(() => {});
+
+// Hide TIDAL buttons when the monochrome instance is unreachable
+fetch('/api/status/sources').then(r => r.json()).then(d => {
+  if (!d.monochrome) document.body.classList.add('no-mono');
 }).catch(() => {});
 
 // ── Cache ─────────────────────────────────────────────────────────────────
@@ -175,6 +183,7 @@ function renderShelf(container, items) {
 function tilHtml(t) {
   const libKey = (t.artist||'').toLowerCase().trim() + '||' + (t.title||'').toLowerCase().trim();
   const inLib = libIndex.has(libKey);
+  const queued = !inLib && queuedIndex.has(libKey);
   const isAlbum = t.type === 'album';
   const h = hueOf(t.title || t.artist || '');
   const initial = (t.title || t.artist || '?').replace(/^the\s+/i,'').trim()[0] || '?';
@@ -191,7 +200,9 @@ function tilHtml(t) {
          style="font-size:.62rem;padding:.2rem .55rem;margin-top:.1rem">↺ Radio</button>`
     : '';
 
-  const dlBtns = isAlbum ? '' : `
+  const dlBtns = isAlbum ? '' : (queued
+    ? `<span style="color:var(--text-muted);font-size:.72rem">⏳ In queue</span>${radioBtn}`
+    : `
     <button class="btn-tile-slsk dl-btn"
       data-source="slskd"
       data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
@@ -200,7 +211,7 @@ function tilHtml(t) {
       data-source="monochrome"
       data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
       data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">TIDAL</button>
-    ${radioBtn}`;
+    ${radioBtn}`);
 
   return `<div class="shelf-tile${inLib ? ' track-in-lib' : ''}" onclick="tileClick(this)">
     ${artHtml}
@@ -223,6 +234,7 @@ function renderTrackList(container, tracks) {
 function trackCardHtml(t) {
   const libKey = (t.artist||'').toLowerCase().trim() + '||' + (t.title||'').toLowerCase().trim();
   const inLib = libIndex.has(libKey);
+  const queued = !inLib && queuedIndex.has(libKey);
   const h = hueOf(t.album || t.title || '');
   const initial = (t.album || t.title || '?').replace(/^the\s+/i,'').trim()[0] || '?';
   const artHtml = t.cover
@@ -230,14 +242,11 @@ function trackCardHtml(t) {
            onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="art" style="width:50px;height:50px;background:hsl(${h},44%,52%);display:none;"><span class="glyph">${esc(initial)}</span></div>`
     : `<div class="art" style="width:50px;height:50px;background:hsl(${h},44%,52%);"><span class="glyph">${esc(initial)}</span></div>`;
-  return `
-  <div class="track-card${inLib ? ' track-in-lib' : ''}">
-    ${artHtml}
-    <div class="track-info">
-      <div class="track-title">${esc(t.title)}${inLib ? ' <span class="in-lib-badge">✓ Library</span>' : ''}</div>
-      <div class="track-sub">${esc(t.artist||'')}${t.album ? ' · ' + esc(t.album) : ''}</div>
-    </div>
-    <div class="dl-btns">
+  const badge = inLib ? ' <span class="in-lib-badge">✓ Library</span>'
+              : queued ? ' <span class="in-lib-badge">⏳ Queued</span>' : '';
+  const dlBtns = queued
+    ? `<span style="color:var(--text-muted);font-size:.72rem;white-space:nowrap">⏳ In queue</span>`
+    : `
       <button class="btn btn-slsk dl-btn"
         data-source="slskd" data-title="${esc(t.title)}"
         data-artist="${esc(t.artist||'')}" data-album="${esc(t.album||'')}"
@@ -245,7 +254,16 @@ function trackCardHtml(t) {
       <button class="btn btn-mono dl-btn"
         data-source="monochrome" data-title="${esc(t.title)}"
         data-artist="${esc(t.artist||'')}" data-album="${esc(t.album||'')}"
-        data-cover="${esc(t.cover||'')}">TIDAL</button>
+        data-cover="${esc(t.cover||'')}">TIDAL</button>`;
+  return `
+  <div class="track-card${inLib ? ' track-in-lib' : ''}">
+    ${artHtml}
+    <div class="track-info">
+      <div class="track-title">${esc(t.title)}${badge}</div>
+      <div class="track-sub">${esc(t.artist||'')}${t.album ? ' · ' + esc(t.album) : ''}</div>
+    </div>
+    <div class="dl-btns">
+      ${dlBtns}
       ${t.artist_id
         ? `<button class="btn btn-radio radio-btn"
                data-artist-id="${esc(t.artist_id)}"

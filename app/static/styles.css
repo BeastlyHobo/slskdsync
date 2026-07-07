@@ -2745,3 +2745,8 @@ main {
 
   .badge-downloading .dot { animation: none; }
 }
+
+/* Hide TIDAL/monochrome buttons when the configured instance is unreachable
+   (body.no-mono set by the /api/status/sources check on page load) */
+.no-mono .btn-mono,
+.no-mono .btn-tile-mono { display: none !important; }

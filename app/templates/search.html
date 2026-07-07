@@ -68,8 +68,15 @@ function useHistory(btn) {
 renderHistory();
 
 let libIndex = new Set();
+let queuedIndex = new Set();
 fetch('/api/library/index').then(r => r.json()).then(items => {
-  libIndex = new Set(items.map(i => i.a + '||' + i.t));
+  libIndex    = new Set(items.filter(i => !i.q).map(i => i.a + '||' + i.t));
+  queuedIndex = new Set(items.filter(i => i.q).map(i => i.a + '||' + i.t));
+}).catch(() => {});
+
+// Hide TIDAL buttons when the monochrome instance is unreachable
+fetch('/api/status/sources').then(r => r.json()).then(d => {
+  if (!d.monochrome) document.body.classList.add('no-mono');
 }).catch(() => {});
 
 // Restore last search on page load
@@ -225,24 +232,18 @@ function trackCardHtml(t, hideDrillLinks) {
   const dur = fmtDur(t.duration);
   const libKey = (t.artist || '').toLowerCase().trim() + '||' + (t.title || '').toLowerCase().trim();
   const inLib = libIndex.has(libKey);
+  const queued = !inLib && queuedIndex.has(libKey);
   const artistLink = t.artist_id && !hideDrillLinks
     ? `<span class="track-link" data-action="artist" data-id="${esc(t.artist_id)}" data-name="${esc(t.artist)}">${esc(t.artist)}</span>`
     : esc(t.artist || '');
   const albumLink = t.album_id && !hideDrillLinks
     ? ` · <span class="track-link" data-action="album" data-id="${esc(t.album_id)}" data-name="${esc(t.album)}" data-artist="${esc(t.artist)}" data-cover="${esc(t.cover||'')}">${esc(t.album)}</span>`
     : (t.album ? ` · ${esc(t.album)}` : '');
-  return `
-  <div class="track-card${inLib ? ' track-in-lib' : ''}">
-    ${t.cover
-      ? `<img class="cover" src="${esc(t.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-         <div class="cover-placeholder" style="display:none">🎵</div>`
-      : `<div class="cover-placeholder">🎵</div>`}
-    <div class="track-info">
-      <div class="track-title">${esc(t.title)}${inLib ? ' <span class="in-lib-badge">✓ Library</span>' : ''}</div>
-      <div class="track-sub">${artistLink}${albumLink}</div>
-    </div>
-    ${dur ? `<span class="track-dur">${dur}</span>` : ''}
-    <div class="dl-btns">
+  const badge = inLib ? ' <span class="in-lib-badge">✓ Library</span>'
+              : queued ? ' <span class="in-lib-badge">⏳ Queued</span>' : '';
+  const dlBtns = queued
+    ? `<span style="color:var(--text-muted);font-size:.72rem;white-space:nowrap">⏳ In queue</span>`
+    : `
       <button class="btn btn-slsk dl-btn"
         data-source="slskd"
         data-title="${esc(t.title)}"
@@ -254,8 +255,19 @@ function trackCardHtml(t, hideDrillLinks) {
         data-title="${esc(t.title)}"
         data-artist="${esc(t.artist||'')}"
         data-album="${esc(t.album||'')}"
-        data-cover="${esc(t.cover||'')}">TIDAL</button>
+        data-cover="${esc(t.cover||'')}">TIDAL</button>`;
+  return `
+  <div class="track-card${inLib ? ' track-in-lib' : ''}">
+    ${t.cover
+      ? `<img class="cover" src="${esc(t.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+         <div class="cover-placeholder" style="display:none">🎵</div>`
+      : `<div class="cover-placeholder">🎵</div>`}
+    <div class="track-info">
+      <div class="track-title">${esc(t.title)}${badge}</div>
+      <div class="track-sub">${artistLink}${albumLink}</div>
     </div>
+    ${dur ? `<span class="track-dur">${dur}</span>` : ''}
+    <div class="dl-btns">${dlBtns}</div>
   </div>`;
 }
 
@@ -315,22 +327,25 @@ function renderArtistPage(data) {
     const rows = data.top_tracks.map((t, i) => {
       const libKey = (t.artist || '').toLowerCase().trim() + '||' + (t.title || '').toLowerCase().trim();
       const inLib = libIndex.has(libKey);
-      return `
-      <div class="top-track-row${inLib ? ' track-in-lib' : ''}">
-        <span class="top-track-num">${i + 1}</span>
-        <div class="top-track-info">
-          <div class="top-track-title">${esc(t.title)}${inLib ? ' <span class="in-lib-badge">✓</span>' : ''}</div>
-          ${t.album ? `<div class="top-track-album">${esc(t.album)}</div>` : ''}
-        </div>
-        <span class="top-track-dur">${fmtDur(t.duration)}</span>
-        <div class="dl-btns">
+      const queued = !inLib && queuedIndex.has(libKey);
+      const btns = queued
+        ? `<span style="color:var(--text-muted);font-size:.7rem;white-space:nowrap">⏳ queued</span>`
+        : `
           <button class="btn btn-slsk dl-btn" data-source="slskd"
             data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
             data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">SLSK</button>
           <button class="btn btn-mono dl-btn" data-source="monochrome"
             data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
-            data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">TIDAL</button>
+            data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">TIDAL</button>`;
+      return `
+      <div class="top-track-row${inLib ? ' track-in-lib' : ''}">
+        <span class="top-track-num">${i + 1}</span>
+        <div class="top-track-info">
+          <div class="top-track-title">${esc(t.title)}${inLib ? ' <span class="in-lib-badge">✓</span>' : queued ? ' <span class="in-lib-badge">⏳</span>' : ''}</div>
+          ${t.album ? `<div class="top-track-album">${esc(t.album)}</div>` : ''}
         </div>
+        <span class="top-track-dur">${fmtDur(t.duration)}</span>
+        <div class="dl-btns">${btns}</div>
       </div>`;
     }).join('');
     topSection = `<div class="section-label" style="margin:.9rem 0 .4rem">Popular Tracks</div>
