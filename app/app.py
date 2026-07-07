@@ -3374,8 +3374,12 @@ def library():
                     "flagged_bad": (str(f) in bad_paths),
                 })
     playlists = [dict(r) for r in playlist_rows]
+    # Browser-reachable Navidrome URL for deep links; the plain navidrome_url is
+    # often a docker-internal hostname the user's browser can't resolve.
+    nav_public = (get_setting("navidrome_public_url") or get_setting("navidrome_url") or "").rstrip("/")
     return render_template("library.html", tracks=tracks, playlists=playlists,
-                           music_path=music_path_str, needs_scan=needs_scan, title="Library")
+                           music_path=music_path_str, needs_scan=needs_scan,
+                           nav_public=nav_public, title="Library")
 
 
 @app.route("/api/library/cover/<path:cover_art_id>")
@@ -3413,7 +3417,7 @@ def settings():
         "library_path", "download_watch_path", "folder_template",
         "slskd_url", "slskd_user", "slskd_pass", "slskd_api_key",
         "monochrome_url", "monochrome_fallbacks",
-        "navidrome_url", "navidrome_user", "navidrome_pass",
+        "navidrome_url", "navidrome_user", "navidrome_pass", "navidrome_public_url",
         "apple_team_id", "apple_key_id", "apple_private_key",
         "listenbrainz_username",
         "spotify_client_id", "spotify_client_secret",

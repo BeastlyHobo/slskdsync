@@ -97,6 +97,7 @@
     </div>
     <div id="tm-meta" class="tm-meta"></div>
     <div class="tm-actions">
+      <a id="tm-nav-btn" class="lib-sm-btn tm-nav" target="_blank" rel="noopener" style="display:none">▶ Open in Navidrome</a>
       <button id="tm-flag-btn" class="lib-sm-btn tm-flag" onclick="toggleBad()">⚑ Flag as bad</button>
       <div class="tm-redl-label">Re-download / fix wrong file</div>
       <div class="tm-redl-row">
@@ -140,6 +141,16 @@
 .tm-result { font-size:.76rem; margin-top:.5rem; }
 .tm-flag { width:100%; margin-bottom:.9rem; }
 .tm-flag.on { background:var(--err); color:#fff; border-color:transparent; }
+.tm-nav { display:block; width:100%; box-sizing:border-box; text-align:center;
+  text-decoration:none; margin-bottom:.5rem; }
+.recent-shelf { display:flex; gap:.6rem; overflow-x:auto; padding:.35rem 0 .6rem;
+  -webkit-overflow-scrolling:touch; }
+.recent-card { width:96px; flex-shrink:0; cursor:pointer; }
+.recent-card .lib-cover, .recent-card .lib-cover-ph { border-radius:var(--radius-sm); }
+.rc-title { font-size:.7rem; font-weight:600; margin-top:.3rem; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.rc-sub { font-size:.64rem; color:var(--text-muted); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
 .bad-mark { color:var(--err); font-size:.82rem; }
 .lib-row.bad .lib-row-title { color:var(--err); }
 </style>
@@ -147,6 +158,7 @@
 <script>
 const ALL_TRACKS    = {{ tracks | tojson }};
 const ALL_PLAYLISTS = {{ playlists | tojson }};
+const NAV_URL       = {{ nav_public | tojson }};
 
 // Navigation state
 let view         = 'home';   // home | artists | albums | songs | playlists | artist-albums | album-tracks | playlist-tracks
@@ -328,6 +340,19 @@ function renderHome() {
     {label:'Songs',    icon:'🎵', bg:'#e74c3c', count:`${ALL_TRACKS.length} song${ALL_TRACKS.length===1?'':'s'}`, v:'songs'},
     {label:'Playlists',icon:'📋', bg:'#8e44ad', count:`${ALL_PLAYLISTS.length} playlist${ALL_PLAYLISTS.length===1?'':'s'}`, v:'playlists'},
   ];
+  const recent = ALL_TRACKS.filter(t => t.indexed_at)
+    .sort((a, b) => (b.indexed_at || '').localeCompare(a.indexed_at || ''))
+    .slice(0, 15);
+  const recentHtml = recent.length
+    ? `<div class="coll-section-title" style="margin-top:1.1rem">Recently added</div>
+       <div class="recent-shelf">` +
+      recent.map(t => `
+        <div class="recent-card" data-path="${esc(t.path)}" onclick="showTrackInfo(this)">
+          ${coverHtml(t, 96)}
+          <div class="rc-title">${esc(t.title || '—')}</div>
+          <div class="rc-sub">${esc(t.artist || '')}</div>
+        </div>`).join('') + `</div>`
+    : '';
   document.getElementById('lib-content').innerHTML =
     `<div class="coll-section-title">Collection</div>` +
     icons.map(i => `
@@ -336,7 +361,7 @@ function renderHome() {
         <span class="coll-label">${i.label}</span>
         <span class="coll-count">${i.count}</span>
         <span class="coll-chevron">›</span>
-      </div>`).join('');
+      </div>`).join('') + recentHtml;
 }
 
 // ── Artists list ──────────────────────────────────────────────────────────
@@ -771,6 +796,13 @@ function showTrackInfo(rowEl) {
   document.getElementById('tm-query').value = ((t.artist||'')+' '+(t.title||'')).trim();
   const res = document.getElementById('tm-redl-result'); res.textContent = ''; res.style.color = '';
   const btn = document.getElementById('tm-redl-btn'); btn.disabled = false; btn.textContent = '↺ Re-download';
+  const navBtn = document.getElementById('tm-nav-btn');
+  if (NAV_URL && (t.title || t.artist)) {
+    navBtn.href = NAV_URL + '/app/#/search?q=' + encodeURIComponent(((t.artist||'') + ' ' + (t.title||'')).trim());
+    navBtn.style.display = '';
+  } else {
+    navBtn.style.display = 'none';
+  }
   updateFlagBtn();
   renderModalMeta(t, null);
   document.getElementById('track-modal').style.display = 'flex';

@@ -124,6 +124,12 @@
       <label>Password</label>
       <input name="navidrome_pass" type="password" value="{{ settings.navidrome_pass }}" autocomplete="new-password">
     </div>
+    <div class="field">
+      <label>Public URL <span class="optional-label">(for browser links)</span></label>
+      <input name="navidrome_public_url" value="{{ settings.navidrome_public_url }}" placeholder="https://music.example.com">
+      <p class="hint">Used for "Open in Navidrome" links. Set this when the URL above is a docker-internal
+        hostname your browser can't reach. Falls back to the Navidrome URL if empty.</p>
+    </div>
   </div>
 
   <div class="settings-group">
