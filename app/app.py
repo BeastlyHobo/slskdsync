@@ -1762,6 +1762,23 @@ def run_worker(stop_event: threading.Event):
         time.sleep(20)
 
 
+# Metadata normalization shared by playlist matching and duplicate detection:
+# lowercase, strip parentheticals (feat./remaster/live/…) and punctuation.
+_META_PAREN_RE = re.compile(r'\s*[\(\[][^\)\]]*[\)\]]')
+_META_PUNCT_RE = re.compile(r"[^\w\s]")
+
+
+def _norm_meta(s: str) -> str:
+    s = _META_PAREN_RE.sub("", s or "")
+    s = _META_PUNCT_RE.sub(" ", s)
+    return " ".join(s.lower().split())
+
+
+def _norm_key(artist: str, title: str) -> tuple[str, str]:
+    """(first-artist, title) normalized — the identity used for dedup."""
+    return (_norm_meta((artist or "").split(",")[0].split("&")[0]), _norm_meta(title))
+
+
 def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: str,
                             allow_refetch: bool = False) -> tuple[list[dict], int, int, int]:
     """Build the full ordered list of playlist entries: completed downloads plus
@@ -1821,13 +1838,7 @@ def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: s
     # --- All library_index entries (may be missing paths for older scans) ---
     lib_all = conn.execute("SELECT artist, title, path FROM library_index").fetchall()
 
-    # Normalize helper: lowercase, strip parenthetical (feat./remastered/live/etc.)
-    _paren_re = re.compile(r'\s*[\(\[][^\)\]]*[\)\]]')
-    _punct_re = re.compile(r"[^\w\s]")
-    def _norm(s: str) -> str:
-        s = _paren_re.sub("", s or "")
-        s = _punct_re.sub(" ", s)
-        return " ".join(s.lower().split())
+    _norm = _norm_meta
 
     # Build library lookups: keyed by normalised values
     lib_with_path = [e for e in lib_all if e["path"]]
@@ -1875,10 +1886,16 @@ def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: s
                 return path
         return None
 
-    dl_keys = {(_norm(r["artist"]), _norm(r["title"])) for r in dl_rows}
-    seen_paths = {r["path"] for r in dl_rows}
+    # Downloads keyed for source-order lookup
+    dl_by_key: dict[tuple[str, str], sqlite3.Row] = {}
+    for r in dl_rows:
+        dl_by_key.setdefault((_norm(r["artist"]), _norm(r["title"])), r)
 
-    lib_rows: list[dict] = []
+    # Walk the source playlist IN ORDER so the M3U mirrors it (mixes and
+    # sequenced playlists were previously reordered: downloads-first).
+    merged: list[dict] = []
+    seen_paths: set[str] = set()
+    idx_count = 0
     fs_count = 0
     miss_count = 0
     for t in pl_tracks:
@@ -1886,7 +1903,14 @@ def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: s
         # Spotify often credits many co-artists — try first artist alone too
         na_first = _norm((t["artist"] or "").split(",")[0].split("&")[0])
         nt = _norm(t["title"])
-        if not nt or (na, nt) in dl_keys:
+        if not nt:
+            continue
+
+        dlr = dl_by_key.get((na, nt)) or dl_by_key.get((na_first, nt))
+        if dlr:
+            if dlr["path"] not in seen_paths:
+                merged.append({"path": dlr["path"], "artist": dlr["artist"], "title": dlr["title"]})
+                seen_paths.add(dlr["path"])
             continue
 
         entry = lib_by_key.get((na, nt)) or lib_by_key.get((na_first, nt))
@@ -1908,23 +1932,33 @@ def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: s
                         break
 
         path: str | None = None
+        from_fs = False
         if entry:
             path = entry["path"]
         else:
             # Final fallback: walk the filesystem
             path = _fs_lookup(na_first or na, nt)
-            if path:
-                fs_count += 1
+            from_fs = path is not None
 
         if path and path not in seen_paths:
-            lib_rows.append({"path": path, "artist": t["artist"], "title": t["title"]})
+            merged.append({"path": path, "artist": t["artist"], "title": t["title"]})
             seen_paths.add(path)
+            if from_fs:
+                fs_count += 1
+            else:
+                idx_count += 1
         elif not path:
             miss_count += 1
             logger.info(f"[m3u] No library match for '{t['artist']}' / '{t['title']}'")
 
-    merged = list(dl_rows) + lib_rows
-    return merged, len(lib_rows) - fs_count, fs_count, miss_count
+    # Downloads belonging to this playlist that aren't in the source snapshot
+    # (e.g. queued into the job manually) — appended after the ordered list.
+    for r in dl_rows:
+        if r["path"] not in seen_paths:
+            merged.append({"path": r["path"], "artist": r["artist"], "title": r["title"]})
+            seen_paths.add(r["path"])
+
+    return merged, idx_count, fs_count, miss_count
 
 
 def _playlist_tracks_fallback(conn, playlist_name: str, source_url: str) -> list[dict]:
@@ -2236,19 +2270,49 @@ def _cleanup_replaced_file(conn, track: sqlite3.Row, new_path: str) -> None:
     conn.execute("DELETE FROM library_index WHERE path=?", (old,))
 
 
+_lib_keys_cache: dict = {"at": 0.0, "keys": set()}
+_lib_keys_lock = threading.Lock()
+
+
+def _library_norm_keys(conn) -> set:
+    """Normalized (first-artist, title) keys of everything owned, cached 30s —
+    imports check hundreds of tracks in a burst and must not rescan per track."""
+    now = time.time()
+    with _lib_keys_lock:
+        if now - _lib_keys_cache["at"] < 30:
+            return _lib_keys_cache["keys"]
+    keys = set()
+    for r in conn.execute(
+        "SELECT artist, title FROM tracks WHERE slskd_state='completed'"
+        " UNION SELECT artist, title FROM library_index"
+    ).fetchall():
+        k = _norm_key(r["artist"] or "", r["title"] or "")
+        if k[1]:
+            keys.add(k)
+    with _lib_keys_lock:
+        _lib_keys_cache.update(at=now, keys=keys)
+    return keys
+
+
 def _already_in_library(conn, artist: str, title: str) -> bool:
-    """Return True if this artist+title exists in completed downloads or the library index."""
+    """Return True if this artist+title exists in completed downloads or the
+    library index. Exact (indexed) match first, then a normalized comparison so
+    "Song (Remastered 2011)" or a feat.-suffixed variant of an owned track
+    doesn't get downloaded again."""
     if conn.execute(
         "SELECT 1 FROM tracks WHERE slskd_state='completed'"
         " AND lower(trim(artist))=lower(trim(?)) AND lower(trim(title))=lower(trim(?))",
         (artist, title)
     ).fetchone():
         return True
-    return bool(conn.execute(
+    if conn.execute(
         "SELECT 1 FROM library_index"
         " WHERE lower(trim(artist))=lower(trim(?)) AND lower(trim(title))=lower(trim(?))",
         (artist, title)
-    ).fetchone())
+    ).fetchone():
+        return True
+    k = _norm_key(artist, title)
+    return bool(k[1]) and k in _library_norm_keys(conn)
 
 
 def _worker_tick():
