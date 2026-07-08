@@ -217,6 +217,8 @@ def init_db():
         ("playlist_name", "TEXT DEFAULT NULL"),
         ("last_synced_at", "TEXT DEFAULT NULL"),
         ("last_sync_new", "INTEGER DEFAULT NULL"),
+        ("m3u_have", "INTEGER DEFAULT NULL"),
+        ("m3u_total", "INTEGER DEFAULT NULL"),
     ]:
         if col not in existing_job_cols:
             cur.execute(f"ALTER TABLE import_jobs ADD COLUMN {col} {ddl}")
@@ -1975,6 +1977,26 @@ def _playlist_tracks_fallback(conn, playlist_name: str, source_url: str) -> list
     return tracks
 
 
+def _store_playlist_progress(conn, job_id: int, merged_len: int, miss: int) -> None:
+    """Persist 'how much of this playlist is in the library' for the Playlists
+    page. The card's old X/Y came from COUNT(tracks), but pre-owned tracks are
+    skipped at import and never get a tracks row — so a mostly-owned playlist
+    showed e.g. 2/2 instead of 71/71. Here total = the source snapshot size and
+    have = snapshot size minus tracks with no library match (both from the same
+    _build_playlist_entries pass that just built the M3U)."""
+    pl = conn.execute("SELECT COUNT(*) FROM playlist_tracks WHERE job_id=?",
+                      (job_id,)).fetchone()[0]
+    if pl:
+        total = pl
+        have = max(0, pl - miss)
+    else:
+        total = merged_len + miss
+        have = merged_len
+    conn.execute("UPDATE import_jobs SET m3u_have=?, m3u_total=? WHERE id=?",
+                 (have, total, job_id))
+    conn.commit()
+
+
 def write_playlist_m3u(job_id: int, playlist_name: str, trigger_scan: bool = True) -> None:
     """Write/update an M3U with the full playlist (completed downloads + already-owned
     library songs) and sync it to Navidrome. Uses the same list-building logic as the
@@ -1988,6 +2010,7 @@ def write_playlist_m3u(job_id: int, playlist_name: str, trigger_scan: bool = Tru
     merged, idx_count, fs_count, miss_count = _build_playlist_entries(
         conn, job_id, playlist_name, source_url, allow_refetch=False
     )
+    _store_playlist_progress(conn, job_id, len(merged), miss_count)
     conn.close()
     if not merged:
         return
@@ -3184,6 +3207,7 @@ def api_regenerate_m3u(job_id):
     merged, idx_count, fs_count, miss_count = _build_playlist_entries(
         conn, job_id, playlist_name, source_url, allow_refetch=True
     )
+    _store_playlist_progress(conn, job_id, len(merged), miss_count)
     conn.close()
 
     if not merged:
@@ -3364,6 +3388,7 @@ def playlists():
     jobs = conn.execute("""
         SELECT j.id, j.source, j.source_type, j.source_url,
                j.playlist_name, j.created_at, j.last_synced_at, j.last_sync_new,
+               j.m3u_have, j.m3u_total,
                COUNT(t.id) AS total,
                SUM(CASE WHEN t.slskd_state='completed' THEN 1 ELSE 0 END) AS done,
                SUM(CASE WHEN t.slskd_state='needs_search' THEN 1 ELSE 0 END) AS needs_fix,

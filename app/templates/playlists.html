@@ -14,7 +14,12 @@
 {% else %}
 <div class="pl-list">
 {% for job in jobs %}
-{% set pct = ((job.done or 0) / job.total * 100) | int if job.total else 0 %}
+{# Prefer the real "how much of this playlist is in the library" counts written
+   at M3U-build time; fall back to the queued-tracks counts for jobs that
+   haven't been synced/regenerated since this was added. #}
+{% set have = job.m3u_have if job.m3u_have is not none else (job.done or 0) %}
+{% set total = job.m3u_total if job.m3u_total is not none else (job.total or 0) %}
+{% set pct = (have / total * 100) | int if total else 0 %}
 {% set src_class = 'src-spotify' if job.source == 'Spotify' else ('src-apple' if job.source == 'Apple' else ('src-tidal' if job.source == 'TIDAL' else 'src-other')) %}
 <div class="pl-card {% if job.needs_fix %}expandable{% endif %}" id="plcard-{{ job.id }}">
   <div class="pl-header" onclick="togglePl({{ job.id }}, {{ 'true' if job.needs_fix else 'false' }})">
@@ -33,7 +38,7 @@
     <span class="pl-source-badge {{ src_class }}">{{ job.source }}</span>
     <div class="pl-progress">
       <div class="pl-bar-wrap"><div class="pl-bar" style="width:{{ pct }}%"></div></div>
-      <span class="pl-counts">{{ job.done or 0 }}/{{ job.total or 0 }}</span>
+      <span class="pl-counts" title="Tracks from this playlist present in your library">{{ have }}/{{ total }}</span>
     </div>
     {% if job.needs_fix %}
     <span class="pl-fix-badge">{{ job.needs_fix }} fix</span>
