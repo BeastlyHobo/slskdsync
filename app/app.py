@@ -990,44 +990,132 @@ class ListenBrainzClient:
         except Exception:
             return []
 
-    def get_recent_listens(self, username: str, limit: int = 30) -> list[dict]:
-        """Most recent scrobbles, deduplicated by (artist, title)."""
+    @staticmethod
+    def _caa_cover(caa_release_mbid, caa_id) -> str:
+        """Cover Art Archive thumbnail URL (same fast path the LB web UI uses).
+        Loaded by the user's browser, not the server."""
+        if not caa_release_mbid or not caa_id:
+            return ""
+        return (f"https://archive.org/download/mbid-{caa_release_mbid}/"
+                f"mbid-{caa_release_mbid}-{caa_id}_thumb250.jpg")
+
+    def get_cf_recommendations(self, username: str, limit: int = 20) -> tuple[list[dict], str]:
+        """Real collaborative-filtering recommendations: recording MBIDs from
+        /cf/recommendation, resolved to names/covers via /metadata/recording.
+        Returns (tracks, error) — error explains an empty result."""
         if not username:
-            return []
+            return [], "ListenBrainz username not configured"
         try:
             r = requests.get(
-                f"{self.BASE}/user/{username}/listens",
-                params={"count": limit},
-                timeout=12,
+                f"{self.BASE}/cf/recommendation/user/{username}/recording",
+                params={"count": limit}, timeout=12,
             )
+            if r.status_code == 404:
+                return [], "No recommendations yet — ListenBrainz needs more listening history to build them"
             if r.status_code != 200:
-                return []
-            listens = (r.json().get("payload") or {}).get("listens", [])
-            seen: set[tuple[str, str]] = set()
+                return [], f"ListenBrainz returned HTTP {r.status_code}"
+            mbids = [m.get("recording_mbid") for m in
+                     ((r.json().get("payload") or {}).get("mbids") or []) if m.get("recording_mbid")]
+            if not mbids:
+                return [], "No recommendations yet — ListenBrainz needs more listening history to build them"
+            meta = requests.get(
+                f"{self.BASE}/metadata/recording/",
+                params={"recording_mbids": ",".join(mbids[:limit]), "inc": "artist release"},
+                timeout=15,
+            )
+            if meta.status_code != 200:
+                return [], f"Metadata lookup failed (HTTP {meta.status_code})"
+            lookup = meta.json() or {}
             result = []
-            for listen in listens:
-                meta = listen.get("track_metadata") or {}
-                title = meta.get("track_name", "")
-                artist = meta.get("artist_name", "")
-                album = meta.get("release_name", "") or (meta.get("mbid_mapping") or {}).get("release_name", "")
+            for mbid in mbids:
+                m = lookup.get(mbid) or {}
+                rec = m.get("recording") or {}
+                art = m.get("artist") or {}
+                rel = m.get("release") or {}
+                title = rec.get("name") or ""
+                artist = art.get("name") or ""
                 if not title or not artist:
                     continue
-                key = (artist.lower(), title.lower())
-                if key in seen:
-                    continue
-                seen.add(key)
                 result.append({
-                    "id": (meta.get("mbid_mapping") or {}).get("recording_mbid", ""),
+                    "id": mbid,
                     "title": title,
                     "artist": artist,
-                    "album": album,
-                    "cover": "",
-                    "duration": 0,
+                    "album": rel.get("name") or "",
+                    "cover": self._caa_cover(rel.get("caa_release_mbid"), rel.get("caa_id")),
+                    "duration": round((rec.get("length") or 0) / 1000),
                     "type": "track",
                 })
-            return result
-        except Exception:
+            if not result:
+                return [], "Recommendations found but none could be resolved to track names"
+            return result, ""
+        except Exception as ex:
+            return [], f"ListenBrainz unreachable: {ex}"
+
+    def _playlist_tracks(self, playlist_mbid: str, limit: int = 20) -> list[dict]:
+        """Unpack a ListenBrainz JSPF playlist into plain track dicts."""
+        r = requests.get(f"{self.BASE}/playlist/{playlist_mbid}",
+                         params={"fetch_metadata": "true"}, timeout=15)
+        if r.status_code != 200:
             return []
+        tracks = ((r.json().get("playlist") or {}).get("track") or [])[:limit]
+        result = []
+        for tr in tracks:
+            title = tr.get("title") or ""
+            artist = tr.get("creator") or ""
+            if not title or not artist:
+                continue
+            ident = tr.get("identifier") or []
+            if isinstance(ident, str):
+                ident = [ident]
+            ext = (tr.get("extension") or {}).get("https://musicbrainz.org/doc/jspf#track") or {}
+            am = ext.get("additional_metadata") or {}
+            result.append({
+                "id": ident[0].rstrip("/").rsplit("/", 1)[-1] if ident else "",
+                "title": title,
+                "artist": artist,
+                "album": tr.get("album") or "",
+                "cover": self._caa_cover(am.get("caa_release_mbid"), am.get("caa_id")),
+                "duration": round((tr.get("duration") or 0) / 1000),
+                "type": "track",
+            })
+        return result
+
+    def get_weekly_playlists(self, username: str, limit: int = 20) -> dict:
+        """Weekly Jams (familiar rotation) and Weekly Exploration (unheard
+        picks) — the playlists ListenBrainz auto-generates for each user,
+        unpacked into plain track lists. Auto-generated playlists are public,
+        so no token is needed."""
+        out = {"jams": [], "exploration": [], "error": ""}
+        if not username:
+            out["error"] = "ListenBrainz username not configured"
+            return out
+        try:
+            r = requests.get(f"{self.BASE}/user/{username}/playlists/createdfor",
+                             params={"count": 25}, timeout=12)
+            if r.status_code != 200:
+                out["error"] = f"ListenBrainz returned HTTP {r.status_code}"
+                return out
+            newest: dict[str, tuple[str, str]] = {}  # kind -> (date, mbid)
+            for entry in (r.json().get("playlists") or []):
+                p = entry.get("playlist") or {}
+                title = (p.get("title") or "").lower()
+                ident = p.get("identifier") or ""
+                mbid = ident.rstrip("/").rsplit("/", 1)[-1] if ident else ""
+                date = p.get("date") or ""
+                if not mbid:
+                    continue
+                kind = ("jams" if title.startswith("weekly jams")
+                        else "exploration" if title.startswith("weekly exploration") else "")
+                if kind and date > newest.get(kind, ("", ""))[0]:
+                    newest[kind] = (date, mbid)
+            for kind, (_, mbid) in newest.items():
+                out[kind] = self._playlist_tracks(mbid, limit)
+            if not newest:
+                out["error"] = ("No weekly playlists found — ListenBrainz generates "
+                                "Weekly Jams/Exploration on Mondays once you have enough listens")
+        except Exception as ex:
+            out["error"] = f"ListenBrainz unreachable: {ex}"
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -3694,12 +3782,25 @@ def api_discover_listenbrainz():
     return jsonify(_listenbrainz_client.get_recommendations(username, limit=25))
 
 
-@app.route("/api/discover/listenbrainz/history")
-def api_discover_lb_history():
+@app.route("/api/discover/listenbrainz/weekly")
+def api_discover_lb_weekly():
+    """Weekly Jams + Weekly Exploration tracks in one response (one upstream
+    listing fetch serves both shelves)."""
     username = get_setting("listenbrainz_username").strip()
     if not username:
         return jsonify({"error": "ListenBrainz username not configured"}), 400
-    return jsonify(_listenbrainz_client.get_recent_listens(username, limit=30))
+    return jsonify(_listenbrainz_client.get_weekly_playlists(username, limit=20))
+
+
+@app.route("/api/discover/listenbrainz/recs")
+def api_discover_lb_recs():
+    username = get_setting("listenbrainz_username").strip()
+    if not username:
+        return jsonify({"error": "ListenBrainz username not configured"}), 400
+    tracks, err = _listenbrainz_client.get_cf_recommendations(username, limit=20)
+    if err:
+        return jsonify({"error": err})
+    return jsonify(tracks)
 
 
 @app.route("/api/tracks/<int:track_id>", methods=["DELETE"])

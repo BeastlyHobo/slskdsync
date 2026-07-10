@@ -34,24 +34,46 @@
 {% endif %}
 
 {% if lb_username %}
-<!-- ── For You (ListenBrainz) ──────────────────────────── -->
+<!-- ── Weekly Exploration (ListenBrainz) ──────────────── -->
 <div class="shelf">
   <div class="shelf-hdr">
-    <span class="shelf-hdr-title">For You</span>
-    <span class="shelf-hdr-sub">Your top tracks this month</span>
+    <span class="shelf-hdr-title">Weekly Exploration</span>
+    <span class="shelf-hdr-sub">Fresh picks ListenBrainz thinks you haven't heard</span>
   </div>
-  <div class="disc-track-list card-list" id="lb-area">
+  <div class="disc-track-list card-list" id="lb-exploration-area">
     <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
   </div>
 </div>
 
-<!-- ── Listening History (ListenBrainz) ───────────────── -->
+<!-- ── Recommended (ListenBrainz CF) ───────────────────── -->
 <div class="shelf">
   <div class="shelf-hdr">
-    <span class="shelf-hdr-title">Listening History</span>
-    <span class="shelf-hdr-sub">Recently scrobbled</span>
+    <span class="shelf-hdr-title">Recommended for You</span>
+    <span class="shelf-hdr-sub">Collaborative filtering from listeners like you</span>
   </div>
-  <div class="disc-track-list card-list" id="lb-history-area">
+  <div class="disc-track-list card-list" id="lb-recs-area">
+    <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
+  </div>
+</div>
+
+<!-- ── Weekly Jams (ListenBrainz) ──────────────────────── -->
+<div class="shelf">
+  <div class="shelf-hdr">
+    <span class="shelf-hdr-title">Weekly Jams</span>
+    <span class="shelf-hdr-sub">Your weekly rotation, regenerated every Monday</span>
+  </div>
+  <div class="disc-track-list card-list" id="lb-jams-area">
+    <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
+  </div>
+</div>
+
+<!-- ── On Repeat (ListenBrainz) ────────────────────────── -->
+<div class="shelf">
+  <div class="shelf-hdr">
+    <span class="shelf-hdr-title">On Repeat</span>
+    <span class="shelf-hdr-sub">Your top tracks this month</span>
+  </div>
+  <div class="disc-track-list card-list" id="lb-area">
     <div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>
   </div>
 </div>
@@ -155,11 +177,33 @@ function loadListenBrainz() {
     .catch(() => { area.innerHTML = '<div class="disc-empty">Failed to load recommendations.</div>'; });
 }
 
-function loadLbHistory() {
-  const area = document.getElementById('lb-history-area');
+function loadLbWeekly() {
+  const expArea = document.getElementById('lb-exploration-area');
+  const jamsArea = document.getElementById('lb-jams-area');
+  if (!expArea || !jamsArea) return;
+  fetch('/api/discover/listenbrainz/weekly')
+    .then(r => r.json())
+    .then(d => {
+      if (d.error && !(d.exploration || []).length && !(d.jams || []).length) {
+        expArea.innerHTML = `<div class="disc-empty">${esc(d.error)}</div>`;
+        jamsArea.innerHTML = `<div class="disc-empty">${esc(d.error)}</div>`;
+        return;
+      }
+      if ((d.exploration || []).length) renderTrackList(expArea, d.exploration);
+      else expArea.innerHTML = '<div class="disc-empty">No Weekly Exploration playlist yet — ListenBrainz generates one each Monday.</div>';
+      if ((d.jams || []).length) renderTrackList(jamsArea, d.jams);
+      else jamsArea.innerHTML = '<div class="disc-empty">No Weekly Jams playlist yet — ListenBrainz generates one each Monday.</div>';
+    })
+    .catch(() => {
+      expArea.innerHTML = '<div class="disc-empty">Failed to load Weekly Exploration.</div>';
+      jamsArea.innerHTML = '<div class="disc-empty">Failed to load Weekly Jams.</div>';
+    });
+}
+
+function loadLbRecs() {
+  const area = document.getElementById('lb-recs-area');
   if (!area) return;
-  area.innerHTML = '<div class="disc-loading"><span class="shelf-spinner"></span>&nbsp;Loading…</div>';
-  fetch('/api/discover/listenbrainz/history')
+  fetch('/api/discover/listenbrainz/recs')
     .then(r => r.json())
     .then(items => {
       if (items.error) {
@@ -168,7 +212,7 @@ function loadLbHistory() {
       }
       renderTrackList(area, items);
     })
-    .catch(() => { area.innerHTML = '<div class="disc-empty">Failed to load history.</div>'; });
+    .catch(() => { area.innerHTML = '<div class="disc-empty">Failed to load recommendations.</div>'; });
 }
 
 // ── Render: horizontal shelf of tiles ────────────────────────────────────
@@ -393,8 +437,9 @@ document.addEventListener('wheel', e => {
 // ── Init ──────────────────────────────────────────────────────────────────
 loadCharts('');
 loadApple();
+loadLbWeekly();
+loadLbRecs();
 loadListenBrainz();
-loadLbHistory();
 </script>
 
 {% endblock %}
