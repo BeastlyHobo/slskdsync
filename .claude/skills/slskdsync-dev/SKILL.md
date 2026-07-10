@@ -71,8 +71,12 @@ All providers return `(kind, list[TrackMeta])`. `TrackMeta` dataclass ~line 285.
   `python -c "import app"` to verify. Instead test logic in isolation: copy the SQL /
   pure-Python under test into a scratchpad script with a throwaway `sqlite3` DB using
   the real schema, and assert there.
-- **`open.spotify.com` is network-blocked** ("Host not in allowlist") — spotifyscraper
-  can't be live-tested here; verify code by reading the library source in site-packages.
+- **ALL external music APIs are egress-blocked** (proxy CONNECT 403): Spotify,
+  Deezer, ListenBrainz, Apple — everything except package registries. WebFetch is
+  blocked too. Never plan on live-verifying an external API here; test parsing
+  against fixture JSON shaped per the API's documented schema, and tell the user
+  which shapes need a visual check on their deployment (their Docker box has
+  normal internet).
 - **Templates can't be `node --check`ed** — Jinja `{{ … }}` breaks the JS parser.
   Extract just the new JS functions into a temp file to syntax-check them.
 - `slskd`, Navidrome, and the user's Docker stack are not reachable; the user tests
