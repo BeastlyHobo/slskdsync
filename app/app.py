@@ -1869,6 +1869,43 @@ def _norm_key(artist: str, title: str) -> tuple[str, str]:
     return (_norm_meta((artist or "").split(",")[0].split("&")[0]), _norm_meta(title))
 
 
+# Trailing version descriptors that providers append with a dash rather than
+# parentheses ("Song - 2011 Remaster", "Song - Radio Edit"), which _norm_meta
+# therefore doesn't strip. Peeled word-by-word from the END only, so a real
+# title like "Runaway Baby" is left alone.
+_VERSION_TAIL_RE = re.compile(
+    r"\s+(?:\d{4}|re-?mastere?d?|live|acoustic|demo|mono|stereo|edit|radio|single|"
+    r"album|version|extended|deluxe|instrumental|remix|mix|bonus|track|anniversary|edition)$"
+)
+
+
+def _strip_version_tail(s: str) -> str:
+    prev = None
+    while s and s != prev:
+        prev = s
+        s = _VERSION_TAIL_RE.sub("", s)
+    return s
+
+
+def _artist_overlap(ca: str, na: str, na_first: str) -> bool:
+    """Whole-word artist agreement: exact match, or one credit's words being a
+    subset of the other's ("tyler" ⊆ "tyler the creator" for co-credits).
+    Replaces raw substring containment, which matched unrelated artists
+    ("sia" in "asia")."""
+    if ca == na or (na_first and ca == na_first):
+        return True
+    if not ca:
+        return False
+    ct = set(ca.split())
+    for cand in (na, na_first):
+        if not cand:
+            continue
+        t = set(cand.split())
+        if t and ct and (t <= ct or ct <= t):
+            return True
+    return False
+
+
 def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: str,
                             allow_refetch: bool = False) -> tuple[list[dict], int, int, int]:
     """Build the full ordered list of playlist entries: completed downloads plus
@@ -1934,6 +1971,7 @@ def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: s
     lib_with_path = [e for e in lib_all if e["path"]]
     lib_by_key: dict[tuple[str, str], dict] = {}
     lib_by_title: dict[str, list[dict]] = {}
+    lib_by_stripped: dict[str, list[dict]] = {}  # version-suffix-stripped title
     for e in lib_with_path:
         na = _norm(e["artist"])
         nt = _norm(e["title"])
@@ -1942,6 +1980,7 @@ def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: s
         entry = {"path": e["path"], "artist": e["artist"], "title": e["title"], "_na": na, "_nt": nt}
         lib_by_key.setdefault((na, nt), entry)
         lib_by_title.setdefault(nt, []).append(entry)
+        lib_by_stripped.setdefault(_strip_version_tail(nt), []).append(entry)
 
     # --- Filesystem fallback index (only built if needed) ---
     music_root = Path(get_setting("library_path") or "/music")
@@ -1967,12 +2006,12 @@ def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: s
         for fn, parent, path in _fs_files:
             if title_n in fn and (not artist_n or artist_n in fn or artist_n in parent):
                 return path
-        # Strategy B: title in filename alone (last resort)
+        # Strategy B: exact stem match (rescues compilations under folders like
+        # "Various Artists/" where the track artist never appears in the path).
+        # The old third strategy — bare title-substring with no artist check —
+        # is gone: it pointed playlists at unrelated songs.
         for fn, parent, path in _fs_files:
             if title_n == fn:
-                return path
-        for fn, parent, path in _fs_files:
-            if title_n and len(title_n) >= 4 and title_n in fn:
                 return path
         return None
 
@@ -2006,20 +2045,25 @@ def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: s
         entry = lib_by_key.get((na, nt)) or lib_by_key.get((na_first, nt))
 
         if not entry:
-            # Title exact, artist substring (handles co-credits)
+            # Title exact, artist word-overlap (handles co-credits)
             for cand in lib_by_title.get(nt, []):
-                ca = cand["_na"]
-                if ca == na or (na and (na in ca or ca in na)) or (na_first and (na_first in ca or ca in na_first)):
+                if _artist_overlap(cand["_na"], na, na_first):
                     entry = cand
                     break
 
         if not entry and len(nt) >= 5:
-            # Title substring fuzzy match — only when artist also overlaps
-            for (ea, et), cand in lib_by_key.items():
-                if nt in et or et in nt:
-                    if ea == na or (na and (na in ea or ea in na)) or (na_first and (na_first in ea or ea in na_first)):
-                        entry = cand
-                        break
+            # Version-suffix tolerance: "song x 2011 remaster" ↔ "song x".
+            # One side must be the other's BASE after peeling version words —
+            # the old bidirectional substring matched different songs
+            # ("runaway" pulled in "runaway baby", "the world" matched
+            # "everybody wants to rule the world").
+            snt = _strip_version_tail(nt)
+            for cand in lib_by_stripped.get(snt, []):
+                if cand["_nt"] == nt:
+                    continue  # exact title handled above
+                if (snt == nt or cand["_nt"] == snt) and _artist_overlap(cand["_na"], na, na_first):
+                    entry = cand
+                    break
 
         path: str | None = None
         from_fs = False
@@ -2041,13 +2085,10 @@ def _build_playlist_entries(conn, job_id: int, playlist_name: str, source_url: s
             miss_count += 1
             logger.info(f"[m3u] No library match for '{t['artist']}' / '{t['title']}'")
 
-    # Downloads belonging to this playlist that aren't in the source snapshot
-    # (e.g. queued into the job manually) — appended after the ordered list.
-    for r in dl_rows:
-        if r["path"] not in seen_paths:
-            merged.append({"path": r["path"], "artist": r["artist"], "title": r["title"]})
-            seen_paths.add(r["path"])
-
+    # Downloads not matched during the source-order walk are deliberately NOT
+    # appended: they're either tracks removed from the source playlist or
+    # foreign jobs sharing this playlist's name — both put songs in the M3U
+    # that aren't in the source. The M3U strictly mirrors the source snapshot.
     return merged, idx_count, fs_count, miss_count
 
 
