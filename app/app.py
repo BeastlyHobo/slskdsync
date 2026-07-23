@@ -2383,12 +2383,26 @@ def scan_library() -> None:
                 logger.info(f"[library] Repaired {fixed} mismatched paths via filesystem")
 
         conn = get_conn()
+        # AcoustID scores are app-generated and live in library_index, which we
+        # rebuild here — carry them across the rebuild by path so verifying a
+        # track isn't undone by the next scan. (user_rating / cover_art_id come
+        # from Navidrome each scan, so they don't need preserving.)
+        prev_scores = {
+            r["path"]: r["acoustid_score"]
+            for r in conn.execute(
+                "SELECT path, acoustid_score FROM library_index"
+                " WHERE acoustid_score IS NOT NULL AND path IS NOT NULL AND path != ''"
+            )
+        }
         conn.execute("DELETE FROM library_index")
         conn.executemany(
-            "INSERT INTO library_index(artist, title, album, source, path, user_rating, cover_art_id)"
-            " VALUES (?,?,?,?,?,?,?)",
-            [(a, t, al, source, p, ur, ca) for a, t, al, p, ur, ca in rows]
+            "INSERT INTO library_index(artist, title, album, source, path, user_rating, cover_art_id, acoustid_score)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            [(a, t, al, source, p, ur, ca, prev_scores.get(p)) for a, t, al, p, ur, ca in rows]
         )
+        if prev_scores:
+            kept = sum(1 for _, _, _, p, _, _ in rows if prev_scores.get(p) is not None)
+            logger.info(f"[library] Preserved {kept}/{len(prev_scores)} AcoustID scores across rescan")
         conn.commit()
         conn.close()
         with _scan_state_lock:
