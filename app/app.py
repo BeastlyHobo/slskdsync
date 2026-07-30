@@ -4749,4 +4749,12 @@ def import_url():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5035)
+    # Flask's dev server handles requests SERIALLY (threaded=False default) —
+    # one slow Navidrome cover-proxy call used to block every page and poll.
+    try:
+        from waitress import serve
+        logger.info("Serving with waitress on 0.0.0.0:5035 (8 threads)")
+        serve(app, host="0.0.0.0", port=5035, threads=8)
+    except ImportError:
+        logger.warning("waitress not installed — falling back to the single-threaded Flask dev server")
+        app.run(host="0.0.0.0", port=5035)
