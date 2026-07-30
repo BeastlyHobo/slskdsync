@@ -1737,11 +1737,20 @@ def tag_file(path: Path, track: sqlite3.Row) -> None:
         logger.warning(f"[tag] Failed to tag {path.name}: {ex}")
 
 
-def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
+def discover_download_for_track(track: sqlite3.Row,
+                                audio_files: Optional[list[Path]] = None) -> Optional[Path]:
+    """Find the downloaded file for a track in the watch folder.
+
+    audio_files: optional precomputed file list so the worker tick can walk the
+    watch folder ONCE instead of once per downloading track (up to 20 identical
+    recursive walks every 20s). When omitted, walks as before."""
     watch = Path(get_setting("download_watch_path"))
-    if not watch.exists():
-        logger.warning(f"[discover] Watch path does not exist: {watch}")
-        return None
+    if audio_files is None:
+        if not watch.exists():
+            logger.warning(f"[discover] Watch path does not exist: {watch}")
+            return None
+        audio_files = [f for f in watch.glob("**/*")
+                       if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
     title = (track["title"] or "").lower().strip()
     artist = (track["artist"] or "").lower().split(",")[0].strip()
 
@@ -1753,11 +1762,8 @@ def discover_download_for_track(track: sqlite3.Row) -> Optional[Path]:
     title_norm = _norm(title)
     artist_norm = _norm(artist)
 
-    # Collect all audio files once so we can log useful diagnostics
-    audio_files = [f for f in watch.glob("**/*")
-                   if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
     if not audio_files:
-        logger.warning(f"[discover] Watch path {watch} exists but contains no audio files")
+        logger.warning(f"[discover] Watch path {watch} contains no audio files")
         return None
 
     if not title_norm:
@@ -2901,11 +2907,28 @@ def _worker_tick():
 
     # downloading → check watch folder, organize
     library = get_setting("library_path") or "/music"
-    for t in conn.execute(
+    dl_rows_tick = conn.execute(
         "SELECT * FROM tracks WHERE slskd_state='downloading' LIMIT 20"
-    ).fetchall():
-        candidate = discover_download_for_track(t)
+    ).fetchall()
+    # Walk the watch folder ONCE for the whole tick, not once per track.
+    watch_files: list[Path] = []
+    if dl_rows_tick:
+        _watch = Path(get_setting("download_watch_path"))
+        if _watch.exists():
+            watch_files = [f for f in _watch.glob("**/*")
+                           if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
+        else:
+            logger.warning(f"[discover] Watch path does not exist: {_watch}")
+    for t in dl_rows_tick:
+        candidate = discover_download_for_track(t, watch_files)
         if candidate:
+            # The per-call walk used to exclude files an earlier track in this
+            # tick had already moved; the shared list must do the same, or the
+            # next track could claim this just-moved file and fail its move.
+            try:
+                watch_files.remove(candidate)
+            except ValueError:
+                pass
             logger.info(f"[slskd] Found file for '{t['title']}': {candidate.name}")
             target = Organizer.target_path(t, candidate)
             logger.info(f"[slskd] Moving to library ({library}): {target}")
