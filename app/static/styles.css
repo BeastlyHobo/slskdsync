@@ -663,6 +663,9 @@ main {
   top: calc(var(--topbar-h) + var(--inset-top));
   z-index: 50;
   padding: 0.6rem 0 0.5rem;
+  /* Sticky header needs an opaque backdrop, or scrolled result cards bleed
+     through it (same reason Library's .az-section-hdr sets this). */
+  background: var(--bg);
 }
 
 @media (min-width: 920px) {
