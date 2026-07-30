@@ -3592,6 +3592,27 @@ def api_playlist_diff(job_id):
     return jsonify({"ok": True, "new_tracks": new_tracks, "total_source": len(source_tracks)})
 
 
+def _tail_lines(path: Path, n: int) -> list[str]:
+    """Last n non-blank lines of a file, reading only its tail in 256KB chunks
+    from EOF — the Logs page polls every 3s and the log file grows to 5MB, so
+    whole-file reads were the cost. A UTF-8 sequence split at the read boundary
+    only affects the first (partial) line, which is dropped."""
+    chunk = 256 * 1024
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos = f.tell()
+        data = b""
+        while pos > 0 and data.count(b"\n") <= n:
+            step = min(chunk, pos)
+            pos -= step
+            f.seek(pos)
+            data = f.read(step) + data
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    if pos > 0 and lines:
+        lines = lines[1:]  # didn't start at offset 0 — first line is partial
+    return [l for l in lines if l.strip()][-n:]
+
+
 @app.route("/api/logs")
 def api_logs():
     """Return the last N log lines. Reads from the log file when available
@@ -3600,9 +3621,7 @@ def api_logs():
     log_file = _LOG_DIR / "app.log"
     if log_file.exists():
         try:
-            text = log_file.read_text(encoding="utf-8", errors="replace")
-            lines = [l for l in text.splitlines() if l.strip()][-n:]
-            return jsonify({"lines": lines})
+            return jsonify({"lines": _tail_lines(log_file, n)})
         except Exception:
             pass
     with _log_buffer_lock:
