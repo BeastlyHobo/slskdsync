@@ -1,5 +1,6 @@
 import os
 import re
+import gzip
 import json
 import sqlite3
 import threading
@@ -3279,6 +3280,45 @@ def gate():
         return redirect(url_for("setup"))
     if not is_authed():
         return redirect(url_for("login"))
+
+
+# ── Response compression ────────────────────────────────────────────────────
+# The /library page embeds the whole library index as JSON-in-HTML (multi-MB at
+# thousands of tracks) and every poll returns JSON — all of it compresses ~8-10×.
+_GZIP_TYPES = {"text/html", "application/json", "text/plain", "text/css",
+               "application/javascript", "image/svg+xml"}
+
+
+def _should_gzip(mimetype, status, passthrough, content_encoding,
+                 accept_encoding, size) -> bool:
+    return (status == 200
+            and not passthrough           # send_file/static — never touch their body
+            and not content_encoding      # already encoded
+            and mimetype in _GZIP_TYPES   # skips the image/* cover proxy
+            and "gzip" in (accept_encoding or "").lower()
+            and size >= 1024)
+
+
+@app.after_request
+def _gzip_response(resp):
+    try:
+        size = resp.content_length
+        if size is None and not resp.direct_passthrough:
+            size = len(resp.get_data())
+        if not _should_gzip(resp.mimetype, resp.status_code, resp.direct_passthrough,
+                            resp.headers.get("Content-Encoding"),
+                            request.headers.get("Accept-Encoding"), size or 0):
+            return resp
+        data = resp.get_data()
+        gz = gzip.compress(data, compresslevel=6)
+        if len(gz) < len(data):
+            resp.set_data(gz)
+            resp.headers["Content-Encoding"] = "gzip"
+            resp.headers["Content-Length"] = str(len(gz))
+            resp.headers.add("Vary", "Accept-Encoding")
+    except Exception:
+        pass  # never let compression break a response
+    return resp
 
 
 # ---------------------------------------------------------------------------
