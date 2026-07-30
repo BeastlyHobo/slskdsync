@@ -3771,7 +3771,9 @@ def library():
         tracks = []
         for r in lib_rows:
             p = r["path"] or ""
-            ext = Path(p).suffix[1:].upper() if p else ""
+            # rsplit instead of Path(): this runs once per library row per page load
+            base = p.rsplit("/", 1)[-1]
+            ext = base.rsplit(".", 1)[1].upper() if "." in base else ""
             tracks.append({
                 "id":          r["id"],
                 "artist":      r["artist"] or "",
