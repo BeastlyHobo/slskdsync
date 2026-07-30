@@ -55,8 +55,13 @@
     {% endif %}
     {% if job.playlist_name %}
     <button class="pl-regen-btn" data-name="{{ job.playlist_name|e }}" onclick="regenM3u({{ job.id }},this.dataset.name,this)" title="Rebuild M3U">♻ M3U</button>
-    <span class="pl-regen-result" id="regen-{{ job.id }}"></span>
     {% endif %}
+    <button class="pl-regen-btn{% if not job.playlist_name %} pl-name-cta{% endif %}"
+      data-name="{{ job.playlist_name|e }}"
+      onclick="renamePl({{ job.id }},this)"
+      title="{{ 'Rename this playlist' if job.playlist_name else 'Name this playlist to enable M3U + Navidrome sync' }}">
+      ✎ {{ 'Rename' if job.playlist_name else 'Add name' }}</button>
+    <span class="pl-regen-result" id="regen-{{ job.id }}"></span>
     {% if job.needs_fix %}
     <button class="pl-regen-btn" style="color:#5a9aee;border-color:rgba(90,154,238,0.3)"
       onclick="retryAllMissing({{ job.id }},this)" title="Queue all missing for re-search">↻ All</button>
@@ -112,6 +117,35 @@ function timeAgo(utcStr) {
 document.querySelectorAll('.sync-ago').forEach(el => {
   if (el.dataset.ts) el.textContent = timeAgo(el.dataset.ts);
 });
+
+function renamePl(jobId, btn) {
+  const current = btn.dataset.name || '';
+  const name = prompt(current ? 'Rename playlist:' : 'Name this playlist (enables M3U + Navidrome sync):', current);
+  if (name === null) return;              // cancelled
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === current) return;
+  const result = document.getElementById('regen-' + jobId);
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = '…';
+  fetch(`/api/playlists/${jobId}/rename`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: trimmed}),
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      // Reload so the card title, Sync/M3U buttons and counts reflect the name.
+      location.reload();
+      return;
+    }
+    btn.disabled = false;
+    btn.textContent = orig;
+    if (result) { result.textContent = '✗ ' + (d.error || 'Rename failed'); result.style.color = 'var(--err)'; }
+  }).catch(() => {
+    btn.disabled = false;
+    btn.textContent = orig;
+    if (result) { result.textContent = '✗ Network error'; result.style.color = 'var(--err)'; }
+  });
+}
 
 function syncNow(jobId, btn) {
   btn.disabled = true;

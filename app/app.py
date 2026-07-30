@@ -2130,9 +2130,7 @@ def write_playlist_m3u(job_id: int, playlist_name: str, trigger_scan: bool = Tru
     """Write/update an M3U with the full playlist (completed downloads + already-owned
     library songs) and sync it to Navidrome. Uses the same list-building logic as the
     manual regenerate button so the two paths can never diverge."""
-    library = get_setting("library_path") or "/music"
-    safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
-    m3u_path = Path(library) / f"{safe}.m3u"
+    m3u_path = _m3u_path_for(playlist_name)
     conn = get_conn()
     job_row = conn.execute("SELECT source_url FROM import_jobs WHERE id=?", (job_id,)).fetchone()
     source_url = (job_row["source_url"] if job_row else "") or ""
@@ -2150,7 +2148,7 @@ def write_playlist_m3u(job_id: int, playlist_name: str, trigger_scan: bool = Tru
         lines.append(r["path"])
     m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     logger.info(
-        f"[m3u] {safe}.m3u updated — {len(merged)} tracks "
+        f"[m3u] {m3u_path.name} updated — {len(merged)} tracks "
         f"({n_dl} downloads + {idx_count} index + {fs_count} fs-walk, {miss_count} missing)"
     )
     _sync_navidrome_after_m3u(playlist_name, trigger_scan=trigger_scan)
@@ -2168,6 +2166,39 @@ def _navidrome_start_scan() -> None:
         logger.info("[nav] Triggered Navidrome scan")
     except Exception as ex:
         logger.warning(f"[nav] startScan failed: {ex}")
+
+
+def _m3u_path_for(playlist_name: str) -> Path:
+    """Where a playlist's M3U lives. Shared so renames delete the exact file
+    the writers created."""
+    library = get_setting("library_path") or "/music"
+    safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
+    return Path(library) / f"{safe}.m3u"
+
+
+def _navidrome_delete_imported(playlist_name: str) -> None:
+    """Delete same-name playlists Navidrome auto-imported from an M3U. Used when
+    renaming, so the old name doesn't linger. Playlists without the
+    "Auto-imported" marker are left alone — those may be the user's own."""
+    nav_url = (get_setting("navidrome_url") or "").rstrip("/")
+    nav_user = get_setting("navidrome_user") or ""
+    nav_pass = get_setting("navidrome_pass") or ""
+    if not (nav_url and nav_user and playlist_name.strip()):
+        return
+    base = {"u": nav_user, "p": nav_pass, "v": "1.16.1", "c": "slskdsync", "f": "json"}
+    try:
+        r = requests.post(f"{nav_url}/rest/getPlaylists", data=base, timeout=10)
+        playlists = r.json().get("subsonic-response", {}).get("playlists", {}).get("playlist", [])
+        if isinstance(playlists, dict):
+            playlists = [playlists]
+        for p in playlists:
+            if (p.get("name", "").strip().lower() == playlist_name.strip().lower()
+                    and "auto-imported" in (p.get("comment") or "").lower()):
+                requests.post(f"{nav_url}/rest/deletePlaylist",
+                              data={**base, "id": p["id"]}, timeout=10)
+                logger.info(f"[nav] Deleted old auto-imported playlist '{playlist_name}'")
+    except Exception as ex:
+        logger.warning(f"[nav] Could not delete old playlist '{playlist_name}': {ex}")
 
 
 def _sync_navidrome_after_m3u(playlist_name: str, trigger_scan: bool = True) -> None:
@@ -3356,16 +3387,14 @@ def api_regenerate_m3u(job_id):
     if not merged:
         return jsonify({"ok": False, "error": "No completed tracks found for this playlist"}), 404
     n_dl = len(merged) - idx_count - fs_count
-    library = get_setting("library_path") or "/music"
-    safe = re.sub(r'[<>:"/\\|?*]', "", playlist_name).strip()[:120] or "playlist"
-    m3u_path = Path(library) / f"{safe}.m3u"
+    m3u_path = _m3u_path_for(playlist_name)
     lines = ["#EXTM3U", f"#PLAYLIST:{playlist_name}"]
     for r in merged:
         lines.append(f"#EXTINF:0,{r['artist'] or ''} - {r['title'] or ''}")
         lines.append(r["path"])
     m3u_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     logger.info(
-        f"[m3u] Regenerated {safe}.m3u — {len(merged)} tracks "
+        f"[m3u] Regenerated {m3u_path.name} — {len(merged)} tracks "
         f"({n_dl} downloads + {idx_count} index + {fs_count} fs-walk, {miss_count} missing)"
     )
     _sync_navidrome_after_m3u(playlist_name)
@@ -3393,6 +3422,60 @@ def api_playlist_sync(job_id):
         logger.warning(f"[psync] Manual sync failed for '{name}': {ex}")
         return jsonify({"ok": False, "error": str(ex)}), 500
     return jsonify({"ok": True, **res})
+
+
+@app.route("/api/playlists/<int:job_id>/rename", methods=["POST"])
+def api_playlist_rename(job_id):
+    """Set or change a playlist's name (e.g. an import saved without one).
+    Moves the M3U to the new name and drops the old file plus the stale
+    auto-imported Navidrome playlist."""
+    new_name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    if not new_name:
+        return jsonify({"ok": False, "error": "Name is required"}), 400
+    if len(new_name) > 120:
+        return jsonify({"ok": False, "error": "Name is too long (120 characters max)"}), 400
+    conn = get_conn()
+    job = conn.execute("SELECT playlist_name, source_url FROM import_jobs WHERE id=?",
+                       (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return jsonify({"ok": False, "error": "Job not found"}), 404
+    old_name = (job["playlist_name"] or "").strip()
+    if old_name == new_name:
+        conn.close()
+        return jsonify({"ok": True, "name": new_name, "unchanged": True})
+    # Two jobs sharing a name would merge their tracks into one M3U (the
+    # playlist queries match on playlist_name), so keep names unique.
+    clash = conn.execute(
+        "SELECT id FROM import_jobs WHERE id!=? AND lower(trim(COALESCE(playlist_name,'')))=lower(?)",
+        (job_id, new_name),
+    ).fetchone()
+    if clash:
+        conn.close()
+        return jsonify({"ok": False,
+                        "error": f"Another import already uses the name “{new_name}”"}), 409
+    conn.execute("UPDATE import_jobs SET playlist_name=? WHERE id=?", (new_name, job_id))
+    conn.commit()
+    conn.close()
+
+    if old_name:
+        old_path = _m3u_path_for(old_name)
+        new_path = _m3u_path_for(new_name)
+        if old_path != new_path:
+            try:
+                if old_path.is_file():
+                    old_path.unlink()
+                    logger.info(f"[m3u] Removed old playlist file {old_path.name}")
+            except Exception as ex:
+                logger.warning(f"[m3u] Could not remove {old_path}: {ex}")
+            _navidrome_delete_imported(old_name)
+
+    try:
+        write_playlist_m3u(job_id, new_name)
+    except Exception as ex:
+        logger.warning(f"[m3u] Rename wrote no M3U for '{new_name}': {ex}")
+    logger.info(f"[playlist] Renamed job {job_id}: {old_name or '(unnamed)'} → {new_name}")
+    return jsonify({"ok": True, "name": new_name})
 
 
 @app.route("/api/playlists/<int:job_id>/retry-missing", methods=["POST"])

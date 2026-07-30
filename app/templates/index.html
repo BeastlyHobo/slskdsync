@@ -377,22 +377,49 @@ function aiSuggestQ(btn, trackId) {
   const knownCount = {{ stats.total }};
   let hasActive = {{ 'true' if (stats.pending + stats.downloading) > 0 else 'false' }};
 
+  // The poller reloads the page when the queue changes shape (new tracks, a
+  // track finishing). That used to wipe whatever was being typed in the import
+  // form — with a 5s poll during downloads, typing a playlist name was a race.
+  // Defer the reload while the form is in use, then apply it once it isn't.
+  let pendingReload = false;
+
+  function formBusy() {
+    const form = document.getElementById('import-form');
+    if (!form) return false;
+    if (form.contains(document.activeElement)) return true;
+    const url = document.getElementById('import-url');
+    const name = document.getElementById('m3u-name');
+    return !!(url && url.value.trim()) || !!(name && name.value.trim());
+  }
+
+  // Once the form is done being used, apply any reload the poller wanted.
+  ['blur', 'input'].forEach(evt =>
+    document.addEventListener(evt, () => {
+      if (pendingReload && !formBusy()) location.reload();
+    }, true));
+
   function poll() {
     fetch('/api/queue/status')
       .then(r => r.json())
       .then(d => {
-        if (d.stats.total !== knownCount) { location.reload(); return; }
+        let wantReload = d.stats.total !== knownCount;
 
-        let needsReload = false;
-        d.tracks.forEach(t => {
-          const row = document.querySelector(`.swipe-row[data-id="${t.id}"]`);
-          if (!row) return;
-          const badge = row.querySelector('.badge');
-          if (badge && t.state === 'completed' && !badge.classList.contains('badge-completed')) {
-            needsReload = true;
-          }
-        });
-        if (needsReload) { location.reload(); return; }
+        if (!wantReload) {
+          d.tracks.forEach(t => {
+            const row = document.querySelector(`.swipe-row[data-id="${t.id}"]`);
+            if (!row) return;
+            const badge = row.querySelector('.badge');
+            if (badge && t.state === 'completed' && !badge.classList.contains('badge-completed')) {
+              wantReload = true;
+            }
+          });
+        }
+
+        if (wantReload) {
+          if (!formBusy()) { location.reload(); return; }
+          // Keep updating badges in place until the form is free.
+          pendingReload = true;
+        }
 
         d.tracks.forEach(t => {
           const row = document.querySelector(`.swipe-row[data-id="${t.id}"]`);

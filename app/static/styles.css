@@ -1975,6 +1975,12 @@ main {
 
 .pl-regen-btn:hover { background: var(--surface3); color: var(--text); }
 
+/* Unnamed import: naming it unlocks M3U + Navidrome sync, so nudge toward it */
+.pl-regen-btn.pl-name-cta {
+  color: var(--warn);
+  border-color: rgba(240, 180, 60, .4);
+}
+
 .pl-regen-result {
   font-size: 0.72rem;
   color: var(--text-faint);
