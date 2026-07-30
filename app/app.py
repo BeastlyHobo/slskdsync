@@ -101,6 +101,10 @@ MONOCHROME_FALLBACK_URLS = [
 def get_conn():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    # Safe pairing with WAL: worst case on power loss is losing the last
+    # commit(s), never corruption — and it drops an fsync from every commit
+    # (the worker commits many times per 20s tick).
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
@@ -161,6 +165,8 @@ def init_db():
             FOREIGN KEY(job_id) REFERENCES import_jobs(id)
         );
         CREATE INDEX IF NOT EXISTS idx_playlist_tracks_job ON playlist_tracks(job_id);
+        CREATE INDEX IF NOT EXISTS idx_tracks_job ON tracks(job_id);
+        CREATE INDEX IF NOT EXISTS idx_tracks_state ON tracks(slskd_state);
         CREATE TABLE IF NOT EXISTS bad_flags (
             path TEXT PRIMARY KEY,
             artist TEXT,
@@ -256,13 +262,31 @@ def init_db():
     )
     conn.commit()
     conn.close()
+    # init_db writes settings with raw SQL above — drop anything the cache
+    # may have picked up before/during (belt-and-braces; init runs at import).
+    with _settings_cache_lock:
+        _settings_cache.clear()
+
+
+# Settings are read constantly (71 call sites; several per worker tick and per
+# request) and each read used to open a fresh sqlite connection. This process is
+# the only writer, so a dict cache invalidated by set_setting is exact.
+# Trade-off: editing the DB from outside the running app needs a restart.
+_settings_cache: dict[str, str] = {}
+_settings_cache_lock = threading.Lock()
 
 
 def get_setting(key: str) -> str:
+    with _settings_cache_lock:
+        if key in _settings_cache:
+            return _settings_cache[key]
     conn = get_conn()
     row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
     conn.close()
-    return row[0] if row else ""
+    val = row[0] if row else ""
+    with _settings_cache_lock:
+        _settings_cache[key] = val
+    return val
 
 
 def set_setting(key: str, value: str):
@@ -273,6 +297,8 @@ def set_setting(key: str, value: str):
     )
     conn.commit()
     conn.close()
+    with _settings_cache_lock:
+        _settings_cache[key] = value
 
 
 def is_first_run() -> bool:
