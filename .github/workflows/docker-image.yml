@@ -12,7 +12,30 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # chromaprint provides fpcalc, which pyacoustid looks for at import.
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libchromaprint-tools
+
+      - name: Install Python deps
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest tests/ -q
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
