@@ -316,9 +316,11 @@ def is_first_run() -> bool:
 def get_auth_credentials() -> tuple[str, str]:
     """Return (username, password_hash) from DB if set, else from env."""
     db_hash = get_setting("app_password_hash")
-    db_user = get_setting("app_username")
-    if db_hash and db_user:
-        return db_user, db_hash
+    if db_hash:
+        # Keyed on the hash alone, matching is_first_run(). If the username was
+        # blanked by a bad settings save we default it rather than falling
+        # through to the built-in admin/admin, which would be a silent unlock.
+        return (get_setting("app_username") or os.getenv("APP_USER", "admin")), db_hash
     env_hash = os.getenv("APP_PASSWORD_HASH") or generate_password_hash(os.getenv("APP_PASSWORD", "admin"))
     env_user = os.getenv("APP_USER", "admin")
     return env_user, env_hash
@@ -3927,17 +3929,23 @@ def settings():
         "app_username", "app_password_hash",
     ]
     if request.method == "POST":
+        # Validate before writing anything, so a rejected password can't leave
+        # the earlier keys already saved.
+        new_pw = request.form.get("new_password", "").strip()
+        if new_pw and len(new_pw) < 6:
+            flash("Password must be at least 6 characters", "error")
+            return redirect(url_for("settings"))
         for k in keys:
+            # Never posted directly — it is derived from new_password below.
             if k == "app_password_hash":
-                # Only update password if a new one was typed
-                new_pw = request.form.get("new_password", "").strip()
-                if new_pw:
-                    if len(new_pw) < 6:
-                        flash("Password must be at least 6 characters", "error")
-                        return redirect(url_for("settings"))
-                    set_setting("app_password_hash", generate_password_hash(new_pw))
-            else:
-                set_setting(k, request.form.get(k, ""))
+                continue
+            # Only touch keys the submitted form actually carried. Writing
+            # request.form.get(k, "") unconditionally let a partial form blank
+            # every credential and API key it didn't happen to render.
+            if k in request.form:
+                set_setting(k, request.form[k])
+        if new_pw:
+            set_setting("app_password_hash", generate_password_hash(new_pw))
         flash("Settings saved", "ok")
         return redirect(url_for("settings"))
     return render_template("settings.html", settings={k: get_setting(k) for k in keys}, title="Settings")
