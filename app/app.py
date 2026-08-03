@@ -76,6 +76,7 @@ except ImportError:
     _HAS_ANTHROPIC = False
 from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory, Response, stream_with_context
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.exceptions import HTTPException
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -104,6 +105,11 @@ MONOCHROME_FALLBACK_URLS = [
 def get_conn():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    # timeout= only covers the Python-side connect; busy_timeout makes SQLite
+    # itself wait for a lock rather than raising immediately. With 8 waitress
+    # threads plus the worker and scan threads, contention is routine and an
+    # unhandled "database is locked" surfaces to the user as a 500.
+    conn.execute("PRAGMA busy_timeout=30000")
     # Safe pairing with WAL: worst case on power loss is losing the last
     # commit(s), never corruption — and it drops an fsync from every commit
     # (the worker commits many times per 20s tick).
@@ -3346,6 +3352,14 @@ def _app_secret() -> str:
 app = Flask(__name__)
 app.secret_key = _app_secret()
 app.permanent_session_lifetime = timedelta(days=30)
+# Lax stops the session cookie riding along on cross-site requests, which
+# blocks the drive-by CSRF that matters here. Secure is opt-in via env because
+# defaulting it on would break plain-HTTP access over the LAN.
+app.config.update(
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "").lower() in ("1", "true", "yes"),
+)
 
 init_db()
 
@@ -3364,7 +3378,46 @@ def is_authed() -> bool:
     return session.get("authed") is True
 
 
-UNPROTECTED = {"/login", "/setup", "/sw.js", "/manifest.json"}
+def _json_body() -> dict:
+    """Request JSON as a dict.
+
+    Plain request.get_json() raises 415 when the caller omits the JSON
+    Content-Type and 400 on a malformed body, and `or {}` never sees either.
+    A non-object payload (a bare list) would then break .get() too.
+    """
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else {}
+
+
+UNPROTECTED = {"/login", "/setup", "/sw.js", "/manifest.json", "/health"}
+
+
+@app.route("/health")
+def health():
+    """Unauthenticated liveness probe for Docker HEALTHCHECK / restart policy."""
+    try:
+        conn = get_conn()
+        conn.execute("SELECT 1 FROM settings LIMIT 1").fetchone()
+        conn.close()
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 503
+    return jsonify({"ok": True, "worker": _worker.is_alive()})
+
+
+@app.errorhandler(Exception)
+def _json_errors(err):
+    """API callers get JSON, not a 500 HTML page.
+
+    Every /api/* consumer is a fetch() that does response.json(); an unhandled
+    exception previously handed it an HTML error page and the UI failed with an
+    opaque parse error instead of showing the reason.
+    """
+    code = err.code if isinstance(err, HTTPException) else 500
+    if not isinstance(err, HTTPException):
+        logger.exception(f"Unhandled error on {request.path}")
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": str(err)}), code
+    return err if isinstance(err, HTTPException) else ("Internal Server Error", 500)
 
 
 @app.before_request
@@ -3557,7 +3610,7 @@ def api_regenerate_m3u(job_id):
     if not job:
         conn.close()
         return jsonify({"ok": False, "error": "Job not found"}), 404
-    playlist_name = (request.get_json() or {}).get("name") or job["playlist_name"] or ""
+    playlist_name = _json_body().get("name") or job["playlist_name"] or ""
     if not playlist_name:
         conn.close()
         return jsonify({"ok": False, "error": "No playlist name configured for this import"}), 400
@@ -3753,7 +3806,11 @@ def _tail_lines(path: Path, n: int) -> list[str]:
 def api_logs():
     """Return the last N log lines. Reads from the log file when available
     (so history survives restarts), falls back to the in-memory buffer."""
-    n = min(int(request.args.get("n", 500)), 2000)
+    try:
+        n = int(request.args.get("n", 500))
+    except ValueError:
+        n = 500
+    n = max(1, min(n, 2000))
     log_file = _LOG_DIR / "app.log"
     if log_file.exists():
         try:
@@ -4187,7 +4244,7 @@ def delete_track(track_id):
 @app.route("/api/tracks/<int:track_id>/retry", methods=["POST"])
 def retry_track(track_id):
     """Reset any track to pending, optionally with a custom search query."""
-    data = request.get_json(silent=True) or {}
+    data = _json_body()
     query = (data.get("query") or "").strip()
     conn = get_conn()
     track = conn.execute("SELECT slskd_search_id FROM tracks WHERE id=?", (track_id,)).fetchone()
@@ -4362,7 +4419,7 @@ def api_library_acoustid():
         _lib_acoustid_state.update(in_progress=True, done=0, total=0)
     started = False
     try:
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         scope = data.get("scope", "all")
         conn = get_conn()
         table = "library_index"
@@ -4452,7 +4509,7 @@ def api_library_flag_bad():
 
 @app.route("/api/library/redownload", methods=["POST"])
 def api_library_redownload():
-    data = request.get_json() or {}
+    data = _json_body()
     artist = (data.get("artist") or "").strip()
     title  = (data.get("title")  or "").strip()
     album  = (data.get("album")  or "").strip()
@@ -4653,7 +4710,7 @@ def api_queue_status():
 
 @app.route("/api/queue/action", methods=["POST"])
 def api_queue_action():
-    action = (request.get_json() or {}).get("action", "")
+    action = _json_body().get("action", "")
     conn = get_conn()
     if action == "clear_failed":
         conn.execute("DELETE FROM tracks WHERE slskd_state='failed'")
@@ -4691,7 +4748,7 @@ def api_queue_action():
 
 @app.route("/api/download/album", methods=["POST"])
 def api_download_album():
-    data = request.get_json() or {}
+    data = _json_body()
     tracks = data.get("tracks", [])
     source = data.get("source", "slskd")
     if not tracks:
