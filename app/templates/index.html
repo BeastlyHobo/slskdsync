@@ -258,9 +258,20 @@ function queueAction(action) {
 function deleteTrack(btn) {
   const row = btn.closest('.swipe-row');
   const id = row.dataset.id;
+  // Delete is irreversible and reachable by a 50px left-swipe, so confirm it
+  // and name the track — an accidental swipe used to silently destroy a row.
+  const title = (row.querySelector('.track-title')?.textContent || '').trim();
+  if (!confirm(title ? `Delete "${title}" from the queue?` : 'Delete this track from the queue?')) {
+    row.classList.remove('swiped-left', 'swiped-right');
+    return;
+  }
   fetch(`/api/tracks/${id}`, { method: 'DELETE' })
     .then(r => r.json())
-    .then(d => { if (d.ok) row.remove(); });
+    .then(d => {
+      if (d.ok) row.remove();
+      else alert('Could not delete: ' + (d.error || 'unknown error'));
+    })
+    .catch(e => alert('Could not delete: ' + e));
 }
 
 function submitSearch(input, trackId) {
