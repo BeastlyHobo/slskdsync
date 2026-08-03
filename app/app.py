@@ -2765,7 +2765,8 @@ def _worker_tick():
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
                          t["track_number"] or 0, t["source_id"] or "")
-        custom = (t["custom_search"] or "").strip()
+        custom_raw = t["custom_search"] or ""      # guard compares the raw column
+        custom = custom_raw.strip()
         attempt = t["slskd_search_attempt"] or 0
         if custom:
             logger.info(f"[slskd] Custom search: {custom!r}")
@@ -2778,18 +2779,27 @@ def _worker_tick():
             query = SlskdClient._build_query(meta.artist, meta.title)
             logger.info(f"[slskd] Starting search: {query!r}")
             ok, search_id, msg = slskd.start_search(meta)
+        # start_search* is a network call, so the user may have hit retry while
+        # it was in flight -- which also leaves the row 'pending', just with a
+        # different custom_search/attempt. Match the values we actually read so
+        # a stale write-back can't discard their new query; the row stays
+        # pending and the next tick picks it up with their intent.
+        guard = " WHERE id=? AND slskd_state='pending'" \
+                " AND IFNULL(custom_search,'')=? AND IFNULL(slskd_search_attempt,0)=?"
         if ok:
             logger.info(f"[slskd] Search queued (id={search_id}): {meta.title}")
-            conn.execute(
+            done = conn.execute(
                 "UPDATE tracks SET slskd_state='queued', slskd_search_id=?,"
-                " slskd_error=NULL, slskd_queued_at=datetime('now'), custom_search=NULL WHERE id=?",
-                (search_id, t["id"]),
-            )
+                " slskd_error=NULL, slskd_queued_at=datetime('now'), custom_search=NULL" + guard,
+                (search_id, t["id"], custom_raw, attempt),
+            ).rowcount
+            if not done:
+                logger.info(f"[slskd] Track {t['id']} changed mid-search — dropping stale write-back")
         else:
             logger.warning(f"[slskd] Search failed for '{meta.title}': {msg}")
             conn.execute(
-                "UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
-                (f"slskd: {msg}", t["id"]),
+                "UPDATE tracks SET slskd_state='failed', slskd_error=?" + guard,
+                (f"slskd: {msg}", t["id"], custom_raw, attempt),
             )
         conn.commit()
 
