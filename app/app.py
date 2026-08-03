@@ -84,6 +84,8 @@ APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "app.db"
+BACKUP_DIR = DATA_DIR / "backups"
+BACKUP_KEEP = 7
 
 AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".ogg", ".aac", ".wav", ".aif", ".aiff", ".opus", ".wma"}
 
@@ -107,6 +109,29 @@ def get_conn():
     # (the worker commits many times per 20s tick).
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
+
+
+def backup_db():
+    """Snapshot app.db into DATA_DIR/backups and prune to the newest BACKUP_KEEP.
+
+    app.db is the only copy of every import, setting, flag and history row —
+    nothing else in the stack stores them — so losing the file loses all of it.
+    """
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    dest = BACKUP_DIR / f"app-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.db"
+    conn = get_conn()
+    try:
+        # VACUUM INTO writes a consistent snapshot of a live WAL database;
+        # copying the file directly can catch a torn state between db and WAL.
+        conn.execute("VACUUM INTO ?", (str(dest),))
+    finally:
+        conn.close()
+    # Timestamped names sort chronologically, so the oldest are simply first.
+    stale = sorted(BACKUP_DIR.glob("app-*.db"))[:-BACKUP_KEEP]
+    for f in stale:
+        f.unlink(missing_ok=True)
+    logger.info(f"[backup] wrote {dest.name} ({dest.stat().st_size // 1024} KiB), pruned {len(stale)}")
+    return dest
 
 
 def init_db():
@@ -1818,6 +1843,7 @@ def run_worker(stop_event: threading.Event):
     logger.info("Worker started")
     _scan_running = False
     _psync_running = False
+    _backup_running = False
 
     def _maybe_scan():
         nonlocal _scan_running
@@ -1877,6 +1903,33 @@ def run_worker(stop_event: threading.Event):
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _maybe_backup():
+        nonlocal _backup_running
+        if _backup_running:
+            return
+        last = get_setting("last_db_backup") or ""
+        if last:
+            try:
+                if (datetime.utcnow() - datetime.fromisoformat(last)).total_seconds() < 24 * 3600:
+                    return
+            except ValueError:
+                pass
+        _backup_running = True
+
+        def _run():
+            nonlocal _backup_running
+            try:
+                # Stamp first, like _maybe_scan, so a persistently failing
+                # backup retries tomorrow rather than every 20s tick.
+                set_setting("last_db_backup", datetime.utcnow().isoformat(timespec="seconds"))
+                backup_db()
+            except Exception as ex:
+                logger.error(f"[backup] failed: {ex}")
+            finally:
+                _backup_running = False
+
+        threading.Thread(target=_run, daemon=True).start()
+
     while not stop_event.is_set():
         try:
             _worker_tick()
@@ -1884,6 +1937,7 @@ def run_worker(stop_event: threading.Event):
             logger.error(f"Worker tick error: {ex}")
         _maybe_scan()
         _maybe_sync_playlists()
+        _maybe_backup()
         time.sleep(20)
 
 
