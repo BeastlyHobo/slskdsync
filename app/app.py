@@ -4549,7 +4549,10 @@ def api_queue_action():
     elif action == "clear_completed":
         conn.execute("DELETE FROM tracks WHERE slskd_state='completed'")
     elif action == "clear_all":
-        conn.execute("DELETE FROM tracks WHERE slskd_state IN ('failed','completed')")
+        # Actually clear everything, matching the confirm text. This used to
+        # delete only failed+completed, so confirming it with a queue full of
+        # pending tracks appeared to do nothing.
+        conn.execute("DELETE FROM tracks")
     elif action == "retry_failed":
         # Keep slskd_search_attempt=1 so title-only search is tried next
         # instead of re-running the exact same artist+title query that already failed.
