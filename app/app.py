@@ -2371,10 +2371,16 @@ def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str,
 def scan_library() -> None:
     """Index the music library into library_index for dedup checks.
     Uses Navidrome's Subsonic API if configured, falls back to filesystem walk."""
+    # Claim the slot first: every /api/library/scan POST spawns a thread, so two
+    # clicks (or a click during the nightly scan) otherwise run two full
+    # Navidrome paginations at once and clobber each other's _scan_state.
+    with _scan_state_lock:
+        if _scan_state.get("in_progress"):
+            logger.info("[library] Scan already in progress — ignoring duplicate request")
+            return
+        _scan_state.update({"in_progress": True, "count": 0, "source": "", "last_at": ""})
     # Write timestamp before we start so even a failed scan resets the 24h cooldown.
     set_setting("last_library_scan", datetime.utcnow().isoformat(timespec="seconds"))
-    with _scan_state_lock:
-        _scan_state.update({"in_progress": True, "count": 0, "source": "", "last_at": ""})
 
     rows: list[tuple[str, str, str, str]] = []  # (artist, title, album, path)
     source = "unknown"
@@ -2481,6 +2487,12 @@ def scan_library() -> None:
         logger.error(f"[library] Scan failed: {ex}")
         with _scan_state_lock:
             _scan_state.update({"in_progress": False, "source": source})
+    finally:
+        # Belt and braces: with the guard above, a flag left set by an
+        # unexpected exit would block every future scan for the process
+        # lifetime, so never leave it set.
+        with _scan_state_lock:
+            _scan_state["in_progress"] = False
 
 
 def _record_history(conn, track: sqlite3.Row, path: str, source: str,
@@ -3164,6 +3176,20 @@ def _resolve_path(stored: str, artist: str = "", title: str = "",
 
 
 def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
+    """Fingerprint-verify a batch of rows, always releasing the progress slot."""
+    try:
+        _run_lib_acoustid_inner(ids, table)
+    except Exception:
+        # Previously an unreadable file or an AcoustID network error escaped
+        # here and left in_progress set, so the verify button 409'd until the
+        # process restarted.
+        logger.exception("[AcoustID] verification run failed")
+    finally:
+        with _lib_acoustid_lock:
+            _lib_acoustid_state["in_progress"] = False
+
+
+def _run_lib_acoustid_inner(ids: list, table: str = "library_index") -> None:
     """Fingerprint-verify a batch of rows from library_index or tracks."""
     logger.info(f"[AcoustID] starting verification for {len(ids)} tracks in {table}")
     # library_index stores the file path in `path`; tracks stores it in `local_path`.
@@ -3228,8 +3254,6 @@ def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
             conn.close()
         with _lib_acoustid_lock:
             _lib_acoustid_state["done"] += 1
-    with _lib_acoustid_lock:
-        _lib_acoustid_state["in_progress"] = False
     logger.info(f"[AcoustID] verification complete for {len(ids)} tracks")
 
 def _app_secret() -> str:
@@ -4208,6 +4232,9 @@ def api_ai_suggest(track_id):
 
 @app.route("/api/library/scan", methods=["POST"])
 def api_library_scan():
+    with _scan_state_lock:
+        if _scan_state.get("in_progress"):
+            return jsonify({"ok": True, "message": "Library scan already running"})
     threading.Thread(target=scan_library, daemon=True).start()
     return jsonify({"ok": True, "message": "Library scan started in background"})
 
@@ -4268,35 +4295,49 @@ def api_library_acoustid():
     with _lib_acoustid_lock:
         if _lib_acoustid_state["in_progress"]:
             return jsonify({"error": "already running"}), 409
-    data = request.get_json() or {}
-    scope = data.get("scope", "all")
-    conn = get_conn()
-    table = "library_index"
-    if scope == "track":
-        if data.get("id") is None:
-            conn.close()
-            return jsonify({"error": "id required for track scope"}), 400
-        ids = [data["id"]]
-    elif scope == "album":
-        ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM library_index WHERE artist=? AND album=?",
-            (data.get("artist"), data.get("album"))).fetchall()]
-    elif scope == "artist":
-        ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM library_index WHERE artist=?",
-            (data.get("artist"),)).fetchall()]
-    elif scope == "playlist":
-        table = "tracks"
-        ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM tracks WHERE job_id=? AND slskd_state='completed' AND local_path IS NOT NULL",
-            (data.get("job_id"),)).fetchall()]
-    else:
-        ids = [r["id"] for r in conn.execute("SELECT id FROM library_index").fetchall()]
-    conn.close()
-    if not ids:
-        return jsonify({"error": "no tracks matched"}), 404
-    threading.Thread(target=_run_lib_acoustid, args=(ids, table), daemon=True).start()
-    return jsonify({"ok": True, "total": len(ids)})
+        # Claim the slot here rather than at thread start. The id queries below
+        # are slow enough that two concurrent POSTs both cleared the check and
+        # launched duplicate runs, re-fingerprinting every file and racing on
+        # the progress counters.
+        _lib_acoustid_state.update(in_progress=True, done=0, total=0)
+    started = False
+    try:
+        data = request.get_json(silent=True) or {}
+        scope = data.get("scope", "all")
+        conn = get_conn()
+        table = "library_index"
+        if scope == "track":
+            if data.get("id") is None:
+                conn.close()
+                return jsonify({"error": "id required for track scope"}), 400
+            ids = [data["id"]]
+        elif scope == "album":
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM library_index WHERE artist=? AND album=?",
+                (data.get("artist"), data.get("album"))).fetchall()]
+        elif scope == "artist":
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM library_index WHERE artist=?",
+                (data.get("artist"),)).fetchall()]
+        elif scope == "playlist":
+            table = "tracks"
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM tracks WHERE job_id=? AND slskd_state='completed' AND local_path IS NOT NULL",
+                (data.get("job_id"),)).fetchall()]
+        else:
+            ids = [r["id"] for r in conn.execute("SELECT id FROM library_index").fetchall()]
+        conn.close()
+        if not ids:
+            return jsonify({"error": "no tracks matched"}), 404
+        threading.Thread(target=_run_lib_acoustid, args=(ids, table), daemon=True).start()
+        started = True
+        return jsonify({"ok": True, "total": len(ids)})
+    finally:
+        # Release the claim on every path that didn't hand it to the thread —
+        # early returns and exceptions alike — or the button jams permanently.
+        if not started:
+            with _lib_acoustid_lock:
+                _lib_acoustid_state["in_progress"] = False
 
 
 @app.route("/api/library/acoustid/status")
