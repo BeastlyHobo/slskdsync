@@ -119,6 +119,9 @@ def backup_db():
     """
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     dest = BACKUP_DIR / f"app-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.db"
+    # VACUUM INTO refuses to overwrite, and the name is only second-granular,
+    # so clear any same-second file (or a partial left by a crashed run) first.
+    dest.unlink(missing_ok=True)
     conn = get_conn()
     try:
         # VACUUM INTO writes a consistent snapshot of a live WAL database;
@@ -1931,13 +1934,16 @@ def run_worker(stop_event: threading.Event):
         threading.Thread(target=_run, daemon=True).start()
 
     while not stop_event.is_set():
-        try:
-            _worker_tick()
-        except Exception as ex:
-            logger.error(f"Worker tick error: {ex}")
-        _maybe_scan()
-        _maybe_sync_playlists()
-        _maybe_backup()
+        # Guard each step separately. Only _worker_tick used to be wrapped, so
+        # an exception from any _maybe_* -- a transient "database is locked" in
+        # get_setting is enough -- killed the worker thread outright and
+        # silently stopped all downloads until the process restarted. Separate
+        # try blocks also stop one failing step from skipping the others.
+        for step in (_worker_tick, _maybe_scan, _maybe_sync_playlists, _maybe_backup):
+            try:
+                step()
+            except Exception as ex:
+                logger.error(f"Worker step {step.__name__} error: {ex}")
         time.sleep(20)
 
 
