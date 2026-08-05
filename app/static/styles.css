@@ -1270,6 +1270,15 @@ main {
 
 .coll-row:hover { background: var(--surface2); }
 
+/* Shared inline icon (see templates/_icons.html). Sits on the text baseline
+   when used inside a button/label, and inherits colour via currentColor. */
+.icon {
+  display: inline-block;
+  vertical-align: -0.15em;
+  flex-shrink: 0;
+}
+button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
+
 .coll-icon {
   width: 44px;
   height: 44px;
@@ -1277,8 +1286,11 @@ main {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.3rem;
   flex-shrink: 0;
+  /* Was an emoji on a per-row brand colour (red/orange/red/purple), which
+     introduced four accents the palette doesn't define. */
+  background: var(--surface3);
+  color: var(--text-muted);
 }
 
 .coll-label {
@@ -1578,8 +1590,9 @@ main {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.1rem;
   flex-shrink: 0;
+  background: var(--surface3);
+  color: var(--text-muted);
 }
 
 .playlist-info { flex: 1; min-width: 0; }
@@ -2517,7 +2530,7 @@ main {
   color: var(--text-muted);
 }
 
-.empty-icon { font-size: 3rem; margin-bottom: 0.75rem; }
+.empty-icon { margin-bottom: 0.85rem; color: var(--text-faint); line-height: 0; }
 .empty-state p { font-size: 0.9rem; line-height: 1.5; }
 
 .loading {

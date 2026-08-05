@@ -298,8 +298,8 @@ function coverHtml(t, size=38) {
   if (t.cover_url)
     return `<img class="lib-cover" src="${esc(t.cover_url)}" width="${size}" height="${size}" alt="" loading="lazy"
               onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-            <div class="lib-cover-ph" style="width:${size}px;height:${size}px;display:none">🎵</div>`;
-  return `<div class="lib-cover-ph" style="width:${size}px;height:${size}px">🎵</div>`;
+            <div class="lib-cover-ph" style="width:${size}px;height:${size}px;display:none">${window.icon('music', Math.round(size*0.45))}</div>`;
+  return `<div class="lib-cover-ph" style="width:${size}px;height:${size}px">${window.icon('music', Math.round(size*0.45))}</div>`;
 }
 function extClass(e){ return ['FLAC','ALAC','WAV','AIFF','AIF'].includes((e||'').toUpperCase()) ? 'lib-ext lossless' : 'lib-ext'; }
 
@@ -334,11 +334,13 @@ function renderHome() {
   if (q) { view='songs'; renderSongs(); return; }
   const artistCount = new Set(ALL_TRACKS.map(t=>t.artist)).size;
   const albumCount  = new Set(ALL_TRACKS.map(t=>t.artist+'\x00'+t.album)).size;
+  // Monochrome icons on a neutral chip: the previous emoji-on-brand-colour
+  // squares introduced four accent colours the design system doesn't have.
   const icons = [
-    {label:'Artists',  icon:'🎤', bg:'#c0392b', count:`${artistCount} artist${artistCount===1?'':'s'}`,  v:'artists'},
-    {label:'Albums',   icon:'💿', bg:'#e67e22', count:`${albumCount} album${albumCount===1?'':'s'}`,    v:'albums'},
-    {label:'Songs',    icon:'🎵', bg:'#e74c3c', count:`${ALL_TRACKS.length} song${ALL_TRACKS.length===1?'':'s'}`, v:'songs'},
-    {label:'Playlists',icon:'📋', bg:'#8e44ad', count:`${ALL_PLAYLISTS.length} playlist${ALL_PLAYLISTS.length===1?'':'s'}`, v:'playlists'},
+    {label:'Artists',  icon:'mic',   count:`${artistCount} artist${artistCount===1?'':'s'}`,  v:'artists'},
+    {label:'Albums',   icon:'disc',  count:`${albumCount} album${albumCount===1?'':'s'}`,    v:'albums'},
+    {label:'Songs',    icon:'music', count:`${ALL_TRACKS.length} song${ALL_TRACKS.length===1?'':'s'}`, v:'songs'},
+    {label:'Playlists',icon:'list',  count:`${ALL_PLAYLISTS.length} playlist${ALL_PLAYLISTS.length===1?'':'s'}`, v:'playlists'},
   ];
   const recent = ALL_TRACKS.filter(t => t.indexed_at)
     .sort((a, b) => (b.indexed_at || '').localeCompare(a.indexed_at || ''))
@@ -357,7 +359,7 @@ function renderHome() {
     `<div class="coll-section-title">Collection</div>` +
     icons.map(i => `
       <div class="coll-row" onclick="navTo('${i.v}')">
-        <div class="coll-icon" style="background:${i.bg}">${i.icon}</div>
+        <div class="coll-icon">${window.icon(i.icon, 20)}</div>
         <span class="coll-label">${i.label}</span>
         <span class="coll-count">${i.count}</span>
         <span class="coll-chevron">›</span>
@@ -402,7 +404,7 @@ function renderArtists() {
       const sub = `${albums.length} album${albums.length===1?'':'s'} · ${tracks.length} track${tracks.length===1?'':'s'}`;
       const aJ  = esc(JSON.stringify(a));
       return `<div class="artist-row" onclick="navTo('artist-albums',{artist:${aJ}})">
-        <div class="artist-avatar">🎤</div>
+        <div class="artist-avatar">${window.icon('mic', 22)}</div>
         <div class="artist-info">
           <div class="artist-name">${esc(a)}</div>
           <div class="artist-sub">${sub}</div>
@@ -441,7 +443,7 @@ function renderArtistAlbums() {
   const html = Object.keys(map).sort().map(al => {
     const {cover_url, tracks:at} = map[al];
     const alJ = esc(JSON.stringify(al));
-    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">💿</div></div>`;
+    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">${window.icon('disc', 26)}</div></div>`;
     return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:ctx.artist,album:${alJ}})">
       ${cover}
       <div class="album-card-title">${esc(al)}</div>
@@ -478,7 +480,7 @@ function renderAlbums() {
   const html = keys.map(k => {
     const {artist,album,cover_url,tracks} = map[k];
     const aJ=esc(JSON.stringify(artist)), alJ=esc(JSON.stringify(album));
-    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">💿</div></div>`;
+    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">${window.icon('disc', 26)}</div></div>`;
     return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:${aJ},album:${alJ}})">
       ${cover}
       <div class="album-card-title">${esc(album)}</div>
@@ -553,18 +555,19 @@ function renderPlaylists() {
     return;
   }
   const q = searchVal();
-  const icons = {spotify:'🟢',apple:'🍎',tidal:'⬛',deezer:'🟠',search:'🔍'};
-  const colors = {spotify:'#1DB954',apple:'#fc3c44',tidal:'#000',deezer:'#EF5466',search:'#555'};
+  // Was a colour emoji on a same-coloured chip — tidal was a black square on
+  // #000, i.e. invisible, and the set failed WCAG AA. One neutral chip, one
+  // monochrome icon; the source is already named in the text below.
+  const srcIcon = {spotify:'disc',apple:'disc',tidal:'disc',deezer:'disc',search:'search'};
   const rows = ALL_PLAYLISTS.filter(p => !q||(p.playlist_name||p.source_url||'').toLowerCase().includes(q)).map(p => {
     const name = p.playlist_name || p.source_url || `Import #${p.id}`;
     const nJ   = esc(JSON.stringify(name));
     const src  = p.source || 'search';
-    const bg   = colors[src] || 'var(--surface3)';
     const done = p.done || 0;
     const total = p.total || 0;
     const prog = total > 0 ? `${done} / ${total} downloaded` : 'no tracks';
     return `<div class="playlist-row" onclick="navTo('playlist-tracks',{jobId:${p.id},name:${nJ}})">
-      <div class="playlist-icon" style="background:${bg}">${icons[src]||'🎵'}</div>
+      <div class="playlist-icon">${window.icon(srcIcon[src] || 'music', 18)}</div>
       <div class="playlist-info">
         <div class="playlist-name">${esc(name)}</div>
         <div class="playlist-sub">${esc(src)} · ${prog}</div>

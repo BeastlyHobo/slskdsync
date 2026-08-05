@@ -8,7 +8,7 @@
 
 {% if not jobs %}
 <div class="empty-state">
-  <div class="empty-icon">📋</div>
+  <div class="empty-icon">{{ ic.icon('list', 40) }}</div>
   <p>No imported playlists yet. Paste a Spotify, TIDAL, or Apple Music URL in the Queue tab.</p>
 </div>
 {% else %}
@@ -87,7 +87,7 @@
           placeholder="Search query…"
           onkeydown="if(event.key==='Enter')plSearch(this,{{ t.id }})">
         <button class="ms-btn" onclick="plSearch(this.previousElementSibling,{{ t.id }})">Search</button>
-        <button class="ms-btn" onclick="aiSuggestPl(this,{{ t.id }})">✨ AI</button>
+        <button class="ms-btn" onclick="aiSuggestPl(this,{{ t.id }})">{{ ic.icon('sparkle', 14) }} AI</button>
         <div class="ai-chips" id="ai-chips-{{ t.id }}"></div>
       </div>
     </div>
@@ -307,7 +307,7 @@ function aiSuggestPl(btn, trackId) {
   fetch(`/api/tracks/${trackId}/ai-suggest`, { method: 'POST' })
     .then(r => r.json())
     .then(d => {
-      btn.disabled = false; btn.textContent = '✨ AI';
+      btn.disabled = false; btn.innerHTML = window.icon('sparkle', 14) + ' AI';
       if (!d.ok) {
         chipsDiv.innerHTML = `<span style="color:var(--err);font-size:.72rem">${esc(d.error)}</span>`;
         return;
@@ -318,7 +318,7 @@ function aiSuggestPl(btn, trackId) {
            onclick="this.closest('.missing-search').querySelector('.ms-input').value=${esc(JSON.stringify(s.q))}">${esc(s.q)}</button>`
       ).join('');
     })
-    .catch(() => { btn.disabled = false; btn.textContent = '✨ AI'; });
+    .catch(() => { btn.disabled = false; btn.innerHTML = window.icon('sparkle', 14) + ' AI'; });
 }
 
 function plSearch(input, trackId) {

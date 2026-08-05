@@ -97,9 +97,9 @@
     {% if t.cover_url %}
       <img class="cover" src="{{ t.cover_url }}" alt="" loading="lazy"
            onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-      <div class="cover-placeholder" style="display:none">🎵</div>
+      <div class="cover-placeholder" style="display:none">{{ ic.icon('music', 18) }}</div>
     {% else %}
-      <div class="cover-placeholder">🎵</div>
+      <div class="cover-placeholder">{{ ic.icon('music', 18) }}</div>
     {% endif %}
     <div class="track-info">
       <div class="track-title">{{ t.title or '—' }}</div>
@@ -152,7 +152,7 @@
       value="{{ t.title or '' }}"
       onkeydown="if(event.key==='Enter')submitSearch(this,{{ t.id }})">
     <button class="ns-btn" onclick="submitSearch(this.previousElementSibling,{{ t.id }})">Search</button>
-    <button class="ns-btn" onclick="aiSuggestQ(this,{{ t.id }})">✨ AI</button>
+    <button class="ns-btn" onclick="aiSuggestQ(this,{{ t.id }})">{{ ic.icon('sparkle', 14) }} AI</button>
     <div class="ai-chips" id="ai-chips-{{ t.id }}"></div>
   </div>
   {% endif %}
@@ -186,14 +186,14 @@
 
 {% if not active_tracks and not done_tracks %}
 <div class="empty-state">
-  <div class="empty-icon">📭</div>
+  <div class="empty-icon">{{ ic.icon('inbox', 40) }}</div>
   <p>No tracks in queue yet.</p>
 </div>
 {% endif %}
 
 {% else %}
 <div class="empty-state">
-  <div class="empty-icon">📭</div>
+  <div class="empty-icon">{{ ic.icon('inbox', 40) }}</div>
   <p>No tracks in queue yet.<br>Search for music or paste a playlist URL above.</p>
 </div>
 {% endif %}
@@ -311,7 +311,7 @@ function aiSuggestQ(btn, trackId) {
   fetch(`/api/tracks/${trackId}/ai-suggest`, { method: 'POST' })
     .then(r => r.json())
     .then(d => {
-      btn.disabled = false; btn.textContent = '✨ AI';
+      btn.disabled = false; btn.innerHTML = window.icon('sparkle', 14) + ' AI';
       if (!d.ok) {
         chipsDiv.innerHTML = `<span style="color:var(--err);font-size:.72rem">${esc(d.error)}</span>`;
         return;
@@ -322,7 +322,7 @@ function aiSuggestQ(btn, trackId) {
            onclick="this.closest('.needs-search-panel').querySelector('.ns-input').value=${esc(JSON.stringify(s.q))}">${esc(s.q)}</button>`
       ).join('');
     })
-    .catch(() => { btn.disabled = false; btn.textContent = '✨ AI'; });
+    .catch(() => { btn.disabled = false; btn.innerHTML = window.icon('sparkle', 14) + ' AI'; });
 }
 
 // ── Swipe gesture (left = delete, right = retry) ──
