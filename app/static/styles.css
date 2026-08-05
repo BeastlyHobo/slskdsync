@@ -95,7 +95,7 @@
   --fs-title:       1.15rem;
   --fs-headline:    .95rem;
   --fs-body:        .85rem;
-  --fs-caption:     .72rem;
+  --fs-caption:     .75rem;   /* 12px floor — was .72rem (11.52px) */
 
   color-scheme: dark;
 }
@@ -204,7 +204,7 @@ a:hover { text-decoration: underline; }
 }
 
 .sidebar-status {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   color: var(--text-faint);
   display: flex;
   align-items: center;
@@ -385,7 +385,7 @@ main {
   justify-content: center;
   color: var(--text-muted);
   text-decoration: none;
-  font-size: 0.56rem;
+  font-size: 0.6875rem;
   font-weight: 600;
   gap: 3px;
   letter-spacing: 0.02em;
@@ -441,7 +441,7 @@ main {
 }
 
 .label {
-  font-size: 0.66rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.10em;
@@ -460,7 +460,7 @@ main {
 }
 
 .section-label {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -491,7 +491,7 @@ main {
   padding: 0.32rem 0.8rem;
   border: 1.5px solid transparent;
   border-radius: var(--radius-pill);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
@@ -555,7 +555,7 @@ main {
 /* Small button */
 .btn-sm {
   padding: 5px 11px;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 /* Legacy gradient button (compat) */
@@ -577,7 +577,7 @@ main {
 .q-btn {
   padding: 6px 14px;
   border-radius: var(--radius-pill);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 700;
   background: var(--surface2);
   color: var(--text-muted);
@@ -801,11 +801,11 @@ main {
 .track-error {
   color: var(--err) !important;
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
 }
 
 .track-dur {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
   flex-shrink: 0;
   font-family: var(--font-mono);
@@ -912,11 +912,17 @@ main {
   .row-actions { display: flex; }
   .swipe-row:hover .row-actions { opacity: 1; pointer-events: auto; }
   .swipe-row:has(.track-card.expanded) .row-actions { display: none; }
+  /* The actions are absolutely positioned into the badge's slot, so without
+     this the two render on top of each other and neither is readable.
+     Cross-fade instead: badge out, actions in. */
+  .badge { transition: opacity .15s; }
+  .swipe-row:hover .badge { opacity: 0; }
+  .swipe-row:has(.track-card.expanded):hover .badge { opacity: 1; }
 }
 
 /* Queue card detail panel */
 .detail-row {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
   line-height: 1.6;
   word-break: break-all;
@@ -931,7 +937,7 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--accent);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
   font-family: var(--font-ui);
@@ -983,7 +989,7 @@ main {
   gap: 5px;
   padding: 4px 9px;
   border-radius: var(--radius-pill);
-  font-size: 0.62rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1014,7 +1020,7 @@ main {
 
 /* AcoustID confidence badges */
 .aid-badge {
-  font-size: 0.62rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   border-radius: var(--radius-pill);
   padding: 2px 7px;
@@ -1058,7 +1064,7 @@ main {
   align-items: center;
   padding: 1px 6px;
   border-radius: var(--radius-pill);
-  font-size: 0.6rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   background: var(--ok-bg);
   color: var(--ok);
@@ -1204,7 +1210,7 @@ main {
 .gcard-sub,
 .album-card-sub,
 .album-sub {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -1232,7 +1238,7 @@ main {
 
 /* ── Library rows ───────────────────────────────────────── */
 .lib-section-hdr {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 800;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -1243,7 +1249,7 @@ main {
 
 /* Collection home menu */
 .coll-section-title {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1282,7 +1288,7 @@ main {
 }
 
 .coll-count {
-  font-size: 0.73rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
 }
 
@@ -1325,7 +1331,7 @@ main {
 }
 
 .artist-sub {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -1347,7 +1353,7 @@ main {
 }
 
 .az-letter {
-  font-size: 0.58rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   color: var(--accent);
   cursor: pointer;
@@ -1359,7 +1365,7 @@ main {
 .az-letter:hover { opacity: 0.6; }
 
 .az-section-hdr {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 800;
   color: var(--accent);
   letter-spacing: 0.04em;
@@ -1417,7 +1423,7 @@ main {
 }
 
 .lib-row-sub {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -1433,7 +1439,7 @@ main {
 }
 
 .lib-ext {
-  font-size: 0.58rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   padding: 2px 5px;
   background: var(--surface3);
@@ -1448,7 +1454,7 @@ main {
 .lib-sm-btn {
   padding: 3px 8px;
   border-radius: var(--radius-sm);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   background: var(--surface3);
   color: var(--text-muted);
@@ -1546,7 +1552,7 @@ main {
 }
 
 #aid-progress-text {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
   white-space: nowrap;
   font-family: var(--font-mono);
@@ -1578,7 +1584,7 @@ main {
 
 .playlist-info { flex: 1; min-width: 0; }
 .playlist-name { font-size: 0.9rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.playlist-sub  { font-size: 0.72rem; color: var(--text-muted); margin-top: 1px; }
+.playlist-sub  { font-size: 0.75rem; color: var(--text-muted); margin-top: 1px; }
 
 /* ── Search page ────────────────────────────────────────── */
 .tab-bar {
@@ -1748,7 +1754,7 @@ main {
 
 .top-track-num {
   width: 20px;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-faint);
   text-align: center;
   flex-shrink: 0;
@@ -1757,8 +1763,8 @@ main {
 
 .top-track-info { flex: 1; min-width: 0; }
 .top-track-title { font-size: 0.9rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.top-track-album { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.top-track-dur { font-size: 0.72rem; color: var(--text-muted); flex-shrink: 0; font-family: var(--font-mono); }
+.top-track-album { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top-track-dur { font-size: 0.75rem; color: var(--text-muted); flex-shrink: 0; font-family: var(--font-mono); }
 
 /* Album detail page */
 .album-header {
@@ -1883,14 +1889,14 @@ main {
 }
 
 .pl-sub {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
   margin-top: 3px;
 }
 
 .pl-source-badge,
 .pl-src-badge {
-  font-size: 0.65rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   padding: 0.15rem 0.5rem;
   border-radius: var(--radius-pill);
@@ -1927,14 +1933,14 @@ main {
 }
 
 .pl-counts {
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   color: var(--text-muted);
   white-space: nowrap;
   font-family: var(--font-mono);
 }
 
 .pl-fix-badge {
-  font-size: 0.62rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   padding: 2px 7px;
   border-radius: var(--radius-pill);
@@ -1966,7 +1972,7 @@ main {
 .pl-regen-btn {
   padding: 5px 12px;
   border-radius: var(--radius-pill);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 700;
   background: var(--surface2);
   color: var(--text-muted);
@@ -1985,7 +1991,7 @@ main {
 }
 
 .pl-regen-result {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-faint);
   font-family: var(--font-mono);
 }
@@ -2020,7 +2026,7 @@ main {
 }
 
 .missing-sub {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -2052,7 +2058,7 @@ main {
 .ms-btn {
   padding: 5px 10px;
   border-radius: var(--radius-sm);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 700;
   background: var(--accent-strong);
   color: var(--accent-contrast);
@@ -2139,7 +2145,7 @@ main {
 }
 
 .shelf-tile-sub {
-  font-size: 0.66rem;
+  font-size: 0.6875rem;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2184,7 +2190,7 @@ main {
 .btn-tile-slsk {
   padding: 5px 12px;
   border-radius: var(--radius-pill);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 700;
   background: color-mix(in oklab, var(--accent), transparent 80%);
   color: var(--accent);
@@ -2197,7 +2203,7 @@ main {
 .btn-tile-mono {
   padding: 5px 12px;
   border-radius: var(--radius-pill);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 700;
   background: var(--surface3);
   color: var(--text-muted);
@@ -2247,7 +2253,7 @@ main {
 .settings-group-title .settings-test-btn {
   padding: 4px 12px;
   border-radius: var(--radius-pill);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 700;
   background: var(--surface2);
   color: var(--text-muted);
@@ -2314,7 +2320,7 @@ main {
 .field textarea { resize: vertical; min-height: 80px; font-family: var(--font-mono); font-size: 0.8rem; }
 
 .field-hint {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-faint);
   margin-top: 4px;
   font-family: var(--font-mono);
@@ -2349,7 +2355,7 @@ main {
 
 .log-toolbar-btn {
   padding: 3px 10px;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 600;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border);
@@ -2366,7 +2372,7 @@ main {
 
 .log-count {
   margin-left: auto;
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   color: var(--text-faint);
   font-family: var(--font-mono);
 }
@@ -2376,7 +2382,7 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   color: var(--text-muted);
   padding: 0.5rem 0.6rem;
   max-height: 420px;
@@ -2439,7 +2445,7 @@ main {
 }
 
 .auth-note {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-faint);
   margin-top: 14px;
   line-height: 1.4;
@@ -2555,7 +2561,7 @@ main {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
   margin-bottom: 10px;
   padding: 5px 10px;
@@ -2609,7 +2615,7 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
   font-family: var(--font-ui);
@@ -2640,7 +2646,7 @@ main {
 .hint a { color: var(--accent); }
 .hint code { font-family: var(--font-mono); font-size: 0.8em; background: var(--surface2); padding: 1px 4px; border-radius: 4px; }
 
-.optional-label { font-size: 0.7rem; color: var(--text-muted); font-weight: 400; }
+.optional-label { font-size: 0.75rem; color: var(--text-muted); font-weight: 400; }
 
 /* Live log — colour-coded levels */
 .log-line     { white-space: pre-wrap; word-break: break-all; }
@@ -2705,7 +2711,7 @@ main {
 }
 
 .radio-label {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
   margin-bottom: 0.4rem;
   font-weight: 700;
@@ -2715,7 +2721,7 @@ main {
   background: var(--surface2);
   color: var(--accent);
   border: 1.5px solid var(--border);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   padding: 0.3rem 0.6rem;
   border-radius: var(--radius-pill);
   font-weight: 700;
