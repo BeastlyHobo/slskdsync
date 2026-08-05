@@ -4,3 +4,11 @@ __pycache__/
 app/data/
 library/
 downloads/
+
+# Third-party agent skills installed by `npx skills add` (payload in .agents/,
+# symlinked into .claude/skills/). Kept local so they can't be swept into a
+# commit by `git add -A`. The repo's own slskdsync-dev skill stays tracked.
+/.agents/
+/skills-lock.json
+/.claude/skills/*
+!/.claude/skills/slskdsync-dev/
