@@ -187,14 +187,18 @@
 {% if not active_tracks and not done_tracks %}
 <div class="empty-state">
   <div class="empty-icon">{{ ic.icon('inbox', 40) }}</div>
-  <p>No tracks in queue yet.</p>
+  <h2 class="empty-title">Nothing queued</h2>
+  <p>Paste a Spotify, TIDAL, or Apple Music link above to import a playlist.</p>
+  <a class="empty-action" href="/search">Search for music</a>
 </div>
 {% endif %}
 
 {% else %}
 <div class="empty-state">
   <div class="empty-icon">{{ ic.icon('inbox', 40) }}</div>
-  <p>No tracks in queue yet.<br>Search for music or paste a playlist URL above.</p>
+  <h2 class="empty-title">Nothing queued</h2>
+  <p>Paste a Spotify, TIDAL, or Apple Music link above to import a playlist.</p>
+  <a class="empty-action" href="/search">Search for music</a>
 </div>
 {% endif %}
 
@@ -313,11 +317,11 @@ function aiSuggestQ(btn, trackId) {
     .then(d => {
       btn.disabled = false; btn.innerHTML = window.icon('sparkle', 14) + ' AI';
       if (!d.ok) {
-        chipsDiv.innerHTML = `<span style="color:var(--err);font-size:.72rem">${esc(d.error)}</span>`;
+        chipsDiv.innerHTML = `<span style="color:var(--err);font-size:.75rem">${esc(d.error)}</span>`;
         return;
       }
       chipsDiv.innerHTML = d.suggestions.map(s =>
-        `<button class="af-chip" style="margin:.2rem .2rem 0 0;font-size:.7rem"
+        `<button class="af-chip" style="margin:.2rem .2rem 0 0;font-size:.75rem"
            title="${esc(s.why)}"
            onclick="this.closest('.needs-search-panel').querySelector('.ns-input').value=${esc(JSON.stringify(s.q))}">${esc(s.q)}</button>`
       ).join('');

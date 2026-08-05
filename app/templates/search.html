@@ -242,7 +242,7 @@ function trackCardHtml(t, hideDrillLinks) {
   const badge = inLib ? ' <span class="in-lib-badge">✓ Library</span>'
               : queued ? ' <span class="in-lib-badge">⏳ Queued</span>' : '';
   const dlBtns = queued
-    ? `<span style="color:var(--text-muted);font-size:.72rem;white-space:nowrap">⏳ In queue</span>`
+    ? `<span style="color:var(--text-muted);font-size:.75rem;white-space:nowrap">⏳ In queue</span>`
     : `
       <button class="btn btn-slsk dl-btn"
         data-source="slskd"
@@ -329,7 +329,7 @@ function renderArtistPage(data) {
       const inLib = libIndex.has(libKey);
       const queued = !inLib && queuedIndex.has(libKey);
       const btns = queued
-        ? `<span style="color:var(--text-muted);font-size:.7rem;white-space:nowrap">⏳ queued</span>`
+        ? `<span style="color:var(--text-muted);font-size:.75rem;white-space:nowrap">⏳ queued</span>`
         : `
           <button class="btn btn-slsk dl-btn" data-source="slskd"
             data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"

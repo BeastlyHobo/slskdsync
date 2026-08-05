@@ -9,7 +9,9 @@
 {% if not needs and not flagged and not low %}
 <div class="empty-state">
   <div class="empty-icon">{{ ic.icon('check', 40) }}</div>
-  <p>Nothing needs attention. Everything downloaded, verified, and unflagged.</p>
+  <h2 class="empty-title">All clear</h2>
+  <p>Every track downloaded, fingerprint-verified, and unflagged.</p>
+  <a class="empty-action quiet" href="/library">Browse library</a>
 </div>
 {% endif %}
 
@@ -92,9 +94,9 @@
 .att-head { display:flex; align-items:center; gap:.6rem; margin-bottom:.15rem; }
 .att-title { font-size:.92rem; font-weight:700; }
 .att-count { display:inline-block; background:var(--surface2); border:1px solid var(--border);
-  border-radius:var(--radius-pill); font-size:.7rem; padding:.05rem .5rem; margin-left:.25rem;
+  border-radius:var(--radius-pill); font-size:0.75rem; padding:.05rem .5rem; margin-left:.25rem;
   color:var(--text-muted); }
-.att-hint { font-size:.72rem; color:var(--text-faint); margin:0 0 .55rem; }
+.att-hint { font-size:0.75rem; color:var(--text-faint); margin:0 0 .55rem; }
 .att-row { background:var(--surface); border:1px solid var(--border);
   border-radius:var(--radius-sm); padding:.55rem .7rem; margin-bottom:.45rem; }
 .att-row.done { opacity:.45; }
@@ -174,9 +176,9 @@ function aiSuggest(btn, trackId) {
   return fetch(`/api/tracks/${trackId}/ai-suggest`, { method:'POST' })
     .then(r=>r.json()).then(d => {
       btn.disabled = false; btn.innerHTML = window.icon('sparkle', 14) + ' AI';
-      if (!d.ok) { chipsDiv.innerHTML = `<span style="color:var(--err);font-size:.72rem">${esc(d.error)}</span>`; return; }
+      if (!d.ok) { chipsDiv.innerHTML = `<span style="color:var(--err);font-size:.75rem">${esc(d.error)}</span>`; return; }
       chipsDiv.innerHTML = d.suggestions.map(s =>
-        `<button class="af-chip" style="margin:.2rem .2rem 0 0;font-size:.7rem" title="${esc(s.why)}"
+        `<button class="af-chip" style="margin:.2rem .2rem 0 0;font-size:.75rem" title="${esc(s.why)}"
            onclick="this.closest('.missing-search').querySelector('.ms-input').value=${esc(JSON.stringify(s.q))}">${esc(s.q)}</button>`
       ).join('');
     })

@@ -10,7 +10,7 @@
             padding:.6rem .9rem;font-size:.78rem;color:var(--text-muted);margin-bottom:.75rem">
   Library not yet indexed.
   <button onclick="triggerScan(this)" style="margin-left:.5rem;background:var(--accent);color:#080810;
-    border:none;border-radius:var(--radius-pill);padding:.2rem .7rem;font-size:.72rem;font-weight:700;cursor:pointer">
+    border:none;border-radius:var(--radius-pill);padding:.2rem .7rem;font-size:.75rem;font-weight:700;cursor:pointer">
     Scan now
   </button>
 </div>
@@ -26,7 +26,7 @@
   </div>
   <div style="display:flex;gap:.4rem;align-items:center">
     <input id="lib-search" type="search" placeholder="Search library…" oninput="applyFilters()" style="flex:1">
-    <select id="lib-sort" style="display:none;font-size:.72rem;padding:.3rem .5rem;background:var(--surface2);
+    <select id="lib-sort" style="display:none;font-size:.75rem;padding:.3rem .5rem;background:var(--surface2);
             color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer"
             onchange="setSortBy(this.value)">
       <option value="title">Title A–Z</option>
@@ -71,7 +71,7 @@
 <div id="verify-row" style="display:none">
   <button id="verify-view-btn" class="lib-sm-btn" onclick="verifyCurrentView()">↻ Verify all in view</button>
   <div id="aid-progress-wrap" style="flex:1;display:none">
-    <div style="font-size:.7rem;color:var(--text-muted);margin-bottom:.15rem">
+    <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.15rem">
       <span id="aid-progress-text">Identifying…</span>
     </div>
     <div class="aid-progress-bar-wrap">
@@ -137,7 +137,7 @@
   font-size:.8rem; font-family:var(--font-mono); }
 .tm-redl-row input:focus { border-color:var(--accent); outline:none; }
 .tm-redl-row .lib-sm-btn { flex-shrink:0; white-space:nowrap; }
-.tm-hint { font-size:.68rem; color:var(--text-faint); margin-top:.45rem; line-height:1.4; }
+.tm-hint { font-size:0.6875rem; color:var(--text-faint); margin-top:.45rem; line-height:1.4; }
 .tm-result { font-size:.76rem; margin-top:.5rem; }
 .tm-flag { width:100%; margin-bottom:.9rem; }
 .tm-flag.on { background:var(--err); color:#fff; border-color:transparent; }
@@ -147,9 +147,9 @@
   -webkit-overflow-scrolling:touch; }
 .recent-card { width:96px; flex-shrink:0; cursor:pointer; }
 .recent-card .lib-cover, .recent-card .lib-cover-ph { border-radius:var(--radius-sm); }
-.rc-title { font-size:.7rem; font-weight:600; margin-top:.3rem; white-space:nowrap;
+.rc-title { font-size:0.75rem; font-weight:600; margin-top:.3rem; white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis; }
-.rc-sub { font-size:.64rem; color:var(--text-muted); white-space:nowrap;
+.rc-sub { font-size:0.6875rem; color:var(--text-muted); white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis; }
 .bad-mark { color:var(--err); font-size:.82rem; }
 .lib-row.bad .lib-row-title { color:var(--err); }
@@ -307,7 +307,7 @@ function extClass(e){ return ['FLAC','ALAC','WAV','AIFF','AIF'].includes((e||'')
 function trackRowHtml(t, showArtist=true) {
   const sub = showArtist ? `${esc(t.artist)}${t.album?' · '+esc(t.album):''}` : esc(t.album||'');
   const verifyBtn = t.id!=null
-    ? `<button class="lib-sm-btn" style="font-size:.6rem;padding:.15rem .4rem" title="Verify"
+    ? `<button class="lib-sm-btn" style="font-size:.75rem;padding:.25rem .5rem" title="Verify"
          onclick="event.stopPropagation();verifyLib('track',{id:${t.id}},this)">↻ ID</button>` : '';
   return `<div class="lib-row${t.user_rating===1?' flagged':''}${t.flagged_bad?' bad':''}" data-path="${esc(t.path)}"${t.id!=null?` data-tid="${t.id}"`:''} onclick="showTrackInfo(this)" style="cursor:pointer">
     ${coverHtml(t)}
@@ -320,7 +320,7 @@ function trackRowHtml(t, showArtist=true) {
       ${aidBadgeHtml(t.acoustid_score)}
       <span class="${extClass(t.ext)}">${esc(t.ext||'?')}</span>
       ${verifyBtn}
-      <button class="lib-sm-btn" style="font-size:.6rem;padding:.15rem .4rem" title="Re-download"
+      <button class="lib-sm-btn" style="font-size:.75rem;padding:.25rem .5rem" title="Re-download"
         onclick="event.stopPropagation();redownload(this,${esc(JSON.stringify(t.artist))},${esc(JSON.stringify(t.album))},${esc(JSON.stringify(t.title))})">↺</button>
     </div>
   </div>`;
@@ -450,7 +450,7 @@ function renderArtistAlbums() {
       <div class="album-card-sub">${at.length} track${at.length===1?'':'s'}</div>
       <div class="album-card-actions">
         ${aidBadgeHtml(groupWorstAid(at))}
-        <button class="lib-sm-btn" style="margin-left:auto;font-size:.6rem;padding:.15rem .4rem"
+        <button class="lib-sm-btn" style="margin-left:auto;font-size:.75rem;padding:.25rem .5rem"
           onclick="event.stopPropagation();verifyLib('album',{artist:${aJ},album:${alJ}},this)">↻</button>
       </div>
     </div>`;
@@ -487,7 +487,7 @@ function renderAlbums() {
       <div class="album-card-sub">${esc(artist)}</div>
       <div class="album-card-actions">
         ${aidBadgeHtml(groupWorstAid(tracks))}
-        <button class="lib-sm-btn" style="margin-left:auto;font-size:.6rem;padding:.15rem .4rem"
+        <button class="lib-sm-btn" style="margin-left:auto;font-size:.75rem;padding:.25rem .5rem"
           onclick="event.stopPropagation();verifyLib('album',{artist:${aJ},album:${alJ}},this)">↻</button>
       </div>
     </div>`;
@@ -541,7 +541,7 @@ function renderSongs() {
        </div>`
     : '';
   document.getElementById('lib-content').innerHTML = sorted.length
-    ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${sorted.length} song${sorted.length===1?'':'s'}</div>`
+    ? `<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.35rem">${sorted.length} song${sorted.length===1?'':'s'}</div>`
       + visible.map(t=>trackRowHtml(t)).join('') + moreBtn
     : '<div class="empty-lib">No songs match.</div>';
 }
@@ -555,9 +555,10 @@ function renderPlaylists() {
     return;
   }
   const q = searchVal();
-  // Was a colour emoji on a same-coloured chip — tidal was a black square on
-  // #000, i.e. invisible, and the set failed WCAG AA. One neutral chip, one
-  // monochrome icon; the source is already named in the text below.
+  // Was a colour emoji on a same-coloured chip — the tidal one paired a black
+  // square glyph with a pure black background, i.e. invisible, and the set
+  // failed WCAG AA contrast. Now one neutral chip with a monochrome icon; the
+  // source name is already shown in the text beside it.
   const srcIcon = {spotify:'disc',apple:'disc',tidal:'disc',deezer:'disc',search:'search'};
   const rows = ALL_PLAYLISTS.filter(p => !q||(p.playlist_name||p.source_url||'').toLowerCase().includes(q)).map(p => {
     const name = p.playlist_name || p.source_url || `Import #${p.id}`;
@@ -610,7 +611,7 @@ function renderPlaylistTracks() {
         aidPassesFilter(t.acoustid_score) && ratingPassesFilter(t.user_rating) &&
         fmtPassesFilter(t.ext) && badPassesFilter(t));
       document.getElementById('lib-content').innerHTML = f.length
-        ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${_plTracks.length} track${_plTracks.length===1?'':'s'}</div>`
+        ? `<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.35rem">${_plTracks.length} track${_plTracks.length===1?'':'s'}</div>`
           + f.map(t=>trackRowHtml(t)).join('')
         : `<div class="empty-lib">${_plTracks.length} track${_plTracks.length===1?'':'s'} downloaded but none match the current filter.</div>`;
     }).catch(()=>{ document.getElementById('lib-content').innerHTML='<div class="empty-lib">Failed to load.</div>'; });

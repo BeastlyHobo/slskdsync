@@ -1304,6 +1304,13 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
   color: var(--text-muted);
 }
 
+/* Figures that change while the page is open (pollers, scan progress, counts)
+   use tabular figures so the text doesn't reflow as digit widths change. */
+.coll-count, .att-count, .aid-badge, .badge, .lib-ext,
+.st-num, .st-bar-val, .q-stat, .in-lib-badge {
+  font-variant-numeric: tabular-nums;
+}
+
 .coll-chevron { color: var(--text-faint); font-size: 0.85rem; }
 
 /* Artist rows */
@@ -2531,7 +2538,40 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
 }
 
 .empty-icon { margin-bottom: 0.85rem; color: var(--text-faint); line-height: 0; }
-.empty-state p { font-size: 0.9rem; line-height: 1.5; }
+.empty-state p {
+  font-size: 0.9rem;
+  line-height: 1.5;
+  /* Hold the sentence to a readable measure rather than the full page width. */
+  max-width: 34ch;
+  margin: 0 auto;
+  text-wrap: pretty;
+}
+.empty-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 .3rem;
+}
+.empty-action {
+  display: inline-block;
+  margin-top: 1.1rem;
+  padding: .5rem 1.1rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: .82rem;
+  font-weight: 700;
+  text-decoration: none;
+  transition: transform .15s, filter .15s;
+}
+.empty-action:hover  { filter: brightness(1.08); }
+.empty-action:active { transform: scale(.97); }
+.empty-action.quiet {
+  background: var(--surface2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  font-weight: 600;
+}
 
 .loading {
   text-align: center;
@@ -2657,7 +2697,9 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
 }
 
 .hint a { color: var(--accent); }
-.hint code { font-family: var(--font-mono); font-size: 0.8em; background: var(--surface2); padding: 1px 4px; border-radius: 4px; }
+/* 0.8em of an already-small .hint landed at 9.6px, and these are values the
+   user has to read and retype ({track_number:02d}, fallback hostnames). */
+.hint code { font-family: var(--font-mono); font-size: 0.6875rem; background: var(--surface2); padding: 1px 4px; border-radius: 4px; }
 
 .optional-label { font-size: 0.75rem; color: var(--text-muted); font-weight: 400; }
 

@@ -9,7 +9,9 @@
 {% if not jobs %}
 <div class="empty-state">
   <div class="empty-icon">{{ ic.icon('list', 40) }}</div>
-  <p>No imported playlists yet. Paste a Spotify, TIDAL, or Apple Music URL in the Queue tab.</p>
+  <h2 class="empty-title">No playlists imported</h2>
+  <p>Import a Spotify, TIDAL, or Apple Music playlist and it will sync here.</p>
+  <a class="empty-action" href="/">Import a playlist</a>
 </div>
 {% else %}
 <div class="pl-list">
@@ -227,7 +229,7 @@ function checkFresh(jobId, btn) {
         <div style="display:flex;align-items:center;gap:.5rem;padding:.3rem 0;border-bottom:1px solid var(--border);font-size:.8rem">
           <div style="flex:1;min-width:0">
             <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
-            <div style="font-size:.7rem;color:var(--text-muted)">${esc(t.artist)}</div>
+            <div style="font-size:.75rem;color:var(--text-muted)">${esc(t.artist)}</div>
           </div>
           <button class="pl-regen-btn nt-q" data-i="${i}" style="color:#5a9aee;border-color:rgba(90,154,238,0.3)">+ Queue</button>
         </div>`).join('');
@@ -309,11 +311,11 @@ function aiSuggestPl(btn, trackId) {
     .then(d => {
       btn.disabled = false; btn.innerHTML = window.icon('sparkle', 14) + ' AI';
       if (!d.ok) {
-        chipsDiv.innerHTML = `<span style="color:var(--err);font-size:.72rem">${esc(d.error)}</span>`;
+        chipsDiv.innerHTML = `<span style="color:var(--err);font-size:.75rem">${esc(d.error)}</span>`;
         return;
       }
       chipsDiv.innerHTML = d.suggestions.map(s =>
-        `<button class="af-chip" style="margin:.2rem .2rem 0 0;font-size:.7rem"
+        `<button class="af-chip" style="margin:.2rem .2rem 0 0;font-size:.75rem"
            title="${esc(s.why)}"
            onclick="this.closest('.missing-search').querySelector('.ms-input').value=${esc(JSON.stringify(s.q))}">${esc(s.q)}</button>`
       ).join('');
