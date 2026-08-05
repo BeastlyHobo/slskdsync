@@ -76,6 +76,7 @@ except ImportError:
     _HAS_ANTHROPIC = False
 from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory, Response, stream_with_context
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.exceptions import HTTPException
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -84,6 +85,8 @@ APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "app.db"
+BACKUP_DIR = DATA_DIR / "backups"
+BACKUP_KEEP = 7
 
 AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".ogg", ".aac", ".wav", ".aif", ".aiff", ".opus", ".wma"}
 
@@ -102,11 +105,42 @@ MONOCHROME_FALLBACK_URLS = [
 def get_conn():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    # timeout= only covers the Python-side connect; busy_timeout makes SQLite
+    # itself wait for a lock rather than raising immediately. With 8 waitress
+    # threads plus the worker and scan threads, contention is routine and an
+    # unhandled "database is locked" surfaces to the user as a 500.
+    conn.execute("PRAGMA busy_timeout=30000")
     # Safe pairing with WAL: worst case on power loss is losing the last
     # commit(s), never corruption — and it drops an fsync from every commit
     # (the worker commits many times per 20s tick).
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
+
+
+def backup_db():
+    """Snapshot app.db into DATA_DIR/backups and prune to the newest BACKUP_KEEP.
+
+    app.db is the only copy of every import, setting, flag and history row —
+    nothing else in the stack stores them — so losing the file loses all of it.
+    """
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    dest = BACKUP_DIR / f"app-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.db"
+    # VACUUM INTO refuses to overwrite, and the name is only second-granular,
+    # so clear any same-second file (or a partial left by a crashed run) first.
+    dest.unlink(missing_ok=True)
+    conn = get_conn()
+    try:
+        # VACUUM INTO writes a consistent snapshot of a live WAL database;
+        # copying the file directly can catch a torn state between db and WAL.
+        conn.execute("VACUUM INTO ?", (str(dest),))
+    finally:
+        conn.close()
+    # Timestamped names sort chronologically, so the oldest are simply first.
+    stale = sorted(BACKUP_DIR.glob("app-*.db"))[:-BACKUP_KEEP]
+    for f in stale:
+        f.unlink(missing_ok=True)
+    logger.info(f"[backup] wrote {dest.name} ({dest.stat().st_size // 1024} KiB), pruned {len(stale)}")
+    return dest
 
 
 def init_db():
@@ -316,9 +350,11 @@ def is_first_run() -> bool:
 def get_auth_credentials() -> tuple[str, str]:
     """Return (username, password_hash) from DB if set, else from env."""
     db_hash = get_setting("app_password_hash")
-    db_user = get_setting("app_username")
-    if db_hash and db_user:
-        return db_user, db_hash
+    if db_hash:
+        # Keyed on the hash alone, matching is_first_run(). If the username was
+        # blanked by a bad settings save we default it rather than falling
+        # through to the built-in admin/admin, which would be a silent unlock.
+        return (get_setting("app_username") or os.getenv("APP_USER", "admin")), db_hash
     env_hash = os.getenv("APP_PASSWORD_HASH") or generate_password_hash(os.getenv("APP_PASSWORD", "admin"))
     env_user = os.getenv("APP_USER", "admin")
     return env_user, env_hash
@@ -1816,6 +1852,7 @@ def run_worker(stop_event: threading.Event):
     logger.info("Worker started")
     _scan_running = False
     _psync_running = False
+    _backup_running = False
 
     def _maybe_scan():
         nonlocal _scan_running
@@ -1875,13 +1912,44 @@ def run_worker(stop_event: threading.Event):
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _maybe_backup():
+        nonlocal _backup_running
+        if _backup_running:
+            return
+        last = get_setting("last_db_backup") or ""
+        if last:
+            try:
+                if (datetime.utcnow() - datetime.fromisoformat(last)).total_seconds() < 24 * 3600:
+                    return
+            except ValueError:
+                pass
+        _backup_running = True
+
+        def _run():
+            nonlocal _backup_running
+            try:
+                # Stamp first, like _maybe_scan, so a persistently failing
+                # backup retries tomorrow rather than every 20s tick.
+                set_setting("last_db_backup", datetime.utcnow().isoformat(timespec="seconds"))
+                backup_db()
+            except Exception as ex:
+                logger.error(f"[backup] failed: {ex}")
+            finally:
+                _backup_running = False
+
+        threading.Thread(target=_run, daemon=True).start()
+
     while not stop_event.is_set():
-        try:
-            _worker_tick()
-        except Exception as ex:
-            logger.error(f"Worker tick error: {ex}")
-        _maybe_scan()
-        _maybe_sync_playlists()
+        # Guard each step separately. Only _worker_tick used to be wrapped, so
+        # an exception from any _maybe_* -- a transient "database is locked" in
+        # get_setting is enough -- killed the worker thread outright and
+        # silently stopped all downloads until the process restarted. Separate
+        # try blocks also stop one failing step from skipping the others.
+        for step in (_worker_tick, _maybe_scan, _maybe_sync_playlists, _maybe_backup):
+            try:
+                step()
+            except Exception as ex:
+                logger.error(f"Worker step {step.__name__} error: {ex}")
         time.sleep(20)
 
 
@@ -2369,10 +2437,16 @@ def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str,
 def scan_library() -> None:
     """Index the music library into library_index for dedup checks.
     Uses Navidrome's Subsonic API if configured, falls back to filesystem walk."""
+    # Claim the slot first: every /api/library/scan POST spawns a thread, so two
+    # clicks (or a click during the nightly scan) otherwise run two full
+    # Navidrome paginations at once and clobber each other's _scan_state.
+    with _scan_state_lock:
+        if _scan_state.get("in_progress"):
+            logger.info("[library] Scan already in progress — ignoring duplicate request")
+            return
+        _scan_state.update({"in_progress": True, "count": 0, "source": "", "last_at": ""})
     # Write timestamp before we start so even a failed scan resets the 24h cooldown.
     set_setting("last_library_scan", datetime.utcnow().isoformat(timespec="seconds"))
-    with _scan_state_lock:
-        _scan_state.update({"in_progress": True, "count": 0, "source": "", "last_at": ""})
 
     rows: list[tuple[str, str, str, str]] = []  # (artist, title, album, path)
     source = "unknown"
@@ -2479,6 +2553,12 @@ def scan_library() -> None:
         logger.error(f"[library] Scan failed: {ex}")
         with _scan_state_lock:
             _scan_state.update({"in_progress": False, "source": source})
+    finally:
+        # Belt and braces: with the guard above, a flag left set by an
+        # unexpected exit would block every future scan for the process
+        # lifetime, so never leave it set.
+        with _scan_state_lock:
+            _scan_state["in_progress"] = False
 
 
 def _record_history(conn, track: sqlite3.Row, path: str, source: str,
@@ -2763,7 +2843,8 @@ def _worker_tick():
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
                          t["track_number"] or 0, t["source_id"] or "")
-        custom = (t["custom_search"] or "").strip()
+        custom_raw = t["custom_search"] or ""      # guard compares the raw column
+        custom = custom_raw.strip()
         attempt = t["slskd_search_attempt"] or 0
         if custom:
             logger.info(f"[slskd] Custom search: {custom!r}")
@@ -2776,18 +2857,27 @@ def _worker_tick():
             query = SlskdClient._build_query(meta.artist, meta.title)
             logger.info(f"[slskd] Starting search: {query!r}")
             ok, search_id, msg = slskd.start_search(meta)
+        # start_search* is a network call, so the user may have hit retry while
+        # it was in flight -- which also leaves the row 'pending', just with a
+        # different custom_search/attempt. Match the values we actually read so
+        # a stale write-back can't discard their new query; the row stays
+        # pending and the next tick picks it up with their intent.
+        guard = " WHERE id=? AND slskd_state='pending'" \
+                " AND IFNULL(custom_search,'')=? AND IFNULL(slskd_search_attempt,0)=?"
         if ok:
             logger.info(f"[slskd] Search queued (id={search_id}): {meta.title}")
-            conn.execute(
+            done = conn.execute(
                 "UPDATE tracks SET slskd_state='queued', slskd_search_id=?,"
-                " slskd_error=NULL, slskd_queued_at=datetime('now'), custom_search=NULL WHERE id=?",
-                (search_id, t["id"]),
-            )
+                " slskd_error=NULL, slskd_queued_at=datetime('now'), custom_search=NULL" + guard,
+                (search_id, t["id"], custom_raw, attempt),
+            ).rowcount
+            if not done:
+                logger.info(f"[slskd] Track {t['id']} changed mid-search — dropping stale write-back")
         else:
             logger.warning(f"[slskd] Search failed for '{meta.title}': {msg}")
             conn.execute(
-                "UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
-                (f"slskd: {msg}", t["id"]),
+                "UPDATE tracks SET slskd_state='failed', slskd_error=?" + guard,
+                (f"slskd: {msg}", t["id"], custom_raw, attempt),
             )
         conn.commit()
 
@@ -3152,6 +3242,20 @@ def _resolve_path(stored: str, artist: str = "", title: str = "",
 
 
 def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
+    """Fingerprint-verify a batch of rows, always releasing the progress slot."""
+    try:
+        _run_lib_acoustid_inner(ids, table)
+    except Exception:
+        # Previously an unreadable file or an AcoustID network error escaped
+        # here and left in_progress set, so the verify button 409'd until the
+        # process restarted.
+        logger.exception("[AcoustID] verification run failed")
+    finally:
+        with _lib_acoustid_lock:
+            _lib_acoustid_state["in_progress"] = False
+
+
+def _run_lib_acoustid_inner(ids: list, table: str = "library_index") -> None:
     """Fingerprint-verify a batch of rows from library_index or tracks."""
     logger.info(f"[AcoustID] starting verification for {len(ids)} tracks in {table}")
     # library_index stores the file path in `path`; tracks stores it in `local_path`.
@@ -3216,8 +3320,6 @@ def _run_lib_acoustid(ids: list, table: str = "library_index") -> None:
             conn.close()
         with _lib_acoustid_lock:
             _lib_acoustid_state["done"] += 1
-    with _lib_acoustid_lock:
-        _lib_acoustid_state["in_progress"] = False
     logger.info(f"[AcoustID] verification complete for {len(ids)} tracks")
 
 def _app_secret() -> str:
@@ -3250,6 +3352,14 @@ def _app_secret() -> str:
 app = Flask(__name__)
 app.secret_key = _app_secret()
 app.permanent_session_lifetime = timedelta(days=30)
+# Lax stops the session cookie riding along on cross-site requests, which
+# blocks the drive-by CSRF that matters here. Secure is opt-in via env because
+# defaulting it on would break plain-HTTP access over the LAN.
+app.config.update(
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "").lower() in ("1", "true", "yes"),
+)
 
 init_db()
 
@@ -3268,7 +3378,46 @@ def is_authed() -> bool:
     return session.get("authed") is True
 
 
-UNPROTECTED = {"/login", "/setup", "/sw.js", "/manifest.json"}
+def _json_body() -> dict:
+    """Request JSON as a dict.
+
+    Plain request.get_json() raises 415 when the caller omits the JSON
+    Content-Type and 400 on a malformed body, and `or {}` never sees either.
+    A non-object payload (a bare list) would then break .get() too.
+    """
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else {}
+
+
+UNPROTECTED = {"/login", "/setup", "/sw.js", "/manifest.json", "/health"}
+
+
+@app.route("/health")
+def health():
+    """Unauthenticated liveness probe for Docker HEALTHCHECK / restart policy."""
+    try:
+        conn = get_conn()
+        conn.execute("SELECT 1 FROM settings LIMIT 1").fetchone()
+        conn.close()
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 503
+    return jsonify({"ok": True, "worker": _worker.is_alive()})
+
+
+@app.errorhandler(Exception)
+def _json_errors(err):
+    """API callers get JSON, not a 500 HTML page.
+
+    Every /api/* consumer is a fetch() that does response.json(); an unhandled
+    exception previously handed it an HTML error page and the UI failed with an
+    opaque parse error instead of showing the reason.
+    """
+    code = err.code if isinstance(err, HTTPException) else 500
+    if not isinstance(err, HTTPException):
+        logger.exception(f"Unhandled error on {request.path}")
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": str(err)}), code
+    return err if isinstance(err, HTTPException) else ("Internal Server Error", 500)
 
 
 @app.before_request
@@ -3461,7 +3610,7 @@ def api_regenerate_m3u(job_id):
     if not job:
         conn.close()
         return jsonify({"ok": False, "error": "Job not found"}), 404
-    playlist_name = (request.get_json() or {}).get("name") or job["playlist_name"] or ""
+    playlist_name = _json_body().get("name") or job["playlist_name"] or ""
     if not playlist_name:
         conn.close()
         return jsonify({"ok": False, "error": "No playlist name configured for this import"}), 400
@@ -3657,7 +3806,11 @@ def _tail_lines(path: Path, n: int) -> list[str]:
 def api_logs():
     """Return the last N log lines. Reads from the log file when available
     (so history survives restarts), falls back to the in-memory buffer."""
-    n = min(int(request.args.get("n", 500)), 2000)
+    try:
+        n = int(request.args.get("n", 500))
+    except ValueError:
+        n = 500
+    n = max(1, min(n, 2000))
     log_file = _LOG_DIR / "app.log"
     if log_file.exists():
         try:
@@ -3927,17 +4080,23 @@ def settings():
         "app_username", "app_password_hash",
     ]
     if request.method == "POST":
+        # Validate before writing anything, so a rejected password can't leave
+        # the earlier keys already saved.
+        new_pw = request.form.get("new_password", "").strip()
+        if new_pw and len(new_pw) < 6:
+            flash("Password must be at least 6 characters", "error")
+            return redirect(url_for("settings"))
         for k in keys:
+            # Never posted directly — it is derived from new_password below.
             if k == "app_password_hash":
-                # Only update password if a new one was typed
-                new_pw = request.form.get("new_password", "").strip()
-                if new_pw:
-                    if len(new_pw) < 6:
-                        flash("Password must be at least 6 characters", "error")
-                        return redirect(url_for("settings"))
-                    set_setting("app_password_hash", generate_password_hash(new_pw))
-            else:
-                set_setting(k, request.form.get(k, ""))
+                continue
+            # Only touch keys the submitted form actually carried. Writing
+            # request.form.get(k, "") unconditionally let a partial form blank
+            # every credential and API key it didn't happen to render.
+            if k in request.form:
+                set_setting(k, request.form[k])
+        if new_pw:
+            set_setting("app_password_hash", generate_password_hash(new_pw))
         flash("Settings saved", "ok")
         return redirect(url_for("settings"))
     return render_template("settings.html", settings={k: get_setting(k) for k in keys}, title="Settings")
@@ -4085,7 +4244,7 @@ def delete_track(track_id):
 @app.route("/api/tracks/<int:track_id>/retry", methods=["POST"])
 def retry_track(track_id):
     """Reset any track to pending, optionally with a custom search query."""
-    data = request.get_json(silent=True) or {}
+    data = _json_body()
     query = (data.get("query") or "").strip()
     conn = get_conn()
     track = conn.execute("SELECT slskd_search_id FROM tracks WHERE id=?", (track_id,)).fetchone()
@@ -4190,6 +4349,9 @@ def api_ai_suggest(track_id):
 
 @app.route("/api/library/scan", methods=["POST"])
 def api_library_scan():
+    with _scan_state_lock:
+        if _scan_state.get("in_progress"):
+            return jsonify({"ok": True, "message": "Library scan already running"})
     threading.Thread(target=scan_library, daemon=True).start()
     return jsonify({"ok": True, "message": "Library scan started in background"})
 
@@ -4250,35 +4412,49 @@ def api_library_acoustid():
     with _lib_acoustid_lock:
         if _lib_acoustid_state["in_progress"]:
             return jsonify({"error": "already running"}), 409
-    data = request.get_json() or {}
-    scope = data.get("scope", "all")
-    conn = get_conn()
-    table = "library_index"
-    if scope == "track":
-        if data.get("id") is None:
-            conn.close()
-            return jsonify({"error": "id required for track scope"}), 400
-        ids = [data["id"]]
-    elif scope == "album":
-        ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM library_index WHERE artist=? AND album=?",
-            (data.get("artist"), data.get("album"))).fetchall()]
-    elif scope == "artist":
-        ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM library_index WHERE artist=?",
-            (data.get("artist"),)).fetchall()]
-    elif scope == "playlist":
-        table = "tracks"
-        ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM tracks WHERE job_id=? AND slskd_state='completed' AND local_path IS NOT NULL",
-            (data.get("job_id"),)).fetchall()]
-    else:
-        ids = [r["id"] for r in conn.execute("SELECT id FROM library_index").fetchall()]
-    conn.close()
-    if not ids:
-        return jsonify({"error": "no tracks matched"}), 404
-    threading.Thread(target=_run_lib_acoustid, args=(ids, table), daemon=True).start()
-    return jsonify({"ok": True, "total": len(ids)})
+        # Claim the slot here rather than at thread start. The id queries below
+        # are slow enough that two concurrent POSTs both cleared the check and
+        # launched duplicate runs, re-fingerprinting every file and racing on
+        # the progress counters.
+        _lib_acoustid_state.update(in_progress=True, done=0, total=0)
+    started = False
+    try:
+        data = _json_body()
+        scope = data.get("scope", "all")
+        conn = get_conn()
+        table = "library_index"
+        if scope == "track":
+            if data.get("id") is None:
+                conn.close()
+                return jsonify({"error": "id required for track scope"}), 400
+            ids = [data["id"]]
+        elif scope == "album":
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM library_index WHERE artist=? AND album=?",
+                (data.get("artist"), data.get("album"))).fetchall()]
+        elif scope == "artist":
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM library_index WHERE artist=?",
+                (data.get("artist"),)).fetchall()]
+        elif scope == "playlist":
+            table = "tracks"
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM tracks WHERE job_id=? AND slskd_state='completed' AND local_path IS NOT NULL",
+                (data.get("job_id"),)).fetchall()]
+        else:
+            ids = [r["id"] for r in conn.execute("SELECT id FROM library_index").fetchall()]
+        conn.close()
+        if not ids:
+            return jsonify({"error": "no tracks matched"}), 404
+        threading.Thread(target=_run_lib_acoustid, args=(ids, table), daemon=True).start()
+        started = True
+        return jsonify({"ok": True, "total": len(ids)})
+    finally:
+        # Release the claim on every path that didn't hand it to the thread —
+        # early returns and exceptions alike — or the button jams permanently.
+        if not started:
+            with _lib_acoustid_lock:
+                _lib_acoustid_state["in_progress"] = False
 
 
 @app.route("/api/library/acoustid/status")
@@ -4333,7 +4509,7 @@ def api_library_flag_bad():
 
 @app.route("/api/library/redownload", methods=["POST"])
 def api_library_redownload():
-    data = request.get_json() or {}
+    data = _json_body()
     artist = (data.get("artist") or "").strip()
     title  = (data.get("title")  or "").strip()
     album  = (data.get("album")  or "").strip()
@@ -4534,14 +4710,17 @@ def api_queue_status():
 
 @app.route("/api/queue/action", methods=["POST"])
 def api_queue_action():
-    action = (request.get_json() or {}).get("action", "")
+    action = _json_body().get("action", "")
     conn = get_conn()
     if action == "clear_failed":
         conn.execute("DELETE FROM tracks WHERE slskd_state='failed'")
     elif action == "clear_completed":
         conn.execute("DELETE FROM tracks WHERE slskd_state='completed'")
     elif action == "clear_all":
-        conn.execute("DELETE FROM tracks WHERE slskd_state IN ('failed','completed')")
+        # Actually clear everything, matching the confirm text. This used to
+        # delete only failed+completed, so confirming it with a queue full of
+        # pending tracks appeared to do nothing.
+        conn.execute("DELETE FROM tracks")
     elif action == "retry_failed":
         # Keep slskd_search_attempt=1 so title-only search is tried next
         # instead of re-running the exact same artist+title query that already failed.
@@ -4569,7 +4748,7 @@ def api_queue_action():
 
 @app.route("/api/download/album", methods=["POST"])
 def api_download_album():
-    data = request.get_json() or {}
+    data = _json_body()
     tracks = data.get("tracks", [])
     source = data.get("source", "slskd")
     if not tracks:

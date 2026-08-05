@@ -22,7 +22,7 @@
 
 <div id="results-area">
   <div class="empty-state">
-    <div class="empty-icon">🎵</div>
+    <div class="empty-icon">{{ ic.icon('music', 40) }}</div>
     <p>Search to discover music,<br>then download via Soulseek or TIDAL</p>
   </div>
 </div>
@@ -132,7 +132,7 @@ function reset() {
   sessionStorage.removeItem('ss_tab');
   navStack = [];
   renderBreadcrumb();
-  area.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>Search to discover music</p></div>';
+  area.innerHTML = '<div class="empty-state"><div class="empty-icon">' + window.icon('music', 40) + '</div><p>Search to discover music</p></div>';
 }
 
 function triggerSearch(q) {
@@ -213,7 +213,7 @@ function navTo(idx) {
 // ── Track list ────────────────────────────────────────────────────────────
 function renderTracks(tracks, albumCtx) {
   if (!tracks || !tracks.length) {
-    area.innerHTML = '<div class="empty-state"><div class="empty-icon">🔇</div><p>No tracks found</p></div>';
+    area.innerHTML = '<div class="empty-state"><div class="empty-icon">' + window.icon('mute', 40) + '</div><p>No tracks found</p></div>';
     return;
   }
   const html = tracks.map(t => trackCardHtml({
@@ -242,7 +242,7 @@ function trackCardHtml(t, hideDrillLinks) {
   const badge = inLib ? ' <span class="in-lib-badge">✓ Library</span>'
               : queued ? ' <span class="in-lib-badge">⏳ Queued</span>' : '';
   const dlBtns = queued
-    ? `<span style="color:var(--text-muted);font-size:.72rem;white-space:nowrap">⏳ In queue</span>`
+    ? `<span style="color:var(--text-muted);font-size:.75rem;white-space:nowrap">⏳ In queue</span>`
     : `
       <button class="btn btn-slsk dl-btn"
         data-source="slskd"
@@ -260,8 +260,8 @@ function trackCardHtml(t, hideDrillLinks) {
   <div class="track-card${inLib ? ' track-in-lib' : ''}">
     ${t.cover
       ? `<img class="cover" src="${esc(t.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-         <div class="cover-placeholder" style="display:none">🎵</div>`
-      : `<div class="cover-placeholder">🎵</div>`}
+         <div class="cover-placeholder" style="display:none">${window.icon('music', 18)}</div>`
+      : `<div class="cover-placeholder">${window.icon('music', 18)}</div>`}
     <div class="track-info">
       <div class="track-title">${esc(t.title)}${badge}</div>
       <div class="track-sub">${artistLink}${albumLink}</div>
@@ -274,14 +274,14 @@ function trackCardHtml(t, hideDrillLinks) {
 // ── Artist list ───────────────────────────────────────────────────────────
 function renderArtists(artists) {
   if (!artists || !artists.length) {
-    area.innerHTML = '<div class="empty-state"><div class="empty-icon">🔇</div><p>No artists found</p></div>';
+    area.innerHTML = '<div class="empty-state"><div class="empty-icon">' + window.icon('mute', 40) + '</div><p>No artists found</p></div>';
     return;
   }
   const html = artists.map(a => `
     <div class="artist-card" data-action="artist" data-id="${esc(a.id)}" data-name="${esc(a.name)}">
       ${a.picture
         ? `<img class="artist-pic" src="${esc(a.picture)}" alt="" loading="lazy">`
-        : `<div class="artist-pic placeholder">👤</div>`}
+        : `<div class="artist-pic placeholder">${window.icon('user', 26)}</div>`}
       <div class="track-info">
         <div class="artist-name">${esc(a.name)}</div>
         ${a.nb_album ? `<div class="artist-sub">${a.nb_album} albums</div>` : ''}
@@ -329,7 +329,7 @@ function renderArtistPage(data) {
       const inLib = libIndex.has(libKey);
       const queued = !inLib && queuedIndex.has(libKey);
       const btns = queued
-        ? `<span style="color:var(--text-muted);font-size:.7rem;white-space:nowrap">⏳ queued</span>`
+        ? `<span style="color:var(--text-muted);font-size:.75rem;white-space:nowrap">⏳ queued</span>`
         : `
           <button class="btn btn-slsk dl-btn" data-source="slskd"
             data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
@@ -356,7 +356,7 @@ function renderArtistPage(data) {
     <div class="album-card" data-action="album" data-id="${esc(a.id)}" data-name="${esc(a.title)}" data-artist="${esc(data.name)}" data-cover="${esc(a.cover)}">
       ${a.cover
         ? `<img class="album-cover" src="${esc(a.cover)}" alt="" loading="lazy">`
-        : `<div class="album-cover-ph">💿</div>`}
+        : `<div class="album-cover-ph">${window.icon('disc', 26)}</div>`}
       <div class="album-title">${esc(a.title)}</div>
       <div class="album-sub">${a.release_date ? a.release_date.slice(0,4) : ''}${a.nb_tracks ? ` · ${a.nb_tracks} tr` : ''}</div>
     </div>`).join('');
@@ -370,14 +370,14 @@ function renderArtistPage(data) {
 // ── Album list ────────────────────────────────────────────────────────────
 function renderAlbums(albums) {
   if (!albums || !albums.length) {
-    area.innerHTML = '<div class="empty-state"><div class="empty-icon">🔇</div><p>No albums found</p></div>';
+    area.innerHTML = '<div class="empty-state"><div class="empty-icon">' + window.icon('mute', 40) + '</div><p>No albums found</p></div>';
     return;
   }
   const html = albums.map(a => `
     <div class="album-card" data-action="album" data-id="${esc(a.id)}" data-name="${esc(a.title)}" data-artist="${esc(a.artist)}" data-cover="${esc(a.cover)}">
       ${a.cover
         ? `<img class="album-cover" src="${esc(a.cover)}" alt="" loading="lazy">`
-        : `<div class="album-cover-ph">💿</div>`}
+        : `<div class="album-cover-ph">${window.icon('disc', 26)}</div>`}
       <div class="album-title">${esc(a.title)}</div>
       <div class="album-sub">${esc(a.artist)}${a.nb_tracks ? ` · ${a.nb_tracks} tracks` : ''}</div>
     </div>`).join('');
@@ -406,7 +406,7 @@ function renderAlbumPage(data, fallbackCover) {
     <div class="album-header">
       ${cover
         ? `<img class="album-header-cover" src="${esc(cover)}" alt="">`
-        : `<div class="album-header-cover-ph">💿</div>`}
+        : `<div class="album-header-cover-ph">${window.icon('disc', 32)}</div>`}
       <div class="album-header-info">
         <div class="album-header-title">${esc(data.title)}</div>
         <div class="album-header-artist">${esc(data.artist)}</div>

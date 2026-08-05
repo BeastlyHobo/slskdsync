@@ -7,11 +7,21 @@
 </div>
 
 <!-- Headline tiles -->
+{# The three download figures are one metric at three scales, so they read as a
+   single grouped tile rather than as siblings of the library count. #}
 <div class="st-tiles">
-  <div class="st-tile"><div class="st-num">{{ lib_total }}</div><div class="st-label">tracks in library</div></div>
-  <div class="st-tile"><div class="st-num">{{ hist_7 }}</div><div class="st-label">downloads · 7 days</div></div>
-  <div class="st-tile"><div class="st-num">{{ hist_30 }}</div><div class="st-label">downloads · 30 days</div></div>
-  <div class="st-tile"><div class="st-num">{{ hist_total }}</div><div class="st-label">downloads · all time</div></div>
+  <div class="st-tile st-tile-lead">
+    <div class="st-num">{{ lib_total }}</div>
+    <div class="st-label">tracks in library</div>
+  </div>
+  <div class="st-tile st-tile-group">
+    <div class="st-label st-group-label">downloads</div>
+    <div class="st-split">
+      <div><div class="st-num st-num-sm">{{ hist_7 }}</div><div class="st-label">7 days</div></div>
+      <div><div class="st-num st-num-sm">{{ hist_30 }}</div><div class="st-label">30 days</div></div>
+      <div><div class="st-num st-num-sm">{{ hist_total }}</div><div class="st-label">all time</div></div>
+    </div>
+  </div>
 </div>
 
 <div class="st-grid">
@@ -97,32 +107,38 @@
 {% endif %}
 
 <style>
-.st-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:.55rem; margin-bottom:.8rem; }
+.st-tiles { display:grid; grid-template-columns:1fr; gap:.55rem; margin-bottom:.8rem; }
+@media (min-width:560px){ .st-tiles { grid-template-columns:minmax(150px,.8fr) 2fr; } }
 .st-tile { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm);
   padding:.7rem .8rem; }
-.st-num { font-size:1.35rem; font-weight:800; line-height:1.1; }
-.st-label { font-size:.68rem; color:var(--text-muted); margin-top:.2rem; }
+.st-tile-lead .st-num { font-size:1.7rem; }
+.st-group-label { margin-top:0; margin-bottom:.4rem; }
+.st-split { display:grid; grid-template-columns:repeat(3,1fr); gap:.5rem; }
+/* Tabular figures so polling counters don't jitter as digits change width. */
+.st-num { font-size:1.35rem; font-weight:800; line-height:1.1; font-variant-numeric:tabular-nums; }
+.st-num-sm { font-size:1.15rem; }
+.st-label { font-size:.75rem; color:var(--text-muted); margin-top:.2rem; }
 .st-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:.8rem; }
 .st-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm);
   padding:.8rem .9rem; }
 .st-card-title { font-size:.8rem; font-weight:700; margin-bottom:.6rem; }
-.st-bar-row { display:flex; align-items:center; gap:.5rem; margin-bottom:.4rem; font-size:.74rem; }
+.st-bar-row { display:flex; align-items:center; gap:.5rem; margin-bottom:.4rem; font-size:0.75rem; }
 .st-bar-name { width:34%; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   color:var(--text-muted); }
 .st-bar-track { flex:1; height:8px; background:var(--surface2); border-radius:var(--radius-pill);
   overflow:hidden; }
 .st-bar { height:100%; background:var(--accent); border-radius:var(--radius-pill); min-width:2px; }
 .st-bar-val { width:2.6rem; text-align:right; font-variant-numeric:tabular-nums; }
-.st-empty { font-size:.74rem; color:var(--text-faint); }
-.st-foot { font-size:.68rem; color:var(--text-faint); margin-top:.5rem; }
+.st-empty { font-size:0.75rem; color:var(--text-faint); }
+.st-foot { font-size:0.6875rem; color:var(--text-faint); margin-top:.5rem; }
 .st-recent-row { display:flex; align-items:center; gap:.6rem; padding:.35rem 0;
   border-bottom:1px solid var(--border); font-size:.78rem; }
 .st-recent-row:last-child { border-bottom:none; }
 .st-recent-info { flex:1; min-width:0; }
 .st-recent-title { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.st-recent-sub { font-size:.68rem; color:var(--text-muted); white-space:nowrap; overflow:hidden;
+.st-recent-sub { font-size:0.6875rem; color:var(--text-muted); white-space:nowrap; overflow:hidden;
   text-overflow:ellipsis; }
-.st-recent-when { font-size:.66rem; color:var(--text-faint); white-space:nowrap; }
+.st-recent-when { font-size:0.6875rem; color:var(--text-faint); white-space:nowrap; }
 </style>
 
 <script>

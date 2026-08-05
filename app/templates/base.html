@@ -1,3 +1,4 @@
+{% import "_icons.html" as ic %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -10,6 +11,17 @@
   <title>slskdsync</title>
   <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <script>
+  // Same icon source as the Jinja macro, for markup built in JS.
+  window.ICON_PATHS = {{ ic.ICON_PATHS | tojson }};
+  window.icon = function (name, size, cls) {
+    size = size || 18;
+    return '<svg class="icon' + (cls ? ' ' + cls : '') + '" viewBox="0 0 24 24" width="' + size +
+      '" height="' + size + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"' +
+      ' stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+      (window.ICON_PATHS[name] || '') + '</svg>';
+  };
+  </script>
 </head>
 <body>
 

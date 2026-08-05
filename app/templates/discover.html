@@ -241,11 +241,11 @@ function tilHtml(t) {
     ? `<button class="btn-radio radio-btn"
          data-artist-id="${esc(t.artist_id)}"
          data-artist="${esc(t.artist||'')}"
-         style="font-size:.62rem;padding:.2rem .55rem;margin-top:.1rem">↺ Radio</button>`
+         style="font-size:.75rem;padding:.28rem .6rem;margin-top:.1rem">↺ Radio</button>`
     : '';
 
   const dlBtns = isAlbum ? '' : (queued
-    ? `<span style="color:var(--text-muted);font-size:.72rem">⏳ In queue</span>${radioBtn}`
+    ? `<span style="color:var(--text-muted);font-size:.75rem">⏳ In queue</span>${radioBtn}`
     : `
     <button class="btn-tile-slsk dl-btn"
       data-source="slskd"
@@ -260,7 +260,7 @@ function tilHtml(t) {
   return `<div class="shelf-tile${inLib ? ' track-in-lib' : ''}" onclick="tileClick(this)">
     ${artHtml}
     ${inLib ? '<div class="shelf-tile-lib"></div>' : ''}
-    <div class="tile-actions">${dlBtns || '<span style="color:var(--text-muted);font-size:.72rem">Album</span>'}</div>
+    <div class="tile-actions">${dlBtns || '<span style="color:var(--text-muted);font-size:.75rem">Album</span>'}</div>
     <div class="shelf-tile-title">${esc(t.title)}</div>
     <div class="shelf-tile-sub">${esc(t.artist || '')}</div>
   </div>`;
@@ -289,7 +289,7 @@ function trackCardHtml(t) {
   const badge = inLib ? ' <span class="in-lib-badge">✓ Library</span>'
               : queued ? ' <span class="in-lib-badge">⏳ Queued</span>' : '';
   const dlBtns = queued
-    ? `<span style="color:var(--text-muted);font-size:.72rem;white-space:nowrap">⏳ In queue</span>`
+    ? `<span style="color:var(--text-muted);font-size:.75rem;white-space:nowrap">⏳ In queue</span>`
     : `
       <button class="btn btn-slsk dl-btn"
         data-source="slskd" data-title="${esc(t.title)}"

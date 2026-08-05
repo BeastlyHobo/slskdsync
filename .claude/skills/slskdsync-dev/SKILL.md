@@ -67,10 +67,16 @@ All providers return `(kind, list[TrackMeta])`. `TrackMeta` dataclass ~line 285.
 
 ## Sandbox limitations (agent environment)
 
-- **Cannot import the Flask app**: `cryptography`/`cffi` are broken here. Never try
-  `python -c "import app"` to verify. Instead test logic in isolation: copy the SQL /
-  pure-Python under test into a scratchpad script with a throwaway `sqlite3` DB using
-  the real schema, and assert there.
+- **The Flask app DOES import and run here.** (This previously said it couldn't,
+  because of broken `cryptography`/`cffi`; that is no longer true.) After
+  `pip install -r requirements-dev.txt` you can `import app`, drive it with
+  `app.test_client()`, and serve it under waitress. Prefer that over reasoning
+  about the code — running it is how the "Clear all" and worker-death bugs were
+  found. There is a real suite in `tests/`: run `pytest tests/ -q`.
+  Point `DATA_DIR`/`DB_PATH`/`BACKUP_DIR` at a tmp dir and `_stop_event.set()`
+  before testing, or the background worker races your test DB (see
+  `tests/conftest.py`). Isolated scratchpad harnesses against a throwaway
+  `sqlite3` DB are still the fastest way to test a single SQL predicate.
 - **ALL external music APIs are egress-blocked** (proxy CONNECT 403): Spotify,
   Deezer, ListenBrainz, Apple — everything except package registries. WebFetch is
   blocked too. Never plan on live-verifying an external API here; test parsing

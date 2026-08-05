@@ -10,7 +10,7 @@
             padding:.6rem .9rem;font-size:.78rem;color:var(--text-muted);margin-bottom:.75rem">
   Library not yet indexed.
   <button onclick="triggerScan(this)" style="margin-left:.5rem;background:var(--accent);color:#080810;
-    border:none;border-radius:var(--radius-pill);padding:.2rem .7rem;font-size:.72rem;font-weight:700;cursor:pointer">
+    border:none;border-radius:var(--radius-pill);padding:.2rem .7rem;font-size:.75rem;font-weight:700;cursor:pointer">
     Scan now
   </button>
 </div>
@@ -26,7 +26,7 @@
   </div>
   <div style="display:flex;gap:.4rem;align-items:center">
     <input id="lib-search" type="search" placeholder="Search library…" oninput="applyFilters()" style="flex:1">
-    <select id="lib-sort" style="display:none;font-size:.72rem;padding:.3rem .5rem;background:var(--surface2);
+    <select id="lib-sort" style="display:none;font-size:.75rem;padding:.3rem .5rem;background:var(--surface2);
             color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer"
             onchange="setSortBy(this.value)">
       <option value="title">Title A–Z</option>
@@ -71,7 +71,7 @@
 <div id="verify-row" style="display:none">
   <button id="verify-view-btn" class="lib-sm-btn" onclick="verifyCurrentView()">↻ Verify all in view</button>
   <div id="aid-progress-wrap" style="flex:1;display:none">
-    <div style="font-size:.7rem;color:var(--text-muted);margin-bottom:.15rem">
+    <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.15rem">
       <span id="aid-progress-text">Identifying…</span>
     </div>
     <div class="aid-progress-bar-wrap">
@@ -137,7 +137,7 @@
   font-size:.8rem; font-family:var(--font-mono); }
 .tm-redl-row input:focus { border-color:var(--accent); outline:none; }
 .tm-redl-row .lib-sm-btn { flex-shrink:0; white-space:nowrap; }
-.tm-hint { font-size:.68rem; color:var(--text-faint); margin-top:.45rem; line-height:1.4; }
+.tm-hint { font-size:0.6875rem; color:var(--text-faint); margin-top:.45rem; line-height:1.4; }
 .tm-result { font-size:.76rem; margin-top:.5rem; }
 .tm-flag { width:100%; margin-bottom:.9rem; }
 .tm-flag.on { background:var(--err); color:#fff; border-color:transparent; }
@@ -147,9 +147,9 @@
   -webkit-overflow-scrolling:touch; }
 .recent-card { width:96px; flex-shrink:0; cursor:pointer; }
 .recent-card .lib-cover, .recent-card .lib-cover-ph { border-radius:var(--radius-sm); }
-.rc-title { font-size:.7rem; font-weight:600; margin-top:.3rem; white-space:nowrap;
+.rc-title { font-size:0.75rem; font-weight:600; margin-top:.3rem; white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis; }
-.rc-sub { font-size:.64rem; color:var(--text-muted); white-space:nowrap;
+.rc-sub { font-size:0.6875rem; color:var(--text-muted); white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis; }
 .bad-mark { color:var(--err); font-size:.82rem; }
 .lib-row.bad .lib-row-title { color:var(--err); }
@@ -298,8 +298,8 @@ function coverHtml(t, size=38) {
   if (t.cover_url)
     return `<img class="lib-cover" src="${esc(t.cover_url)}" width="${size}" height="${size}" alt="" loading="lazy"
               onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-            <div class="lib-cover-ph" style="width:${size}px;height:${size}px;display:none">🎵</div>`;
-  return `<div class="lib-cover-ph" style="width:${size}px;height:${size}px">🎵</div>`;
+            <div class="lib-cover-ph" style="width:${size}px;height:${size}px;display:none">${window.icon('music', Math.round(size*0.45))}</div>`;
+  return `<div class="lib-cover-ph" style="width:${size}px;height:${size}px">${window.icon('music', Math.round(size*0.45))}</div>`;
 }
 function extClass(e){ return ['FLAC','ALAC','WAV','AIFF','AIF'].includes((e||'').toUpperCase()) ? 'lib-ext lossless' : 'lib-ext'; }
 
@@ -307,7 +307,7 @@ function extClass(e){ return ['FLAC','ALAC','WAV','AIFF','AIF'].includes((e||'')
 function trackRowHtml(t, showArtist=true) {
   const sub = showArtist ? `${esc(t.artist)}${t.album?' · '+esc(t.album):''}` : esc(t.album||'');
   const verifyBtn = t.id!=null
-    ? `<button class="lib-sm-btn" style="font-size:.6rem;padding:.15rem .4rem" title="Verify"
+    ? `<button class="lib-sm-btn" style="font-size:.75rem;padding:.25rem .5rem" title="Verify"
          onclick="event.stopPropagation();verifyLib('track',{id:${t.id}},this)">↻ ID</button>` : '';
   return `<div class="lib-row${t.user_rating===1?' flagged':''}${t.flagged_bad?' bad':''}" data-path="${esc(t.path)}"${t.id!=null?` data-tid="${t.id}"`:''} onclick="showTrackInfo(this)" style="cursor:pointer">
     ${coverHtml(t)}
@@ -320,7 +320,7 @@ function trackRowHtml(t, showArtist=true) {
       ${aidBadgeHtml(t.acoustid_score)}
       <span class="${extClass(t.ext)}">${esc(t.ext||'?')}</span>
       ${verifyBtn}
-      <button class="lib-sm-btn" style="font-size:.6rem;padding:.15rem .4rem" title="Re-download"
+      <button class="lib-sm-btn" style="font-size:.75rem;padding:.25rem .5rem" title="Re-download"
         onclick="event.stopPropagation();redownload(this,${esc(JSON.stringify(t.artist))},${esc(JSON.stringify(t.album))},${esc(JSON.stringify(t.title))})">↺</button>
     </div>
   </div>`;
@@ -334,11 +334,13 @@ function renderHome() {
   if (q) { view='songs'; renderSongs(); return; }
   const artistCount = new Set(ALL_TRACKS.map(t=>t.artist)).size;
   const albumCount  = new Set(ALL_TRACKS.map(t=>t.artist+'\x00'+t.album)).size;
+  // Monochrome icons on a neutral chip: the previous emoji-on-brand-colour
+  // squares introduced four accent colours the design system doesn't have.
   const icons = [
-    {label:'Artists',  icon:'🎤', bg:'#c0392b', count:`${artistCount} artist${artistCount===1?'':'s'}`,  v:'artists'},
-    {label:'Albums',   icon:'💿', bg:'#e67e22', count:`${albumCount} album${albumCount===1?'':'s'}`,    v:'albums'},
-    {label:'Songs',    icon:'🎵', bg:'#e74c3c', count:`${ALL_TRACKS.length} song${ALL_TRACKS.length===1?'':'s'}`, v:'songs'},
-    {label:'Playlists',icon:'📋', bg:'#8e44ad', count:`${ALL_PLAYLISTS.length} playlist${ALL_PLAYLISTS.length===1?'':'s'}`, v:'playlists'},
+    {label:'Artists',  icon:'mic',   count:`${artistCount} artist${artistCount===1?'':'s'}`,  v:'artists'},
+    {label:'Albums',   icon:'disc',  count:`${albumCount} album${albumCount===1?'':'s'}`,    v:'albums'},
+    {label:'Songs',    icon:'music', count:`${ALL_TRACKS.length} song${ALL_TRACKS.length===1?'':'s'}`, v:'songs'},
+    {label:'Playlists',icon:'list',  count:`${ALL_PLAYLISTS.length} playlist${ALL_PLAYLISTS.length===1?'':'s'}`, v:'playlists'},
   ];
   const recent = ALL_TRACKS.filter(t => t.indexed_at)
     .sort((a, b) => (b.indexed_at || '').localeCompare(a.indexed_at || ''))
@@ -357,7 +359,7 @@ function renderHome() {
     `<div class="coll-section-title">Collection</div>` +
     icons.map(i => `
       <div class="coll-row" onclick="navTo('${i.v}')">
-        <div class="coll-icon" style="background:${i.bg}">${i.icon}</div>
+        <div class="coll-icon">${window.icon(i.icon, 20)}</div>
         <span class="coll-label">${i.label}</span>
         <span class="coll-count">${i.count}</span>
         <span class="coll-chevron">›</span>
@@ -402,7 +404,7 @@ function renderArtists() {
       const sub = `${albums.length} album${albums.length===1?'':'s'} · ${tracks.length} track${tracks.length===1?'':'s'}`;
       const aJ  = esc(JSON.stringify(a));
       return `<div class="artist-row" onclick="navTo('artist-albums',{artist:${aJ}})">
-        <div class="artist-avatar">🎤</div>
+        <div class="artist-avatar">${window.icon('mic', 22)}</div>
         <div class="artist-info">
           <div class="artist-name">${esc(a)}</div>
           <div class="artist-sub">${sub}</div>
@@ -441,14 +443,14 @@ function renderArtistAlbums() {
   const html = Object.keys(map).sort().map(al => {
     const {cover_url, tracks:at} = map[al];
     const alJ = esc(JSON.stringify(al));
-    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">💿</div></div>`;
+    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">${window.icon('disc', 26)}</div></div>`;
     return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:ctx.artist,album:${alJ}})">
       ${cover}
       <div class="album-card-title">${esc(al)}</div>
       <div class="album-card-sub">${at.length} track${at.length===1?'':'s'}</div>
       <div class="album-card-actions">
         ${aidBadgeHtml(groupWorstAid(at))}
-        <button class="lib-sm-btn" style="margin-left:auto;font-size:.6rem;padding:.15rem .4rem"
+        <button class="lib-sm-btn" style="margin-left:auto;font-size:.75rem;padding:.25rem .5rem"
           onclick="event.stopPropagation();verifyLib('album',{artist:${aJ},album:${alJ}},this)">↻</button>
       </div>
     </div>`;
@@ -478,14 +480,14 @@ function renderAlbums() {
   const html = keys.map(k => {
     const {artist,album,cover_url,tracks} = map[k];
     const aJ=esc(JSON.stringify(artist)), alJ=esc(JSON.stringify(album));
-    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">💿</div></div>`;
+    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">${window.icon('disc', 26)}</div></div>`;
     return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:${aJ},album:${alJ}})">
       ${cover}
       <div class="album-card-title">${esc(album)}</div>
       <div class="album-card-sub">${esc(artist)}</div>
       <div class="album-card-actions">
         ${aidBadgeHtml(groupWorstAid(tracks))}
-        <button class="lib-sm-btn" style="margin-left:auto;font-size:.6rem;padding:.15rem .4rem"
+        <button class="lib-sm-btn" style="margin-left:auto;font-size:.75rem;padding:.25rem .5rem"
           onclick="event.stopPropagation();verifyLib('album',{artist:${aJ},album:${alJ}},this)">↻</button>
       </div>
     </div>`;
@@ -539,7 +541,7 @@ function renderSongs() {
        </div>`
     : '';
   document.getElementById('lib-content').innerHTML = sorted.length
-    ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${sorted.length} song${sorted.length===1?'':'s'}</div>`
+    ? `<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.35rem">${sorted.length} song${sorted.length===1?'':'s'}</div>`
       + visible.map(t=>trackRowHtml(t)).join('') + moreBtn
     : '<div class="empty-lib">No songs match.</div>';
 }
@@ -553,18 +555,20 @@ function renderPlaylists() {
     return;
   }
   const q = searchVal();
-  const icons = {spotify:'🟢',apple:'🍎',tidal:'⬛',deezer:'🟠',search:'🔍'};
-  const colors = {spotify:'#1DB954',apple:'#fc3c44',tidal:'#000',deezer:'#EF5466',search:'#555'};
+  // Was a colour emoji on a same-coloured chip — the tidal one paired a black
+  // square glyph with a pure black background, i.e. invisible, and the set
+  // failed WCAG AA contrast. Now one neutral chip with a monochrome icon; the
+  // source name is already shown in the text beside it.
+  const srcIcon = {spotify:'disc',apple:'disc',tidal:'disc',deezer:'disc',search:'search'};
   const rows = ALL_PLAYLISTS.filter(p => !q||(p.playlist_name||p.source_url||'').toLowerCase().includes(q)).map(p => {
     const name = p.playlist_name || p.source_url || `Import #${p.id}`;
     const nJ   = esc(JSON.stringify(name));
     const src  = p.source || 'search';
-    const bg   = colors[src] || 'var(--surface3)';
     const done = p.done || 0;
     const total = p.total || 0;
     const prog = total > 0 ? `${done} / ${total} downloaded` : 'no tracks';
     return `<div class="playlist-row" onclick="navTo('playlist-tracks',{jobId:${p.id},name:${nJ}})">
-      <div class="playlist-icon" style="background:${bg}">${icons[src]||'🎵'}</div>
+      <div class="playlist-icon">${window.icon(srcIcon[src] || 'music', 18)}</div>
       <div class="playlist-info">
         <div class="playlist-name">${esc(name)}</div>
         <div class="playlist-sub">${esc(src)} · ${prog}</div>
@@ -607,7 +611,7 @@ function renderPlaylistTracks() {
         aidPassesFilter(t.acoustid_score) && ratingPassesFilter(t.user_rating) &&
         fmtPassesFilter(t.ext) && badPassesFilter(t));
       document.getElementById('lib-content').innerHTML = f.length
-        ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.35rem">${_plTracks.length} track${_plTracks.length===1?'':'s'}</div>`
+        ? `<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.35rem">${_plTracks.length} track${_plTracks.length===1?'':'s'}</div>`
           + f.map(t=>trackRowHtml(t)).join('')
         : `<div class="empty-lib">${_plTracks.length} track${_plTracks.length===1?'':'s'} downloaded but none match the current filter.</div>`;
     }).catch(()=>{ document.getElementById('lib-content').innerHTML='<div class="empty-lib">Failed to load.</div>'; });
