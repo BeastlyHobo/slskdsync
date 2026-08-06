@@ -8,6 +8,7 @@ import time
 import shutil
 import logging
 import base64
+import hashlib
 import collections
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -3522,9 +3523,38 @@ def logout():
 # Static PWA files
 # ---------------------------------------------------------------------------
 
+def _asset_version() -> str:
+    """Short fingerprint of styles.css, used to bust both caches.
+
+    The service worker serves /static/ cache-first out of a cache whose name was
+    hardcoded, and install only re-runs when sw.js changes byte-wise. A stylesheet
+    edit therefore never reached anyone with the PWA already installed. Threading
+    this value through both the <link> URL and the cache name makes a CSS change
+    produce a new sw.js, which forces a reinstall and a fresh precache.
+    """
+    try:
+        st = Path(app.static_folder, "styles.css").stat()
+        return hashlib.sha1(f"{st.st_mtime_ns}-{st.st_size}".encode()).hexdigest()[:12]
+    except OSError:
+        return "dev"
+
+
+ASSET_VERSION = _asset_version()
+
+
+@app.context_processor
+def _inject_asset_version():
+    return {"asset_version": ASSET_VERSION}
+
+
 @app.route("/sw.js")
 def service_worker():
-    return send_from_directory(app.static_folder, "sw.js", mimetype="application/javascript")
+    sw = Path(app.static_folder, "sw.js").read_text(encoding="utf-8")
+    return Response(
+        sw.replace("__VERSION__", ASSET_VERSION),
+        mimetype="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.route("/manifest.json")

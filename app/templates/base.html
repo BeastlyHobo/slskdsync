@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-title" content="slskdsync">
   <title>slskdsync</title>
   <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v={{ asset_version }}">
   <script>
   // Same icon source as the Jinja macro, for markup built in JS.
   window.ICON_PATHS = {{ ic.ICON_PATHS | tojson }};

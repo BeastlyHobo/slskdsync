@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a11">
+<title>Offline · slskdsync</title>
+<!-- Styles are inlined rather than linked: the stylesheet is cached under a
+     versioned URL this page has no way to know, and a fallback page that
+     depends on another cached file is one more thing that can fail offline. -->
+<style>
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 2rem 1.5rem;
+    box-sizing: border-box;
+    background: #0a0a11;
+    color: #ececf3;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    text-align: center;
+  }
+  svg { color: #9d9db1; }
+  h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
+  p { margin: 0; max-width: 22rem; font-size: 0.95rem; line-height: 1.5; color: #9d9db1; }
+  button {
+    margin-top: .5rem;
+    padding: .7rem 1.4rem;
+    font: inherit;
+    font-weight: 700;
+    color: #ececf3;
+    background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+  <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M1 1l22 22"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/>
+    <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.58 9"/>
+    <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+    <line x1="12" y1="20" x2="12.01" y2="20"/>
+  </svg>
+  <h1>You're offline</h1>
+  <p>slskdsync needs a connection to reach your server. Downloads already queued
+     keep running on the server itself.</p>
+  <button onclick="location.reload()">Try again</button>
+</body>
+</html>
