@@ -114,3 +114,71 @@ def test_untrimmed_custom_search_still_progresses():
     assert _writeback(c, 1, "s", t["custom_search"] or "",
                       t["slskd_search_attempt"] or 0) == 1
     assert c.execute("SELECT slskd_state FROM tracks").fetchone()[0] == "queued"
+
+
+# --- retry semantics -------------------------------------------------------
+# Retry used to clear slskd_tried_users, so the scorer re-picked the same peer
+# and the same file; and it left force_overwrite unset, so a re-download of a
+# track already in the library was organized, found the destination occupied,
+# and was deleted. These lock in both fixes.
+
+def _mktrack(A, job, **cols):
+    conn = A.get_conn()
+    keys = ["job_id", "artist", "title", "slskd_state"] + list(cols)
+    vals = [job, "artist", "title", "failed"] + list(cols.values())
+    conn.execute(f"INSERT INTO tracks({','.join(keys)})"
+                 f" VALUES({','.join('?' * len(keys))})", vals)
+    conn.commit()
+    tid = conn.execute("SELECT id FROM tracks ORDER BY id DESC LIMIT 1").fetchone()[0]
+    conn.close()
+    return tid
+
+
+def _row(A, tid):
+    conn = A.get_conn()
+    r = conn.execute("SELECT * FROM tracks WHERE id=?", (tid,)).fetchone()
+    conn.close()
+    return r
+
+
+def test_retry_keeps_tried_peers(A, auth, job):
+    """The whole point: retry must not hand the scorer the same peer again."""
+    tid = _mktrack(A, job, slskd_tried_users="alice,bob")
+    assert auth.post(f"/api/tracks/{tid}/retry").status_code == 200
+    r = _row(A, tid)
+    assert r["slskd_tried_users"] == "alice,bob"
+    assert r["slskd_state"] == "pending"
+
+
+def test_start_over_clears_tried_peers(A, auth, job):
+    tid = _mktrack(A, job, slskd_tried_users="alice,bob")
+    auth.post(f"/api/tracks/{tid}/retry", json={"reset_peers": True})
+    assert _row(A, tid)["slskd_tried_users"] == ""
+
+
+def test_retry_with_query_still_keeps_peers(A, auth, job):
+    """A new search query is not a reason to re-offer a peer that failed."""
+    tid = _mktrack(A, job, slskd_tried_users="alice")
+    auth.post(f"/api/tracks/{tid}/retry", json={"query": "beatles taxman flac"})
+    r = _row(A, tid)
+    assert r["slskd_tried_users"] == "alice"
+    assert r["custom_search"] == "beatles taxman flac"
+
+
+def test_retry_of_library_track_forces_replace(A, auth, job):
+    """Already in the library => the re-download must overwrite it, and record
+    the old path so a format change doesn't leave both files behind."""
+    tid = _mktrack(A, job, slskd_state="completed",
+                   local_path="/music/Artist/Album/01 - Title.mp3")
+    auth.post(f"/api/tracks/{tid}/retry")
+    r = _row(A, tid)
+    assert r["force_overwrite"] == 1
+    assert r["replace_path"] == "/music/Artist/Album/01 - Title.mp3"
+
+
+def test_retry_of_never_downloaded_track_does_not_force_replace(A, auth, job):
+    tid = _mktrack(A, job)
+    auth.post(f"/api/tracks/{tid}/retry")
+    r = _row(A, tid)
+    assert r["force_overwrite"] == 0
+    assert r["replace_path"] is None

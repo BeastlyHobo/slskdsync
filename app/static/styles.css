@@ -2098,6 +2098,14 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
   align-items: center;
   flex-shrink: 0;
 }
+/* The controls are fixed-width and flex-shrink:0, so below the sidebar
+   breakpoint they crushed .missing-info to zero and the title vanished. Stack
+   them under the title instead and let the buttons wrap. */
+@media (max-width: 919px) {
+  .missing-row { flex-direction: column; align-items: stretch; }
+  .missing-search { flex-wrap: wrap; }
+  .ms-input { flex: 1 1 100%; width: auto; }
+}
 
 .ms-input {
   padding: 5px 9px;
