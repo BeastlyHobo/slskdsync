@@ -34,6 +34,11 @@
         placeholder="Search query…" onkeydown="if(event.key==='Enter')nsSearch(this,{{ t.id }})">
       <button class="ms-btn" onclick="nsSearch(this.previousElementSibling,{{ t.id }})">Search</button>
       <button class="ms-btn ns-ai" onclick="aiSuggest(this,{{ t.id }})">{{ ic.icon('sparkle', 14) }} AI</button>
+      {% if t.slskd_tried_users %}
+      <button class="ms-btn" onclick="nsStartOver(this,{{ t.id }})"
+        title="Allow the {{ t.slskd_tried_users.split(',') | length }} already-tried peer(s) again">
+        {{ ic.icon('refresh', 14) }} Start over</button>
+      {% endif %}
       <div class="ai-chips" id="ai-chips-{{ t.id }}"></div>
     </div>
   </div>
@@ -128,6 +133,20 @@ function nsSearch(input, trackId) {
     btn.textContent = d.ok ? 'Queued ✓' : 'Search';
     if (d.ok) input.closest('.att-row').classList.add('done');
   }).catch(() => { btn.disabled = false; btn.textContent = 'Search'; });
+}
+
+// Retry normally avoids peers already tried; this is the explicit way back to
+// a clean slate once they've all been exhausted.
+function nsStartOver(btn, trackId) {
+  btn.disabled = true; const orig = btn.innerHTML; btn.textContent = '…';
+  fetch(`/api/tracks/${trackId}/retry`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({reset_peers: true}),
+  }).then(r=>r.json()).then(d => {
+    btn.textContent = d.ok ? 'Queued ✓' : 'Failed';
+    if (d.ok) btn.closest('.att-row').classList.add('done');
+    else { btn.disabled = false; btn.innerHTML = orig; }
+  }).catch(() => { btn.disabled = false; btn.innerHTML = orig; });
 }
 
 function attRedl(btn) {

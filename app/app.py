@@ -8,6 +8,7 @@ import time
 import shutil
 import logging
 import base64
+import hashlib
 import collections
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -2935,6 +2936,20 @@ def _worker_tick():
                         "UPDATE tracks SET slskd_state='failed', slskd_error=? WHERE id=?",
                         (f"All peers failed: {msg[:100]}", t["id"]),
                     )
+        elif results and tried and all(r.get("username") in tried for r in results):
+            # Results exist but every peer holding the file has already been
+            # tried. Falling through to the no-results branch below would claim
+            # nothing was found, which is wrong and hides the real next step.
+            logger.info(
+                f"[slskd] All {len(tried)} peer(s) with '{meta.title}' already tried"
+            )
+            conn.execute(
+                "UPDATE tracks SET slskd_state='needs_search', slskd_error=? WHERE id=?",
+                # Kept under the 80 chars the attention row renders.
+                (f"Tried all {len(tried)} peer{'' if len(tried) == 1 else 's'}"
+                 " with this file — start over to allow them again.",
+                 t["id"]),
+            )
         else:
             # No usable results — retry with progressively simpler queries, then ask user
             attempt = t["slskd_search_attempt"] or 0
@@ -3522,9 +3537,38 @@ def logout():
 # Static PWA files
 # ---------------------------------------------------------------------------
 
+def _asset_version() -> str:
+    """Short fingerprint of styles.css, used to bust both caches.
+
+    The service worker serves /static/ cache-first out of a cache whose name was
+    hardcoded, and install only re-runs when sw.js changes byte-wise. A stylesheet
+    edit therefore never reached anyone with the PWA already installed. Threading
+    this value through both the <link> URL and the cache name makes a CSS change
+    produce a new sw.js, which forces a reinstall and a fresh precache.
+    """
+    try:
+        st = Path(app.static_folder, "styles.css").stat()
+        return hashlib.sha1(f"{st.st_mtime_ns}-{st.st_size}".encode()).hexdigest()[:12]
+    except OSError:
+        return "dev"
+
+
+ASSET_VERSION = _asset_version()
+
+
+@app.context_processor
+def _inject_asset_version():
+    return {"asset_version": ASSET_VERSION}
+
+
 @app.route("/sw.js")
 def service_worker():
-    return send_from_directory(app.static_folder, "sw.js", mimetype="application/javascript")
+    sw = Path(app.static_folder, "sw.js").read_text(encoding="utf-8")
+    return Response(
+        sw.replace("__VERSION__", ASSET_VERSION),
+        mimetype="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.route("/manifest.json")
@@ -3560,7 +3604,7 @@ def _attention_items(conn) -> dict:
     tracks needing a custom search, files flagged as bad grabs, and
     files whose AcoustID fingerprint says they're the wrong song."""
     needs = conn.execute(
-        "SELECT id, artist, title, album, slskd_error FROM tracks"
+        "SELECT id, artist, title, album, slskd_error, slskd_tried_users FROM tracks"
         " WHERE slskd_state='needs_search' ORDER BY id DESC"
     ).fetchall()
     flagged = conn.execute(
@@ -4246,8 +4290,12 @@ def retry_track(track_id):
     """Reset any track to pending, optionally with a custom search query."""
     data = _json_body()
     query = (data.get("query") or "").strip()
+    reset_peers = bool(data.get("reset_peers"))
     conn = get_conn()
-    track = conn.execute("SELECT slskd_search_id FROM tracks WHERE id=?", (track_id,)).fetchone()
+    track = conn.execute(
+        "SELECT slskd_search_id, slskd_tried_users, local_path FROM tracks WHERE id=?",
+        (track_id,),
+    ).fetchone()
     # Only cancel the slskd search if no other track is still using it
     if track and track["slskd_search_id"]:
         shared = conn.execute(
@@ -4256,10 +4304,25 @@ def retry_track(track_id):
         ).fetchone()[0]
         if shared == 0:
             SlskdClient().cancel_search(track["slskd_search_id"])
+
+    # Keep the tried-peer list. Clearing it made the scorer pick the same peer
+    # and the same file again, so retry usually reproduced the exact result the
+    # user was retrying to get away from. reset_peers is the explicit opt-out,
+    # for when every peer has been exhausted and it's worth starting fresh.
+    tried = "" if reset_peers else ((track["slskd_tried_users"] or "") if track else "")
+
+    # Retrying a track that already landed means replacing that file, whatever
+    # the global replace_existing setting says — otherwise the re-download is
+    # organized, sees the destination occupied, and is deleted. replace_path
+    # also covers a format change, where the new file lands at a different path
+    # and would otherwise leave the old one behind.
+    existing = ((track["local_path"] or "").strip() if track else "")
+
     conn.execute(
         "UPDATE tracks SET slskd_state='pending', slskd_search_attempt=0,"
-        " custom_search=?, slskd_error=NULL, slskd_search_id=NULL, slskd_tried_users='' WHERE id=?",
-        (query or None, track_id),
+        " custom_search=?, slskd_error=NULL, slskd_search_id=NULL, slskd_tried_users=?,"
+        " force_overwrite=?, replace_path=? WHERE id=?",
+        (query or None, tried, 1 if existing else 0, existing or None, track_id),
     )
     conn.commit()
     conn.close()

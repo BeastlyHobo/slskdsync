@@ -379,6 +379,7 @@ main {
 
 .bottom-nav a {
   flex: 1;
+  min-width: 0;   /* flex items won't shrink past min-content without this */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -641,6 +642,9 @@ main {
 .text-input,
 .field-input {
   flex: 1;
+  /* An <input>'s default size gives it a min-content width that flex won't go
+     below, so the row pushed past the viewport at iPhone-SE width. */
+  min-width: 0;
   padding: 12px 15px;
   background: var(--surface2);
   border: 1.5px solid var(--border);
@@ -1269,6 +1273,40 @@ main {
 }
 
 .coll-row:hover { background: var(--surface2); }
+
+/* Eight nav items don't fit at iPhone-SE width once labels are legible. Rather
+   than shrink the text back below the floor, drop to icons only; the label
+   stays in the DOM for screen readers. */
+@media (max-width: 359px) {
+  .bottom-nav .nav-label {
+    position: absolute;
+    width: 1px; height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .bottom-nav a { padding-top: 0; }
+}
+
+.attention-banner {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  background: var(--surface2);
+  border: 1px solid rgba(240,180,60,.4);
+  border-radius: var(--radius-sm);
+  padding: .55rem .8rem;
+  margin-bottom: .7rem;
+  font-size: .8rem;
+  color: var(--text);
+  text-decoration: none;
+}
+/* The all-clear variant stays quiet: it's a link, not an alert. */
+.attention-banner.is-clear {
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+.attention-cta { margin-left: auto; color: var(--text-muted); }
 
 /* Shared inline icon (see templates/_icons.html). Sits on the text baseline
    when used inside a button/label, and inherits colour via currentColor. */
@@ -2059,6 +2097,14 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
   gap: 5px;
   align-items: center;
   flex-shrink: 0;
+}
+/* The controls are fixed-width and flex-shrink:0, so below the sidebar
+   breakpoint they crushed .missing-info to zero and the title vanished. Stack
+   them under the title instead and let the buttons wrap. */
+@media (max-width: 919px) {
+  .missing-row { flex-direction: column; align-items: stretch; }
+  .missing-search { flex-wrap: wrap; }
+  .ms-input { flex: 1 1 100%; width: auto; }
 }
 
 .ms-input {
