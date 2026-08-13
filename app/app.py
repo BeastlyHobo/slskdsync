@@ -1191,6 +1191,45 @@ def _acoustid_norm(s: str) -> str:
 
 
 class AcoustIDClient:
+    def identify(self, path: Path, limit: int = 5) -> tuple[list[dict], str]:
+        """What does the fingerprint say this file actually is?
+
+        verify() answers "does this match what we asked for" and collapses
+        everything else to a score. Correcting a mis-grabbed file needs the
+        other direction — the recording's own title/artist — so this returns
+        the candidates themselves.
+
+        Returns (candidates, error). Candidates are dicts of score/title/artist,
+        best first; an empty list with an empty error means the fingerprint was
+        computed but matched nothing.
+        """
+        api_key = get_setting("acoustid_api_key").strip()
+        if not api_key:
+            return [], "No AcoustID API key — add one in Settings."
+        try:
+            import acoustid
+            results = list(acoustid.match(api_key, str(path), meta="recordings",
+                                          parse=True, force_fpcalc=True))
+        except Exception as exc:
+            logger.warning(f"[AcoustID] identify failed for {path}: {exc}")
+            return [], f"Fingerprinting failed: {exc}"
+
+        seen, out = set(), []
+        for score, _rid, rec_title, rec_artist in results:
+            if not rec_title:
+                continue  # nothing to rename to
+            key = (_acoustid_norm(rec_title), _acoustid_norm(rec_artist or ""))
+            if key in seen:
+                continue  # AcoustID lists a recording once per release
+            seen.add(key)
+            out.append({"score": round(float(score), 3),
+                        "title": rec_title,
+                        "artist": rec_artist or ""})
+            if len(out) >= limit:
+                break
+        logger.info(f"[AcoustID] identify {path.name} → {len(out)} candidate(s)")
+        return out, ""
+
     def verify(self, path: Path, artist: str, title: str) -> float | None:
         """
         Returns:
@@ -4581,21 +4620,155 @@ def api_library_redownload():
     if not artist or not title:
         return jsonify({"ok": False, "error": "artist and title required"}), 400
     conn = get_conn()
+    # This is a fresh track row, so its tried-peer list starts empty and the
+    # scorer would happily pick the same peer and the same file that produced
+    # the copy being replaced. download_history remembers who that was.
+    tried = ""
+    if old_path:
+        prev = conn.execute(
+            "SELECT peer FROM download_history WHERE path=? AND IFNULL(peer,'')!=''"
+            " ORDER BY id DESC LIMIT 1", (old_path,)
+        ).fetchone()
+        if prev:
+            tried = prev["peer"]
+            logger.info(f"[library] Avoiding previous peer {tried!r} for {title!r}")
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
         ("library", "redownload", "", 0, "queued"),
     )
     cur.execute(
-        "INSERT INTO tracks(job_id,artist,album,title,download_source,force_overwrite,custom_search,replace_path)"
-        " VALUES(?,?,?,?,?,?,?,?)",
-        (cur.lastrowid, artist, album, title, "slskd", 1, query or None, old_path or None),
+        "INSERT INTO tracks(job_id,artist,album,title,download_source,force_overwrite,"
+        "custom_search,replace_path,slskd_tried_users)"
+        " VALUES(?,?,?,?,?,?,?,?,?)",
+        (cur.lastrowid, artist, album, title, "slskd", 1, query or None,
+         old_path or None, tried),
     )
     conn.commit()
     conn.close()
     logger.info(f"[library] Re-download queued: {artist} — {title}"
                 + (f" (custom search: {query!r})" if query else ""))
     return jsonify({"ok": True})
+
+
+def _library_file(raw: str) -> tuple[Optional[Path], str]:
+    """Resolve a client-supplied path, refusing anything outside the library.
+
+    These endpoints move and retag whatever path they're given, so the path
+    has to be constrained to the configured library root.
+    """
+    if not raw:
+        return None, "path required"
+    root = Path(get_setting("library_path") or "/music").resolve()
+    try:
+        p = Path(raw).resolve()
+    except OSError as ex:
+        return None, f"bad path: {ex}"
+    if not p.is_relative_to(root):
+        return None, "path is outside the library"
+    if not p.is_file():
+        return None, "file not found"
+    return p, ""
+
+
+@app.route("/api/library/identify", methods=["POST"])
+def api_library_identify():
+    """Ask AcoustID what a file actually is, for correcting a wrong grab."""
+    p, err = _library_file((_json_body().get("path") or "").strip())
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    candidates, err = _acoustid.identify(p)
+    return jsonify({"ok": not err, "error": err, "candidates": candidates})
+
+
+@app.route("/api/library/resolve-url", methods=["POST"])
+def api_library_resolve_url():
+    """Turn a Spotify/Apple/TIDAL track link into metadata. The providers
+    already parse single-track URLs for the importer; this reuses them."""
+    url = (_json_body().get("url") or "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "url required"}), 400
+    provider = next((p for p in _providers if p.supports(url)), None)
+    if not provider:
+        return jsonify({"ok": False,
+                        "error": "Not a Spotify, Apple Music or TIDAL link"}), 400
+    try:
+        _kind, metas = provider.parse(url)
+    except Exception as ex:
+        return jsonify({"ok": False, "error": f"{provider.name}: {ex}"}), 502
+    if not metas:
+        return jsonify({"ok": False, "error": "No track found at that link"}), 404
+    m = metas[0]
+    return jsonify({"ok": True, "track": {"artist": m.artist, "album": m.album,
+                                          "title": m.title,
+                                          "track_number": m.track_number or 0},
+                    "extra": max(0, len(metas) - 1)})
+
+
+@app.route("/api/library/reorganize", methods=["POST"])
+def api_library_reorganize():
+    """Re-file an existing library file under corrected metadata.
+
+    The counterpart to re-downloading: when the grab was the wrong recording
+    (a live take, an alternate version) but still something worth keeping,
+    rename/move and retag it instead of deleting it.
+    """
+    data = _json_body()
+    src, err = _library_file((data.get("path") or "").strip())
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    meta = {
+        "artist": (data.get("artist") or "").strip(),
+        "album":  (data.get("album")  or "").strip(),
+        "title":  (data.get("title")  or "").strip(),
+        "track_number": int(data.get("track_number") or 0),
+        "cover_url": "",   # tag_file reads this; no cover to embed on a rename
+    }
+    if not meta["artist"] or not meta["title"]:
+        return jsonify({"ok": False, "error": "artist and title required"}), 400
+
+    dst = Organizer.target_path(meta, src)
+    if dst != src and dst.exists():
+        return jsonify({"ok": False,
+                        "error": f"A file is already there: {dst}"}), 409
+    try:
+        if dst != src:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+        tag_file(dst, meta)
+    except Exception as ex:
+        logger.error(f"[library] Reorganize failed for {src}: {ex}")
+        return jsonify({"ok": False, "error": str(ex)}), 500
+
+    conn = get_conn()
+    conn.execute(
+        "UPDATE library_index SET path=?, artist=?, album=?, title=?, acoustid_score=NULL"
+        " WHERE path=?",
+        (str(dst), meta["artist"], meta["album"], meta["title"], str(src)),
+    )
+    # The flag meant "this isn't the song it claims to be"; it now is.
+    conn.execute("DELETE FROM bad_flags WHERE path=?", (str(src),))
+    conn.commit()
+    conn.close()
+    if dst != src:
+        _prune_empty_parents(src.parent)
+    logger.info(f"[library] Reorganized {src} → {dst}")
+    return jsonify({"ok": True, "path": str(dst)})
+
+
+def _prune_empty_parents(start: Path) -> None:
+    """Moving a file out of Artist/Album can strand empty directories, which
+    then show up in Navidrome as empty albums."""
+    root = Path(get_setting("library_path") or "/music").resolve()
+    d = start.resolve()
+    while d != root and d.is_relative_to(root):
+        try:
+            if any(d.iterdir()):
+                return
+            d.rmdir()
+        except OSError:
+            return
+        d = d.parent
 
 
 @app.route("/api/library/track-info/<int:lib_id>")
