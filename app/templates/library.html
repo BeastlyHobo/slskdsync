@@ -99,12 +99,68 @@
     <div class="tm-actions">
       <a id="tm-nav-btn" class="lib-sm-btn tm-nav" target="_blank" rel="noopener" style="display:none">▶ Open in Navidrome</a>
       <button id="tm-flag-btn" class="lib-sm-btn tm-flag" onclick="toggleBad()">⚑ Flag as bad</button>
-      <div class="tm-redl-label">Re-download / fix wrong file</div>
-      <div class="tm-redl-row">
-        <input id="tm-query" type="text" placeholder="search query…">
-        <button id="tm-redl-btn" class="lib-sm-btn" onclick="doRedownload()">↺ Re-download</button>
+      <div class="tm-redl-label">Wrong file?</div>
+
+      {# Step 1 — the two things you can do about a bad grab. #}
+      <div id="fx-choice" class="fx-choice">
+        <button class="lib-sm-btn" onclick="fxShow('replace')">🗑 Delete &amp; get another</button>
+        <button class="lib-sm-btn" onclick="fxShow('identify')">🔎 Keep it — it's a different song</button>
       </div>
-      <div class="tm-hint">If the wrong song was grabbed, edit the query and re-download. The existing file is overwritten once a match is found.</div>
+
+      {# Step 2a — replace. #}
+      <div id="fx-replace" class="fx-panel" style="display:none">
+        <div class="tm-hint">Queues a fresh Soulseek search, skipping the peer that
+          served this file. The current file is kept until the replacement lands,
+          then removed — so you're never left with nothing.</div>
+        <div class="tm-redl-row">
+          <input id="tm-query" type="text" placeholder="search query…">
+          <button id="tm-redl-btn" class="lib-sm-btn" onclick="doRedownload()">↺ Delete &amp; re-download</button>
+        </div>
+        <button class="fx-back" onclick="fxShow('')">← Back</button>
+      </div>
+
+      {# Step 2b — keep the file, correct what it claims to be. #}
+      <div id="fx-identify" class="fx-panel" style="display:none">
+        <div class="tm-hint">Keeps the file and re-files it under the right name,
+          so Navidrome shows it as what it actually is.</div>
+        <button id="fx-aid-btn" class="lib-sm-btn" onclick="fxIdentify()">🎧 Identify with AcoustID</button>
+        <div id="fx-aid-out" class="fx-out"></div>
+
+        <div class="fx-sep">or name it yourself</div>
+        <div class="fx-tabs">
+          <button class="fx-tab active" data-fxtab="search" onclick="fxTab('search')">Search</button>
+          <button class="fx-tab" data-fxtab="manual" onclick="fxTab('manual')">Type it</button>
+          <button class="fx-tab" data-fxtab="link"   onclick="fxTab('link')">Paste link</button>
+        </div>
+
+        <div id="fx-tab-search" class="fx-tabpanel">
+          <div class="tm-redl-row">
+            <input id="fx-search-q" type="text" placeholder="artist and title…"
+              onkeydown="if(event.key==='Enter')fxSearch()">
+            <button class="lib-sm-btn" onclick="fxSearch()">Search</button>
+          </div>
+          <div id="fx-search-out" class="fx-out"></div>
+        </div>
+
+        <div id="fx-tab-manual" class="fx-tabpanel" style="display:none">
+          <input id="fx-m-artist" class="fx-input" type="text" placeholder="Artist">
+          <input id="fx-m-album"  class="fx-input" type="text" placeholder="Album (optional)">
+          <input id="fx-m-title"  class="fx-input" type="text" placeholder="Title">
+          <button class="lib-sm-btn" onclick="fxApplyManual()">Rename &amp; organize</button>
+        </div>
+
+        <div id="fx-tab-link" class="fx-tabpanel" style="display:none">
+          <div class="tm-redl-row">
+            <input id="fx-link" type="text" placeholder="Spotify / Apple Music / TIDAL track link"
+              onkeydown="if(event.key==='Enter')fxResolveLink()">
+            <button class="lib-sm-btn" onclick="fxResolveLink()">Fetch</button>
+          </div>
+          <div id="fx-link-out" class="fx-out"></div>
+        </div>
+
+        <button class="fx-back" onclick="fxShow('')">← Back</button>
+      </div>
+
       <div id="tm-redl-result" class="tm-result"></div>
     </div>
   </div>
@@ -139,6 +195,38 @@
 .tm-redl-row .lib-sm-btn { flex-shrink:0; white-space:nowrap; }
 .tm-hint { font-size:0.6875rem; color:var(--text-faint); margin-top:.45rem; line-height:1.4; }
 .tm-result { font-size:.76rem; margin-top:.5rem; }
+
+/* Fix-a-wrong-grab flow */
+.fx-choice { display:flex; flex-direction:column; gap:.4rem; }
+.fx-choice .lib-sm-btn { text-align:left; }
+.fx-panel { display:flex; flex-direction:column; gap:.5rem; }
+.fx-panel .tm-hint { margin-top:0; }
+.fx-back { align-self:flex-start; background:none; border:none; padding:.2rem 0;
+  color:var(--text-muted); font-size:.75rem; font-family:var(--font-ui); cursor:pointer; }
+.fx-back:hover { color:var(--text); }
+.fx-sep { font-size:0.6875rem; color:var(--text-faint); text-transform:uppercase;
+  letter-spacing:.06em; margin-top:.3rem; }
+.fx-tabs { display:flex; gap:.3rem; flex-wrap:wrap; }
+.fx-tab { padding:.28rem .6rem; border-radius:var(--radius-pill); font-size:.72rem;
+  font-weight:600; font-family:var(--font-ui); cursor:pointer; color:var(--text-muted);
+  background:var(--surface2); border:1px solid var(--border); }
+.fx-tab.active { color:var(--text); border-color:var(--accent); }
+.fx-tabpanel { display:flex; flex-direction:column; gap:.4rem; }
+.fx-input { padding:.45rem .7rem; border-radius:var(--radius-sm); background:var(--surface2);
+  border:1px solid var(--border); color:var(--text); font-size:.8rem;
+  font-family:var(--font-ui); min-width:0; }
+.fx-input:focus { border-color:var(--accent); outline:none; }
+.fx-out { display:flex; flex-direction:column; gap:.3rem; }
+.fx-none { font-size:.75rem; color:var(--text-muted); }
+.fx-cand { display:flex; align-items:center; gap:.5rem; padding:.4rem .55rem;
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:var(--radius-sm); }
+.fx-cand-info { flex:1; min-width:0; }
+.fx-cand-title { font-size:.8rem; font-weight:600; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.fx-cand-sub { font-size:.72rem; color:var(--text-muted); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.fx-cand .lib-sm-btn { flex-shrink:0; }
 .tm-flag { width:100%; margin-bottom:.9rem; }
 .tm-flag.on { background:var(--err); color:#fff; border-color:transparent; }
 .tm-nav { display:block; width:100%; box-sizing:border-box; text-align:center;
@@ -320,8 +408,8 @@ function trackRowHtml(t, showArtist=true) {
       ${aidBadgeHtml(t.acoustid_score)}
       <span class="${extClass(t.ext)}">${esc(t.ext||'?')}</span>
       ${verifyBtn}
-      <button class="lib-sm-btn" style="font-size:.75rem;padding:.25rem .5rem" title="Re-download"
-        onclick="event.stopPropagation();redownload(this,${esc(JSON.stringify(t.artist))},${esc(JSON.stringify(t.album))},${esc(JSON.stringify(t.title))})">↺</button>
+      <button class="lib-sm-btn" style="font-size:.75rem;padding:.25rem .5rem" title="Wrong file?"
+        onclick="event.stopPropagation();showTrackInfo(this.closest('.lib-row'))">↺</button>
     </div>
   </div>`;
 }
@@ -799,7 +887,15 @@ function showTrackInfo(rowEl) {
     aidBadgeHtml(t.acoustid_score) + ` <span class="${extClass(t.ext)}">${esc(t.ext||'?')}</span>`;
   document.getElementById('tm-query').value = ((t.artist||'')+' '+(t.title||'')).trim();
   const res = document.getElementById('tm-redl-result'); res.textContent = ''; res.style.color = '';
-  const btn = document.getElementById('tm-redl-btn'); btn.disabled = false; btn.textContent = '↺ Re-download';
+  const btn = document.getElementById('tm-redl-btn'); btn.disabled = false; btn.textContent = '↺ Delete & re-download';
+  fxShow('');
+  fxTab('search');
+  ['fx-aid-out','fx-search-out','fx-link-out'].forEach(id => document.getElementById(id).innerHTML = '');
+  document.getElementById('fx-search-q').value = ((t.artist||'')+' '+(t.title||'')).trim();
+  document.getElementById('fx-link').value = '';
+  document.getElementById('fx-m-artist').value = t.artist || '';
+  document.getElementById('fx-m-album').value  = t.album  || '';
+  document.getElementById('fx-m-title').value  = t.title  || '';
   const navBtn = document.getElementById('tm-nav-btn');
   if (NAV_URL && (t.title || t.artist)) {
     navBtn.href = NAV_URL + '/app/#/search?q=' + encodeURIComponent(((t.artist||'') + ' ' + (t.title||'')).trim());
@@ -854,6 +950,156 @@ function toggleBad() {
     updateFlagBtn();
     render();
   }).catch(()=>{ btn.disabled = false; });
+}
+
+// ── Fix-a-wrong-grab flow ───────────────────────────────────────────────────
+// Two ways out of a bad download: replace it (delete + search again, avoiding
+// the peer that served it), or keep the file and re-file it as what it really
+// is. Everything here operates on _modalTrack.
+
+function fxShow(which) {
+  document.getElementById('fx-choice').style.display   = which ? 'none' : '';
+  document.getElementById('fx-replace').style.display  = which === 'replace'  ? '' : 'none';
+  document.getElementById('fx-identify').style.display = which === 'identify' ? '' : 'none';
+  fxResult('', '');
+}
+
+function fxResult(msg, kind) {
+  const el = document.getElementById('tm-redl-result');
+  el.textContent = msg;
+  el.style.color = kind === 'ok' ? 'var(--ok)' : kind === 'err' ? 'var(--err)' : '';
+}
+
+function fxTab(name) {
+  ['search', 'manual', 'link'].forEach(n => {
+    document.getElementById('fx-tab-' + n).style.display = n === name ? '' : 'none';
+  });
+  document.querySelectorAll('.fx-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.fxtab === name);
+  });
+}
+
+// --- AcoustID -------------------------------------------------------------
+
+function fxIdentify() {
+  if (!_modalTrack || !_modalTrack.path) return;
+  const btn = document.getElementById('fx-aid-btn');
+  const out = document.getElementById('fx-aid-out');
+  btn.disabled = true; btn.textContent = 'Listening…';
+  out.innerHTML = '';
+  fetch('/api/library/identify', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: _modalTrack.path}),
+  }).then(r => r.json()).then(d => {
+    btn.disabled = false; btn.textContent = '🎧 Identify with AcoustID';
+    if (d.error) { out.innerHTML = `<div class="fx-none">${esc(d.error)}</div>`; return; }
+    if (!d.candidates || !d.candidates.length) {
+      out.innerHTML = '<div class="fx-none">AcoustID could not identify this file. ' +
+                      'Name it yourself below.</div>';
+      return;
+    }
+    out.innerHTML = d.candidates.map(c => fxCandidateHtml(
+      c.title, c.artist, '', Math.round((c.score || 0) * 100) + '% match')).join('');
+    fxBindPicks(out);
+  }).catch(() => {
+    btn.disabled = false; btn.textContent = '🎧 Identify with AcoustID';
+    out.innerHTML = '<div class="fx-none">Identify request failed.</div>';
+  });
+}
+
+// --- shared candidate rendering ------------------------------------------
+// data-* rather than inline args: titles carry apostrophes and quotes.
+
+function fxCandidateHtml(title, artist, album, note) {
+  return `<div class="fx-cand" data-title="${esc(title || '')}"
+       data-artist="${esc(artist || '')}" data-album="${esc(album || '')}">
+    <div class="fx-cand-info">
+      <div class="fx-cand-title">${esc(title || '—')}</div>
+      <div class="fx-cand-sub">${esc(artist || '')}${album ? ' · ' + esc(album) : ''}${
+        note ? ' · ' + esc(note) : ''}</div>
+    </div>
+    <button class="lib-sm-btn">Use this</button>
+  </div>`;
+}
+
+function fxBindPicks(container) {
+  container.querySelectorAll('.fx-cand').forEach(row => {
+    row.querySelector('button').addEventListener('click', () => {
+      fxApply(row.dataset.artist, row.dataset.album, row.dataset.title);
+    });
+  });
+}
+
+// --- Deezer search (same source as the Search page) -----------------------
+
+function fxSearch() {
+  const q = document.getElementById('fx-search-q').value.trim();
+  const out = document.getElementById('fx-search-out');
+  if (!q) return;
+  out.innerHTML = '<div class="fx-none">Searching…</div>';
+  fetch('/api/search?type=track&q=' + encodeURIComponent(q))
+    .then(r => r.json()).then(items => {
+      if (!Array.isArray(items) || !items.length) {
+        out.innerHTML = '<div class="fx-none">No matches.</div>';
+        return;
+      }
+      out.innerHTML = items.slice(0, 8)
+        .map(t => fxCandidateHtml(t.title, t.artist, t.album, '')).join('');
+      fxBindPicks(out);
+    }).catch(() => { out.innerHTML = '<div class="fx-none">Search failed.</div>'; });
+}
+
+// --- streaming link -------------------------------------------------------
+
+function fxResolveLink() {
+  const url = document.getElementById('fx-link').value.trim();
+  const out = document.getElementById('fx-link-out');
+  if (!url) return;
+  out.innerHTML = '<div class="fx-none">Fetching…</div>';
+  fetch('/api/library/resolve-url', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({url}),
+  }).then(r => r.json()).then(d => {
+    if (!d.ok) { out.innerHTML = `<div class="fx-none">${esc(d.error || 'Failed')}</div>`; return; }
+    const t = d.track;
+    out.innerHTML = fxCandidateHtml(t.title, t.artist, t.album,
+      d.extra ? `first of ${d.extra + 1} tracks` : '');
+    fxBindPicks(out);
+  }).catch(() => { out.innerHTML = '<div class="fx-none">Could not reach that link.</div>'; });
+}
+
+// --- manual -------------------------------------------------------------
+
+function fxApplyManual() {
+  fxApply(document.getElementById('fx-m-artist').value.trim(),
+          document.getElementById('fx-m-album').value.trim(),
+          document.getElementById('fx-m-title').value.trim());
+}
+
+// --- apply ---------------------------------------------------------------
+
+function fxApply(artist, album, title) {
+  if (!_modalTrack || !_modalTrack.path) return;
+  if (!artist || !title) { fxResult('Artist and title are both needed.', 'err'); return; }
+  fxResult('Renaming…', '');
+  fetch('/api/library/reorganize', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: _modalTrack.path, artist, album, title}),
+  }).then(r => r.json()).then(d => {
+    if (!d.ok) { fxResult('✗ ' + (d.error || 'Failed'), 'err'); return; }
+    fxResult(`✓ Saved as ${artist} — ${title}`, 'ok');
+    // Keep the in-memory copy in step so the row and modal don't lie until the
+    // next scan; library_index ids are rebuilt on rescan, the path is the key.
+    const t = _modalTrack;
+    t.artist = artist; t.album = album; t.title = title;
+    t.path = d.path; t.flagged_bad = false; t.acoustid_score = null;
+    const row = document.querySelector(`.lib-row[data-path="${CSS.escape(t.path)}"]`)
+             || document.querySelector('.lib-row[data-path]');
+    if (row && row.dataset.path !== d.path) row.dataset.path = d.path;
+    document.getElementById('tm-title').textContent = title;
+    document.getElementById('tm-sub').textContent = artist + (album ? ' · ' + album : '');
+    setTimeout(() => { closeTrackModal(); render(); }, 900);
+  }).catch(() => fxResult('✗ Request failed', 'err'));
 }
 
 function doRedownload() {
