@@ -99,6 +99,7 @@
     <div class="tm-actions">
       <a id="tm-nav-btn" class="lib-sm-btn tm-nav" target="_blank" rel="noopener" style="display:none">▶ Open in Navidrome</a>
       <button id="tm-flag-btn" class="lib-sm-btn tm-flag" onclick="toggleBad()">⚑ Flag as bad</button>
+      <div id="tm-aid-verdict" class="tm-aid-verdict" style="display:none"></div>
       <div class="tm-redl-label">Wrong file?</div>
 
       {# Step 1 — the two things you can do about a bad grab. #}
@@ -195,6 +196,16 @@
 .tm-redl-row .lib-sm-btn { flex-shrink:0; white-space:nowrap; }
 .tm-hint { font-size:0.6875rem; color:var(--text-faint); margin-top:.45rem; line-height:1.4; }
 .tm-result { font-size:.76rem; margin-top:.5rem; }
+
+/* Stored AcoustID verdict */
+.tm-aid-verdict { display:flex; flex-direction:column; gap:.35rem; margin-bottom:.55rem;
+  padding-bottom:.55rem; border-bottom:1px solid var(--border); }
+.fx-verdict { font-size:.76rem; line-height:1.45; color:var(--text-muted); }
+.fx-verdict.ok  { color:var(--ok); }
+.fx-verdict.bad { color:var(--err); font-weight:600; }
+.fx-verdict-more { font-size:.72rem; color:var(--text-faint); }
+.fx-linkbtn { background:none; border:none; padding:0; font:inherit;
+  color:var(--accent); text-decoration:underline; cursor:pointer; }
 
 /* Fix-a-wrong-grab flow */
 .fx-choice { display:flex; flex-direction:column; gap:.4rem; }
@@ -864,7 +875,12 @@ function renderModalMeta(t, d) {
   if (d && d.bitrate)          rows.push(['Bitrate', d.bitrate + ' kbps']);
   if (d && d.duration)         rows.push(['Duration', fmtDuration(d.duration)]);
   if (t.acoustid_score != null)
-    rows.push(['AcoustID', t.acoustid_score < 0 ? 'Not identified' : Math.round(t.acoustid_score*100)+'% match']);
+    // 0 is the "identified as some other recording" sentinel, so rendering it
+    // as 0% invites reading it as a weak match rather than a wrong file.
+    rows.push(['AcoustID',
+      t.acoustid_score < 0  ? 'Not identified'
+    : t.acoustid_score === 0 ? 'Different song'
+    : Math.round(t.acoustid_score*100)+'% match']);
   const added = (d && d.indexed_at) || t.indexed_at || '';
   if (added) rows.push(['Added', added.slice(0,10)]);
   const path = (d && d.path) || t.path || '';
@@ -904,6 +920,7 @@ function showTrackInfo(rowEl) {
     navBtn.style.display = 'none';
   }
   updateFlagBtn();
+  renderAidVerdict(t);
   renderModalMeta(t, null);
   document.getElementById('track-modal').style.display = 'flex';
   if (t.id != null) {
@@ -950,6 +967,63 @@ function toggleBad() {
     updateFlagBtn();
     render();
   }).catch(()=>{ btn.disabled = false; });
+}
+
+// ── Stored AcoustID verdict ────────────────────────────────────────────────
+// The scan stores what the fingerprint matched, so opening a track can show
+// what AcoustID thinks it is without paying for another fingerprint. When that
+// disagrees with the file's own tags, the verdict doubles as a rename action.
+
+function aidNorm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
+function aidDisagrees(t) {
+  if (!t.acoustid_title) return false;
+  const nt = aidNorm(t.title),  na = aidNorm(t.artist);
+  const at = aidNorm(t.acoustid_title), aa = aidNorm(t.acoustid_artist);
+  const titleOk  = nt && at && (nt.includes(at) || at.includes(nt));
+  const artistOk = !na || !aa || na.includes(aa) || aa.includes(na);
+  return !(titleOk && artistOk);
+}
+
+function renderAidVerdict(t) {
+  const el = document.getElementById('tm-aid-verdict');
+  const score = t.acoustid_score;
+  if (score === null || score === undefined) {
+    el.style.display = 'none'; el.innerHTML = '';
+    return;                       // never fingerprinted — nothing to report
+  }
+  el.style.display = '';
+  const pct = score >= 0 ? Math.round(score * 100) + '%' : '';
+
+  if (score < 0) {
+    el.innerHTML = '<div class="fx-verdict">🎧 AcoustID could not find this ' +
+                   'recording in its database.</div>';
+    return;
+  }
+  if (!t.acoustid_title) {
+    el.innerHTML = `<div class="fx-verdict">🎧 AcoustID matched the audio at ${pct}, ` +
+                   'but the recording has no name in its database.</div>';
+    return;
+  }
+  if (!aidDisagrees(t)) {
+    el.innerHTML = `<div class="fx-verdict ok">🎧 AcoustID agrees this is ` +
+      `“${esc(t.acoustid_title)}”${t.acoustid_artist ? ' by ' + esc(t.acoustid_artist) : ''} · ${pct}</div>`;
+    return;
+  }
+  // score 0 is the "identified, but not what you asked for" sentinel, not a
+  // confidence of zero — rendering it as 0% reads as a bad identification.
+  el.innerHTML =
+    `<div class="fx-verdict bad">🎧 AcoustID thinks this file is actually a different song</div>` +
+    fxCandidateHtml(t.acoustid_title, t.acoustid_artist, '',
+                    score > 0 ? pct + ' match' : '', 'Rename to this') +
+    `<div class="fx-verdict-more">Not right? <button class="fx-linkbtn"
+       onclick="fxShow('identify');fxIdentify()">see other matches</button></div>`;
+  fxBindPicks(el);
+  // Prefill "Type it" from the verdict so adding the album it can't know is
+  // one tab away rather than retyping everything.
+  document.getElementById('fx-m-artist').value = t.acoustid_artist || '';
+  document.getElementById('fx-m-title').value  = t.acoustid_title  || '';
+  document.getElementById('fx-m-album').value  = '';
 }
 
 // ── Fix-a-wrong-grab flow ───────────────────────────────────────────────────
@@ -1010,7 +1084,7 @@ function fxIdentify() {
 // --- shared candidate rendering ------------------------------------------
 // data-* rather than inline args: titles carry apostrophes and quotes.
 
-function fxCandidateHtml(title, artist, album, note) {
+function fxCandidateHtml(title, artist, album, note, btnLabel) {
   return `<div class="fx-cand" data-title="${esc(title || '')}"
        data-artist="${esc(artist || '')}" data-album="${esc(album || '')}">
     <div class="fx-cand-info">
@@ -1018,7 +1092,7 @@ function fxCandidateHtml(title, artist, album, note) {
       <div class="fx-cand-sub">${esc(artist || '')}${album ? ' · ' + esc(album) : ''}${
         note ? ' · ' + esc(note) : ''}</div>
     </div>
-    <button class="lib-sm-btn">Use this</button>
+    <button class="lib-sm-btn">${esc(btnLabel || 'Use this')}</button>
   </div>`;
 }
 
@@ -1087,7 +1161,11 @@ function fxApply(artist, album, title) {
     body: JSON.stringify({path: _modalTrack.path, artist, album, title}),
   }).then(r => r.json()).then(d => {
     if (!d.ok) { fxResult('✗ ' + (d.error || 'Failed'), 'err'); return; }
-    fxResult(`✓ Saved as ${artist} — ${title}`, 'ok');
+    // AcoustID identifies a recording, not a release, so a verdict rename has
+    // no album and lands under "Unknown Album". Say so instead of letting it
+    // turn up in Navidrome unexplained.
+    fxResult(`✓ Saved as ${artist} — ${title}` +
+             (album ? '' : ' · filed under Unknown Album — add one with “Type it”'), 'ok');
     // Keep the in-memory copy in step so the row and modal don't lie until the
     // next scan; library_index ids are rebuilt on rescan, the path is the key.
     const t = _modalTrack;

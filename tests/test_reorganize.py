@@ -155,3 +155,72 @@ def test_resolve_url_surfaces_provider_failure(A, auth, monkeypatch):
                   json={"url": "https://open.spotify.com/track/abc"})
     assert r.status_code == 502
     assert "Premium required" in r.get_json()["error"]
+
+
+# --- stored AcoustID verdict ----------------------------------------------
+# verify() knew what the fingerprint matched but only logged it, so a red badge
+# was a dead end. The match is now stored and has to survive a rescan.
+
+def test_verify_detail_reports_what_the_audio_actually_is(A, monkeypatch, tmp_path):
+    """The mismatch branch is the one that matters: score 0.0 plus the name of
+    the song the file really is."""
+    monkeypatch.setattr(A, "get_setting", lambda k, *a: "key" if k == "acoustid_api_key" else "")
+    fake = type("m", (), {"match": staticmethod(
+        lambda *a, **k: [(0.93, "rid", "Dandelion", "Boards of Canada")])})
+    monkeypatch.setitem(__import__("sys").modules, "acoustid", fake)
+    score, title, artist = A._acoustid.verify_detail(
+        tmp_path / "x.mp3", "Autechre", "Foil")
+    assert score == 0.0                       # not the song we asked for
+    assert (title, artist) == ("Dandelion", "Boards of Canada")
+
+
+def test_verify_detail_agrees_when_it_matches(A, monkeypatch, tmp_path):
+    monkeypatch.setattr(A, "get_setting", lambda k, *a: "key" if k == "acoustid_api_key" else "")
+    fake = type("m", (), {"match": staticmethod(
+        lambda *a, **k: [(0.91, "rid", "Foil", "Autechre")])})
+    monkeypatch.setitem(__import__("sys").modules, "acoustid", fake)
+    score, title, artist = A._acoustid.verify_detail(tmp_path / "x.mp3", "Autechre", "Foil")
+    assert score == pytest.approx(0.91)
+    assert (title, artist) == ("Foil", "Autechre")
+
+
+def test_verify_still_returns_a_bare_score(A, monkeypatch, tmp_path):
+    """The worker calls verify(); its contract must not have shifted."""
+    monkeypatch.setattr(A, "get_setting", lambda k, *a: "")
+    assert A._acoustid.verify(tmp_path / "x.mp3", "a", "t") is None
+
+
+def test_stored_verdict_survives_a_rescan(A, lib, monkeypatch):
+    """library_index is wiped on every rescan; the verdict is app-generated and
+    has to be carried across like the score already was."""
+    root, f = lib
+    conn = A.get_conn()
+    conn.execute("UPDATE library_index SET acoustid_score=0.0, acoustid_title='Dandelion',"
+                 " acoustid_artist='Boards of Canada' WHERE path=?", (str(f),))
+    conn.commit(); conn.close()
+
+    monkeypatch.setattr(A, "_navidrome_rows", lambda *a, **k: [], raising=False)
+    A.scan_library()
+
+    conn = A.get_conn()
+    row = conn.execute("SELECT * FROM library_index WHERE path=?", (str(f),)).fetchone()
+    conn.close()
+    assert row is not None, "rescan dropped the row entirely"
+    assert row["acoustid_title"] == "Dandelion"
+    assert row["acoustid_artist"] == "Boards of Canada"
+
+
+def test_reorganize_clears_the_stale_verdict(A, auth, lib):
+    """After renaming to the matched name, the file IS that song — keeping the
+    old verdict would report a mismatch against itself."""
+    _root, f = lib
+    conn = A.get_conn()
+    conn.execute("UPDATE library_index SET acoustid_score=0.0, acoustid_title='Dandelion',"
+                 " acoustid_artist='Boards of Canada' WHERE path=?", (str(f),))
+    conn.commit(); conn.close()
+    auth.post("/api/library/reorganize", json={
+        "path": str(f), "artist": "Boards of Canada", "title": "Dandelion"})
+    conn = A.get_conn()
+    row = conn.execute("SELECT * FROM library_index").fetchone()
+    conn.close()
+    assert row["acoustid_title"] is None and row["acoustid_score"] is None

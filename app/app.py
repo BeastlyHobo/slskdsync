@@ -248,6 +248,11 @@ def init_db():
         ("user_rating", "INTEGER DEFAULT NULL"),
         ("cover_art_id", "TEXT DEFAULT NULL"),
         ("acoustid_score", "REAL DEFAULT NULL"),
+        # What the fingerprint actually matched. verify() knew this all along
+        # but only logged it, so a mismatched file showed a red badge with no
+        # way to find out what it really was without re-fingerprinting.
+        ("acoustid_title", "TEXT DEFAULT NULL"),
+        ("acoustid_artist", "TEXT DEFAULT NULL"),
     ]:
         if col not in existing_lib_cols:
             cur.execute(f"ALTER TABLE library_index ADD COLUMN {col} {ddl}")
@@ -1231,16 +1236,26 @@ class AcoustIDClient:
         return out, ""
 
     def verify(self, path: Path, artist: str, title: str) -> float | None:
+        """Score only — see verify_detail for the meaning of each value."""
+        return self.verify_detail(path, artist, title)[0]
+
+    def verify_detail(self, path: Path, artist: str,
+                      title: str) -> tuple[float | None, str, str]:
         """
-        Returns:
+        Returns (score, matched_title, matched_artist), where score is:
           None   — key not configured, or fingerprinting failed (don't store)
           -1.0   — fingerprinted but recording not found in AcoustID DB
           0.0    — identified but metadata doesn't match (wrong track)
           0–1.0  — AcoustID confidence score for a matching recording
+
+        The matched title/artist is what the fingerprint says the audio is.
+        On the 0.0 path that's the whole point: the file is some other song and
+        this names it, so the UI can offer to re-file it without fingerprinting
+        all over again.
         """
         api_key = get_setting("acoustid_api_key").strip()
         if not api_key:
-            return None
+            return None, "", ""
         tag = f'"{title}" by {artist}'
         try:
             import acoustid
@@ -1248,7 +1263,7 @@ class AcoustIDClient:
             results = list(acoustid.match(api_key, str(path), meta="recordings", parse=True, force_fpcalc=True))
             if not results:
                 logger.info(f"[AcoustID] {tag} → not in database")
-                return -1.0
+                return -1.0, "", ""
             for score, _rid, rec_title, rec_artist in results:
                 nrt = _acoustid_norm(rec_title or "")
                 nra = _acoustid_norm(rec_artist or "")
@@ -1256,18 +1271,18 @@ class AcoustIDClient:
                 # so trust the acoustic fingerprint confidence directly.
                 if not nrt:
                     logger.info(f"[AcoustID] {tag} → {score:.0%} match (recording has no metadata in DB)")
-                    return float(score)
+                    return float(score), "", ""
                 title_ok = nt and (nt in nrt or nrt in nt)
                 artist_ok = not na or not nra or (na in nra or nra in na)
                 if title_ok and artist_ok:
                     logger.info(f"[AcoustID] {tag} → {score:.0%} match")
-                    return float(score)
+                    return float(score), rec_title or "", rec_artist or ""
             best_score, _, best_title, best_artist = results[0]
             logger.warning(f"[AcoustID] {tag} → wrong track ({best_score:.0%} match for \"{best_title}\" by {best_artist})")
-            return 0.0
+            return 0.0, best_title or "", best_artist or ""
         except Exception as exc:
             logger.warning(f"[AcoustID] {tag} → fingerprint failed: {exc}")
-            return None
+            return None, "", ""
 
 
 # ---------------------------------------------------------------------------
@@ -2566,17 +2581,19 @@ def scan_library() -> None:
         # track isn't undone by the next scan. (user_rating / cover_art_id come
         # from Navidrome each scan, so they don't need preserving.)
         prev_scores = {
-            r["path"]: r["acoustid_score"]
+            r["path"]: (r["acoustid_score"], r["acoustid_title"], r["acoustid_artist"])
             for r in conn.execute(
-                "SELECT path, acoustid_score FROM library_index"
+                "SELECT path, acoustid_score, acoustid_title, acoustid_artist FROM library_index"
                 " WHERE acoustid_score IS NOT NULL AND path IS NOT NULL AND path != ''"
             )
         }
         conn.execute("DELETE FROM library_index")
         conn.executemany(
-            "INSERT INTO library_index(artist, title, album, source, path, user_rating, cover_art_id, acoustid_score)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            [(a, t, al, source, p, ur, ca, prev_scores.get(p)) for a, t, al, p, ur, ca in rows]
+            "INSERT INTO library_index(artist, title, album, source, path, user_rating, cover_art_id,"
+            " acoustid_score, acoustid_title, acoustid_artist)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [(a, t, al, source, p, ur, ca, *prev_scores.get(p, (None, None, None)))
+             for a, t, al, p, ur, ca in rows]
         )
         if prev_scores:
             kept = sum(1 for _, _, _, p, _, _ in rows if prev_scores.get(p) is not None)
@@ -3366,10 +3383,17 @@ def _run_lib_acoustid_inner(ids: list, table: str = "library_index") -> None:
             conn.execute(f"UPDATE {table} SET {path_col}=? WHERE id=?", (str(resolved), row_id))
             conn.commit()
             conn.close()
-        score = _acoustid.verify(resolved, row["artist"] or "", row["title"] or "")
+        score, aid_title, aid_artist = _acoustid.verify_detail(
+            resolved, row["artist"] or "", row["title"] or "")
         if score is not None:
             conn = get_conn()
-            conn.execute(f"UPDATE {table} SET acoustid_score=? WHERE id=?", (score, row_id))
+            if table == "library_index":
+                conn.execute(
+                    "UPDATE library_index SET acoustid_score=?, acoustid_title=?,"
+                    " acoustid_artist=? WHERE id=?",
+                    (score, aid_title or None, aid_artist or None, row_id))
+            else:
+                conn.execute(f"UPDATE {table} SET acoustid_score=? WHERE id=?", (score, row_id))
             conn.commit()
             conn.close()
         with _lib_acoustid_lock:
@@ -3987,8 +4011,8 @@ def library():
     music_path_str = str(get_setting("library_path") or "/music")
     conn = get_conn()
     lib_rows = conn.execute(
-        "SELECT id, artist, title, album, path, user_rating, cover_art_id, acoustid_score, indexed_at"
-        " FROM library_index"
+        "SELECT id, artist, title, album, path, user_rating, cover_art_id, acoustid_score,"
+        " acoustid_title, acoustid_artist, indexed_at FROM library_index"
     ).fetchall()
     bad_paths = {r["path"] for r in conn.execute("SELECT path FROM bad_flags")}
     playlist_rows = conn.execute("""
@@ -4021,6 +4045,8 @@ def library():
                 "user_rating": r["user_rating"],
                 "cover_url":   f"/api/library/cover/{r['cover_art_id']}" if r["cover_art_id"] else "",
                 "acoustid_score": r["acoustid_score"],
+                "acoustid_title":  r["acoustid_title"] or "",
+                "acoustid_artist": r["acoustid_artist"] or "",
                 "indexed_at":  r["indexed_at"] or "",
                 "flagged_bad": (p in bad_paths),
             })
@@ -4742,8 +4768,8 @@ def api_library_reorganize():
 
     conn = get_conn()
     conn.execute(
-        "UPDATE library_index SET path=?, artist=?, album=?, title=?, acoustid_score=NULL"
-        " WHERE path=?",
+        "UPDATE library_index SET path=?, artist=?, album=?, title=?, acoustid_score=NULL,"
+        " acoustid_title=NULL, acoustid_artist=NULL WHERE path=?",
         (str(dst), meta["artist"], meta["album"], meta["title"], str(src)),
     )
     # The flag meant "this isn't the song it claims to be"; it now is.
