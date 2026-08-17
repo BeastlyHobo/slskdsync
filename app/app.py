@@ -11,6 +11,7 @@ import base64
 import hashlib
 import collections
 import unicodedata
+import subprocess
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
@@ -1206,6 +1207,46 @@ def _acoustid_norm(s: str) -> str:
     return re.sub(r'[^a-z0-9]', '', s)
 
 
+def _fpcalc_diagnose(path: Path) -> str:
+    """Recover the reason fpcalc failed.
+
+    pyacoustid runs fpcalc with stderr pointed at /dev/null and reports only
+    the exit status, so a failure arrives as "exited with status N" with the
+    actual message discarded. Re-running it is the only way to see what it
+    said. Worth knowing when reading the result: on the chromaprint build this
+    image installs, every ordinary failure — missing file, empty file, corrupt
+    data, a directory, permission denied, audio too short — exits 2. Anything
+    else points at the fpcalc binary itself rather than the file.
+    """
+    exe = os.environ.get("FPCALC", "fpcalc")
+    try:
+        proc = subprocess.run([exe, "-length", "120", str(path)],
+                              capture_output=True, text=True, timeout=90)
+    except FileNotFoundError:
+        return f"{exe} is not installed or not on PATH"
+    except subprocess.TimeoutExpired:
+        return "fpcalc did not finish within 90s"
+    except Exception as ex:
+        return f"could not re-run fpcalc: {ex}"
+    if proc.returncode == 0:
+        return "fpcalc succeeded on a retry — the first failure was transient"
+    lines = [ln for ln in (proc.stderr or "").splitlines() if ln.strip()]
+    if lines:
+        return f"exit {proc.returncode}: {lines[-1].strip()}"
+    return (f"exit {proc.returncode} with no message on stderr — unusual for "
+            "this chromaprint build, check `fpcalc -version` in the container")
+
+
+def _file_note(path: Path) -> str:
+    """Size/type context for a fingerprint failure, since a zero-byte or
+    part-downloaded file is the usual culprit and is invisible from the log."""
+    try:
+        st = path.stat()
+        return f"{st.st_size} bytes"
+    except OSError as ex:
+        return f"cannot stat: {ex}"
+
+
 class AcoustIDClient:
     def identify(self, path: Path, limit: int = 5) -> tuple[list[dict], str]:
         """What does the fingerprint say this file actually is?
@@ -1227,8 +1268,10 @@ class AcoustIDClient:
             results = list(acoustid.match(api_key, str(path), meta="recordings",
                                           parse=True, force_fpcalc=True))
         except Exception as exc:
-            logger.warning(f"[AcoustID] identify failed for {path}: {exc}")
-            return [], f"Fingerprinting failed: {exc}"
+            detail = _fpcalc_diagnose(path)
+            logger.warning(f"[AcoustID] identify failed for {path}"
+                           f" ({_file_note(path)}): {exc} | {detail}")
+            return [], f"Fingerprinting failed — {detail}"
 
         seen, out = set(), []
         for score, _rid, rec_title, rec_artist in results:
@@ -1292,7 +1335,11 @@ class AcoustIDClient:
             logger.warning(f"[AcoustID] {tag} → wrong track ({best_score:.0%} match for \"{best_title}\" by {best_artist})")
             return 0.0, best_title or "", best_artist or ""
         except Exception as exc:
-            logger.warning(f"[AcoustID] {tag} → fingerprint failed: {exc}")
+            logger.warning(
+                f"[AcoustID] {tag} → fingerprint failed: {exc}"
+                f" | file: {path} ({_file_note(path)})"
+                f" | {_fpcalc_diagnose(path)}"
+            )
             return None, "", ""
 
 
