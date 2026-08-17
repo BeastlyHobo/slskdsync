@@ -299,6 +299,9 @@ a:hover { text-decoration: underline; }
   -webkit-backdrop-filter: var(--bar-blur);
   backdrop-filter: var(--bar-blur);
   border-bottom: 1px solid var(--border);
+  /* Same iOS compositing hazard as .bottom-nav. */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
 }
 
 @media (min-width: 920px) {
@@ -371,6 +374,14 @@ main {
   border-top: 1px solid var(--border);
   display: flex;
   z-index: 100;
+  /* iOS composites a backdrop-filtered fixed bar on its own, and during
+     momentum scrolling it can be left painted at a stale offset — the bar
+     stranded mid-screen with untouched pixels below it. Promoting it to its
+     own layer up front, and telling the compositor the position is what
+     changes, keeps it pinned. */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 @media (min-width: 920px) {
