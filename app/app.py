@@ -1208,15 +1208,22 @@ def _acoustid_norm(s: str) -> str:
 
 
 def _fpcalc_diagnose(path: Path) -> str:
-    """Recover the reason fpcalc failed.
+    """Recover the reason fpcalc failed, and translate it.
 
     pyacoustid runs fpcalc with stderr pointed at /dev/null and reports only
     the exit status, so a failure arrives as "exited with status N" with the
-    actual message discarded. Re-running it is the only way to see what it
-    said. Worth knowing when reading the result: on the chromaprint build this
-    image installs, every ordinary failure — missing file, empty file, corrupt
-    data, a directory, permission denied, audio too short — exits 2. Anything
-    else points at the fpcalc binary itself rather than the file.
+    actual message discarded. Re-running it is the only way to see what it said.
+
+    Exit codes on the chromaprint build this image installs, established by
+    running it against each case:
+      2 — could not open or decode the file at all: missing, empty, unreadable,
+          not audio, garbage from byte zero, or too short to fingerprint.
+      3 — the stream opened and then broke partway through. This is what a
+          half-finished download looks like: the container header still claims
+          the full duration, so a player reports the real length and stops
+          early when the data runs out. FLAC surfaces this; MP3 and Ogg
+          tolerate a cut tail and fingerprint anyway, so a lossless library
+          hits it most.
     """
     exe = os.environ.get("FPCALC", "fpcalc")
     try:
@@ -1231,10 +1238,29 @@ def _fpcalc_diagnose(path: Path) -> str:
     if proc.returncode == 0:
         return "fpcalc succeeded on a retry — the first failure was transient"
     lines = [ln for ln in (proc.stderr or "").splitlines() if ln.strip()]
-    if lines:
-        return f"exit {proc.returncode}: {lines[-1].strip()}"
-    return (f"exit {proc.returncode} with no message on stderr — unusual for "
-            "this chromaprint build, check `fpcalc -version` in the container")
+    raw = lines[-1].strip() if lines else ""
+    if not raw:
+        return (f"exit {proc.returncode} with no message on stderr — unusual "
+                "for this chromaprint build, check `fpcalc -version`")
+    return f"exit {proc.returncode}: {raw}{_fpcalc_cause(proc.returncode, raw)}"
+
+
+def _fpcalc_cause(returncode: int, stderr_line: str) -> str:
+    """Plain-English cause for an fpcalc error, where one is unambiguous."""
+    low = stderr_line.lower()
+    if returncode == 3 or "error reading from the audio source" in low:
+        return ("  → the audio ends partway through: an incomplete download."
+                " The header still claims the full duration, so it plays and"
+                " then stops early. Re-download it.")
+    if "empty fingerprint" in low:
+        return "  → too short to fingerprint (roughly under 3 seconds of audio)."
+    if "no such file" in low:
+        return "  → the file is not at that path any more; rescan the library."
+    if "permission denied" in low:
+        return "  → the container cannot read the file; check volume ownership."
+    if "could not find any audio stream" in low:
+        return "  → no decodable audio; the file is likely 0 bytes or a stub."
+    return ""
 
 
 def _file_note(path: Path) -> str:

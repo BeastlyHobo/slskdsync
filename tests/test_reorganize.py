@@ -292,15 +292,41 @@ def test_diagnose_notes_a_transient_failure(A, tmp_path, monkeypatch):
 
 
 def test_diagnose_flags_a_silent_nonzero_exit(A, tmp_path, monkeypatch):
-    """Exit 3 with nothing on stderr is the reported symptom, and no ordinary
-    file problem produces it — say so rather than repeating the number."""
     class P:
-        returncode = 3
+        returncode = 4
         stdout = ""
         stderr = ""
     monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: P())
     out = A._fpcalc_diagnose(tmp_path / "x.flac")
-    assert "exit 3" in out and "fpcalc -version" in out
+    assert "exit 4" in out and "fpcalc -version" in out
+
+
+def test_diagnose_identifies_a_truncated_download(A, tmp_path, monkeypatch):
+    """Exit 3 is a stream that opened and then broke — the reported symptom of
+    a file that plays for a while and stops. It must name the cause."""
+    class P:
+        returncode = 3
+        stdout = "DURATION=180\n"
+        stderr = "ERROR: Error reading from the audio source (Invalid data found when processing input)\n"
+    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: P())
+    out = A._fpcalc_diagnose(tmp_path / "x.flac")
+    assert "incomplete download" in out
+    assert "Re-download" in out
+
+
+@pytest.mark.parametrize("rc,line,expect", [
+    (3, "ERROR: Error reading from the audio source (Invalid data)", "incomplete download"),
+    (2, "ERROR: Empty fingerprint", "too short"),
+    (2, "ERROR: Could not open the input file (No such file or directory)", "rescan"),
+    (2, "ERROR: Could not open the input file (Permission denied)", "volume ownership"),
+    (2, "ERROR: Could not find any audio stream in the file", "0 bytes"),
+    (2, "ERROR: something nobody has seen before", ""),
+])
+def test_causes_are_mapped(A, rc, line, expect):
+    out = A._fpcalc_cause(rc, line)
+    assert expect in out
+    if not expect:
+        assert out == ""
 
 
 def test_file_note_reports_size_and_missing_files(A, tmp_path):
