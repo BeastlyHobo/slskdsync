@@ -224,3 +224,39 @@ def test_reorganize_clears_the_stale_verdict(A, auth, lib):
     row = conn.execute("SELECT * FROM library_index").fetchone()
     conn.close()
     assert row["acoustid_title"] is None and row["acoustid_score"] is None
+
+
+# --- fingerprint metadata comparison ---------------------------------------
+# The normaliser deleted characters outside a-z0-9 instead of folding them, so
+# a diacritic or an ampersand could make a correct match look like a wrong one.
+# That is how a file already named what AcoustID suggests still got ID 0%.
+
+@pytest.mark.parametrize("tagged,matched", [
+    # The reported case: "&" in the tag, "and" from AcoustID.
+    ("Anthony Gonzalez & Gael García Bernal", "Anthony Gonzalez and Gael García Bernal"),
+    ("Simon & Garfunkel", "Simon and Garfunkel"),
+    # Accents were dropped entirely, so "Björk" normalised to "bjrk".
+    ("Björk", "Bjork"),
+    ("Beyoncé", "Beyonce"),
+    ("Sigur Rós", "Sigur Ros"),
+])
+def test_equivalent_names_normalise_the_same(A, tagged, matched):
+    assert A._acoustid_norm(tagged) == A._acoustid_norm(matched)
+
+
+def test_genuinely_different_names_still_differ(A):
+    assert A._acoustid_norm("Autechre") != A._acoustid_norm("Aphex Twin")
+    assert A._acoustid_norm("Un Poco Loco") != A._acoustid_norm("Remember Me")
+
+
+def test_ampersand_artist_is_not_reported_as_a_different_song(A, monkeypatch, tmp_path):
+    """End to end: the exact pairing from the screenshot must score as a match,
+    not as the 0.0 'wrong track' sentinel."""
+    monkeypatch.setattr(A, "get_setting", lambda k, *a: "key" if k == "acoustid_api_key" else "")
+    fake = type("m", (), {"match": staticmethod(lambda *a, **k: [
+        (0.97, "rid", "Un Poco Loco", "Anthony Gonzalez and Gael García Bernal")])})
+    monkeypatch.setitem(__import__("sys").modules, "acoustid", fake)
+    score, title, artist = A._acoustid.verify_detail(
+        tmp_path / "x.flac", "Anthony Gonzalez & Gael García Bernal", "Un Poco Loco")
+    assert score == pytest.approx(0.97), "equivalent artist spelling scored as a mismatch"
+    assert title == "Un Poco Loco"

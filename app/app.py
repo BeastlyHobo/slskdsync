@@ -10,6 +10,7 @@ import logging
 import base64
 import hashlib
 import collections
+import unicodedata
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
@@ -1192,7 +1193,17 @@ class ListenBrainzClient:
 # ---------------------------------------------------------------------------
 
 def _acoustid_norm(s: str) -> str:
-    return re.sub(r'[^a-z0-9]', '', (s or "").lower())
+    """Fold a title/artist to a comparable key.
+
+    Stripping non-ASCII outright turned "Björk" into "bjrk" while a plain
+    "Bjork" stayed "bjork", so any diacritic could fake a mismatch; NFKD
+    decomposes the accent into a base letter plus a combining mark, and only
+    the mark is dropped. "&" and "and" are the same word to a reader and
+    routinely differ between a file's tags and the AcoustID recording, so
+    they're folded together too.
+    """
+    s = unicodedata.normalize("NFKD", s or "").lower().replace("&", "and")
+    return re.sub(r'[^a-z0-9]', '', s)
 
 
 class AcoustIDClient:
@@ -4593,11 +4604,22 @@ def api_library_acoustid_status():
 
 @app.route("/api/library/acoustid/scores")
 def api_library_acoustid_scores():
-    """Return updated acoustid_score for all library_index rows — polled after a verify run."""
+    """Updated AcoustID result per library_index row — polled after a verify run.
+
+    Carries the matched title/artist as well as the score. Returning the score
+    alone meant a just-verified track had no verdict to show until a page load
+    re-fetched the server-rendered data, which is exactly the "nothing appears
+    until I navigate away and back" symptom.
+    """
     conn = get_conn()
-    rows = conn.execute("SELECT id, acoustid_score FROM library_index").fetchall()
+    rows = conn.execute(
+        "SELECT id, acoustid_score, acoustid_title, acoustid_artist FROM library_index"
+    ).fetchall()
     conn.close()
-    return jsonify({r["id"]: r["acoustid_score"] for r in rows})
+    return jsonify({r["id"]: {"score":  r["acoustid_score"],
+                              "title":  r["acoustid_title"] or "",
+                              "artist": r["acoustid_artist"] or ""}
+                    for r in rows})
 
 
 @app.route("/api/library/playlist/<int:job_id>")

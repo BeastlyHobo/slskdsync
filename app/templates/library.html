@@ -344,10 +344,29 @@ function pollAid() {
     aidRunning = false;
     document.getElementById('aid-progress-wrap').style.display = 'none';
     fetch('/api/library/acoustid/scores').then(r=>r.json()).then(scores => {
+      // Each entry is {score, title, artist} — the verdict has to land in
+      // ALL_TRACKS too, or the modal has nothing to render until a page load.
       ALL_TRACKS.forEach(t => {
-        if (t.id !== null && Object.prototype.hasOwnProperty.call(scores, t.id))
-          t.acoustid_score = scores[t.id];
+        if (t.id === null || !Object.prototype.hasOwnProperty.call(scores, t.id)) return;
+        const v = scores[t.id] || {};
+        t.acoustid_score  = v.score;
+        t.acoustid_title  = v.title  || '';
+        t.acoustid_artist = v.artist || '';
       });
+
+      // _modalTrack is the same object as its ALL_TRACKS entry, so it just got
+      // the new values; repaint whatever the modal is showing.
+      if (_modalTrack && _modalTrack.id != null) {
+        const badges = document.getElementById('tm-badges');
+        if (badges) {
+          const newB = aidBadgeHtml(_modalTrack.acoustid_score);
+          const old  = badges.querySelector('.aid-badge');
+          if (old) { if (newB) old.outerHTML = newB; else old.remove(); }
+          else if (newB) badges.insertAdjacentHTML('afterbegin', newB);
+        }
+        renderAidVerdict(_modalTrack);
+        renderModalMeta(_modalTrack, _modalDiskInfo);
+      }
 
       const tid  = _verifyingTrackId;
       const vBtn = _verifyingBtn;
@@ -355,7 +374,7 @@ function pollAid() {
       _verifyingBtn     = null;
 
       if (tid != null && Object.prototype.hasOwnProperty.call(scores, tid)) {
-        const score   = scores[tid];
+        const score   = (scores[tid] || {}).score;
         const newHtml = aidBadgeHtml(score);
 
         // Update the row badge in-place
@@ -367,18 +386,6 @@ function pollAid() {
             const extSpan = row.querySelector('.lib-ext');
             if (extSpan) extSpan.insertAdjacentHTML('beforebegin', newHtml);
           }
-        }
-
-        // Update modal if it's showing this track
-        if (_modalTrack && _modalTrack.id === tid) {
-          _modalTrack.acoustid_score = score;
-          const badges = document.getElementById('tm-badges');
-          if (badges) {
-            const old = badges.querySelector('.aid-badge');
-            if (old) { if (newHtml) old.outerHTML = newHtml; else old.remove(); }
-            else if (newHtml) badges.insertAdjacentHTML('afterbegin', newHtml);
-          }
-          renderModalMeta(_modalTrack, _modalDiskInfo);
         }
 
         if (vBtn) { vBtn.disabled = false; vBtn.textContent = vBtn._orig || '↻ ID'; }
@@ -974,7 +981,12 @@ function toggleBad() {
 // what AcoustID thinks it is without paying for another fingerprint. When that
 // disagrees with the file's own tags, the verdict doubles as a rename action.
 
-function aidNorm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+// Mirrors _acoustid_norm server-side: fold accents rather than deleting them
+// ("Björk" must not become "bjrk"), and treat "&" and "and" as the same word.
+function aidNorm(s) {
+  return (s || '').normalize('NFKD').toLowerCase()
+    .replace(/&/g, 'and').replace(/[^a-z0-9]/g, '');
+}
 
 function aidDisagrees(t) {
   if (!t.acoustid_title) return false;
@@ -1206,6 +1218,13 @@ function doRedownload() {
     res.textContent = '✗ Network error';
   });
 }
+
+// The modal is authored inside the page's content block, which puts it several
+// levels down inside .app-shell — a flex container sized in dvh. A position:
+// fixed overlay only resolves against the viewport while no ancestor creates a
+// containing block, and on iOS that nesting is where full-screen overlays come
+// up short. Reparenting to <body> makes it structurally immune.
+document.body.appendChild(document.getElementById('track-modal'));
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTrackModal(); });
 
