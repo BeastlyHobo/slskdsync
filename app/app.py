@@ -1913,9 +1913,63 @@ def tag_file(path: Path, track: sqlite3.Row) -> None:
         logger.warning(f"[tag] Failed to tag {path.name}: {ex}")
 
 
+_tag_cache: dict = {}
+_tag_cache_lock = threading.Lock()
+
+
+def _match_norm(s: str) -> str:
+    """Fold a name for comparison against text a stranger typed.
+
+    Peer filenames use whatever separators the uploader liked — underscores,
+    dots, no accents, "and" for "&" — so compare on words rather than on the
+    literal string. Runs of punctuation collapse to a single space rather than
+    vanishing, which keeps word boundaries meaningful: delete them instead and
+    "Home" starts matching inside "Homewrecker".
+    """
+    s = unicodedata.normalize("NFKD", s or "").lower().replace("&", " and ")
+    # Drop the combining marks NFKD split off, rather than letting the rule
+    # below turn them into spaces — that breaks "Starálfur" into "star alfur".
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]+", " ", s).strip()
+
+
+def _read_tags(path: Path) -> tuple[str, str]:
+    """(artist, title) from the file's own tags, cached by size and mtime.
+
+    Peers routinely name a file "07.flac" or "track 3.mp3" while tagging it
+    correctly, so the tags identify a download that the filename cannot.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return "", ""
+    key = str(path)
+    with _tag_cache_lock:
+        hit = _tag_cache.get(key)
+        if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+            return hit[2], hit[3]
+    artist = title = ""
+    try:
+        audio = mutagen.File(path, easy=True)
+        if audio:
+            artist = (audio.get("artist") or [""])[0] or ""
+            title  = (audio.get("title")  or [""])[0] or ""
+    except Exception as ex:
+        logger.debug(f"[discover] Could not read tags from {path.name}: {ex}")
+    with _tag_cache_lock:
+        if len(_tag_cache) > 5000:
+            _tag_cache.clear()   # bounded; the watch folder churns
+        _tag_cache[key] = (st.st_mtime_ns, st.st_size, artist, title)
+    return artist, title
+
+
 def discover_download_for_track(track: sqlite3.Row,
                                 audio_files: Optional[list[Path]] = None) -> Optional[Path]:
     """Find the downloaded file for a track in the watch folder.
+
+    Two passes. The filename and path are checked first because they cost
+    nothing; only if that is inconclusive are the files' tags read, which
+    catches downloads whose name carries no title at all.
 
     audio_files: optional precomputed file list so the worker tick can walk the
     watch folder ONCE instead of once per downloading track (up to 20 identical
@@ -1927,34 +1981,31 @@ def discover_download_for_track(track: sqlite3.Row,
             return None
         audio_files = [f for f in watch.glob("**/*")
                        if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
-    title = (track["title"] or "").lower().strip()
-    artist = (track["artist"] or "").lower().split(",")[0].strip()
 
-    def _norm(s: str) -> str:
-        # Strip quote characters that differ between DB titles and peer filenames
-        return (s.replace('"', '').replace('“', '').replace('”', '')
-                 .replace('‘', '').replace('’', '').replace("'", ''))
-
-    title_norm = _norm(title)
-    artist_norm = _norm(artist)
+    title = _match_norm(track["title"])
+    artist = _match_norm((track["artist"] or "").split(",")[0])
 
     if not audio_files:
         logger.warning(f"[discover] Watch path {watch} contains no audio files")
         return None
-
-    if not title_norm:
+    if not title:
         return None
 
     # Word-boundary containment so "home" can't match "homewrecker".
-    title_re = re.compile(rf"(?<![a-z0-9]){re.escape(title_norm)}(?![a-z0-9])")
+    title_re = re.compile(rf"(?<![a-z0-9]){re.escape(title)}(?![a-z0-9])")
+
+    def artist_agrees(candidate: str) -> bool:
+        """Either name may carry extras the other lacks — "feat." guests, a
+        label suffix — so accept one containing the other."""
+        return bool(artist and candidate and (artist in candidate or candidate in artist))
 
     title_matches: list[Path] = []  # title in the filename
     path_matches: list[Path] = []   # title only in a parent folder name
     for f in audio_files:
-        n = _norm(f.name.lower())
-        full_l = _norm(str(f).lower().replace("\\", "/"))
+        n = _match_norm(f.name)
+        full_l = _match_norm(str(f))
         if title_re.search(n):
-            if artist_norm and artist_norm in n:
+            if artist_agrees(n):
                 logger.debug(f"[discover] Exact match: {f.name}")
                 return f
             title_matches.append(f)
@@ -1969,13 +2020,30 @@ def discover_download_for_track(track: sqlite3.Row,
         # Several files carry this title and none pairs it with the artist in the
         # filename — use the artist elsewhere in the path to disambiguate, else
         # wait: grabbing one at random organizes the wrong song.
-        if artist_norm:
-            with_artist = [f for f in candidates
-                           if artist_norm in _norm(str(f).lower().replace("\\", "/"))]
+        if artist:
+            with_artist = [f for f in candidates if artist_agrees(_match_norm(str(f)))]
             if with_artist:
                 logger.debug(f"[discover] Path-artist match for '{title}': {with_artist[0].name}")
                 return with_artist[0]
-        logger.info(f"[discover] {len(candidates)} ambiguous matches for '{title}' — waiting for a clearer match")
+
+    # Nothing conclusive from the names — ask the files what they are.
+    tag_matches: list[Path] = []
+    for f in audio_files:
+        tag_artist, tag_title = _read_tags(f)
+        if not tag_title or not title_re.search(_match_norm(tag_title)):
+            continue
+        if artist_agrees(_match_norm(tag_artist)):
+            logger.info(f"[discover] Tag match for '{title}': {f.name}"
+                        f" (tagged \'{tag_title}\' by \'{tag_artist}\')")
+            return f
+        tag_matches.append(f)
+    if len(tag_matches) == 1:
+        logger.info(f"[discover] Tag-title match for '{title}': {tag_matches[0].name}")
+        return tag_matches[0]
+
+    if candidates or tag_matches:
+        logger.info(f"[discover] {len(candidates) + len(tag_matches)} ambiguous matches"
+                    f" for '{title}' — waiting for a clearer match")
         return None
 
     sample = [f.name for f in audio_files[:5]]
