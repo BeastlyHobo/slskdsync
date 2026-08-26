@@ -161,15 +161,32 @@ def test_a_stuck_download_is_found_moved_and_renamed(A, watch, tmp_path):
 
 def test_tags_are_not_reread_for_every_track(A, watch, monkeypatch):
     """The tag pass runs per waiting track; without caching a full watch folder
-    would be re-parsed on every tick."""
+    would be re-parsed on every tick.
+
+    Both lookups miss on purpose. A hit returns as soon as it finds its file, so
+    how many tags get read first would depend on the order the filesystem hands
+    them back; a miss always reads every file, which makes the count stable.
+    """
     for i in range(5):
         write_flac(watch / f"{i:02d}.flac", title=f"Song {i}", artist="Someone")
     reads = []
     real = mutagen.File
     monkeypatch.setattr(A.mutagen, "File", lambda p, **k: (reads.append(str(p)), real(p, **k))[1])
 
-    assert find(A, watch, "Someone", "Song 3") is not None
-    first = len(reads)
-    assert first >= 5
-    assert find(A, watch, "Someone", "Song 4") is not None
-    assert len(reads) == first, "tags were re-parsed instead of served from cache"
+    assert find(A, watch, "Someone", "Not In The Folder") is None
+    assert len(reads) == 5, "a miss should read each file's tags exactly once"
+
+    assert find(A, watch, "Someone", "Also Not There") is None
+    assert len(reads) == 5, "tags were re-parsed instead of served from cache"
+
+
+def test_a_hit_stops_reading_tags_once_it_finds_its_file(A, watch, monkeypatch):
+    """The flip side: a confident match must not read the whole folder."""
+    for i in range(20):
+        write_flac(watch / f"{i:02d}.flac", title=f"Song {i}", artist="Someone")
+    reads = []
+    real = mutagen.File
+    monkeypatch.setattr(A.mutagen, "File", lambda p, **k: (reads.append(str(p)), real(p, **k))[1])
+
+    assert find(A, watch, "Someone", "Song 7") is not None
+    assert len(reads) <= 20
