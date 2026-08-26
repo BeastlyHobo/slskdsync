@@ -260,3 +260,97 @@ def test_ampersand_artist_is_not_reported_as_a_different_song(A, monkeypatch, tm
         tmp_path / "x.flac", "Anthony Gonzalez & Gael García Bernal", "Un Poco Loco")
     assert score == pytest.approx(0.97), "equivalent artist spelling scored as a mismatch"
     assert title == "Un Poco Loco"
+
+
+# --- fingerprint failure diagnostics --------------------------------------
+# pyacoustid runs fpcalc with stderr at /dev/null and surfaces only "exited
+# with status N", so a real failure arrived with no cause attached.
+
+def test_diagnose_reports_a_missing_binary(A, tmp_path, monkeypatch):
+    monkeypatch.setenv("FPCALC", str(tmp_path / "definitely-not-here"))
+    assert "not installed" in A._fpcalc_diagnose(tmp_path / "x.flac")
+
+
+def test_diagnose_surfaces_the_stderr_message(A, tmp_path, monkeypatch):
+    """The message fpcalc printed is the whole point of re-running it."""
+    class P:
+        returncode = 2
+        stdout = ""
+        stderr = "ERROR: Could not open the input file (No such file or directory)\n"
+    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: P())
+    out = A._fpcalc_diagnose(tmp_path / "x.flac")
+    assert "exit 2" in out and "No such file or directory" in out
+
+
+def test_diagnose_notes_a_transient_failure(A, tmp_path, monkeypatch):
+    class P:
+        returncode = 0
+        stdout = "DURATION=10\nFINGERPRINT=abc\n"
+        stderr = ""
+    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: P())
+    assert "transient" in A._fpcalc_diagnose(tmp_path / "x.flac")
+
+
+def test_diagnose_flags_a_silent_nonzero_exit(A, tmp_path, monkeypatch):
+    class P:
+        returncode = 4
+        stdout = ""
+        stderr = ""
+    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: P())
+    out = A._fpcalc_diagnose(tmp_path / "x.flac")
+    assert "exit 4" in out and "fpcalc -version" in out
+
+
+def test_diagnose_identifies_a_truncated_download(A, tmp_path, monkeypatch):
+    """Exit 3 is a stream that opened and then broke — the reported symptom of
+    a file that plays for a while and stops. It must name the cause."""
+    class P:
+        returncode = 3
+        stdout = "DURATION=180\n"
+        stderr = "ERROR: Error reading from the audio source (Invalid data found when processing input)\n"
+    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: P())
+    out = A._fpcalc_diagnose(tmp_path / "x.flac")
+    assert "incomplete download" in out
+    assert "Re-download" in out
+
+
+@pytest.mark.parametrize("rc,line,expect", [
+    (3, "ERROR: Error reading from the audio source (Invalid data)", "incomplete download"),
+    (2, "ERROR: Empty fingerprint", "too short"),
+    (2, "ERROR: Could not open the input file (No such file or directory)", "rescan"),
+    (2, "ERROR: Could not open the input file (Permission denied)", "volume ownership"),
+    (2, "ERROR: Could not find any audio stream in the file", "0 bytes"),
+    (2, "ERROR: something nobody has seen before", ""),
+])
+def test_causes_are_mapped(A, rc, line, expect):
+    out = A._fpcalc_cause(rc, line)
+    assert expect in out
+    if not expect:
+        assert out == ""
+
+
+def test_file_note_reports_size_and_missing_files(A, tmp_path):
+    f = tmp_path / "a.flac"; f.write_bytes(b"x" * 17)
+    assert A._file_note(f) == "17 bytes"
+    assert "cannot stat" in A._file_note(tmp_path / "nope.flac")
+
+
+def test_failed_fingerprint_logs_the_cause(A, tmp_path, monkeypatch, caplog):
+    """The whole chain: a failure must log the path, the size and the reason."""
+    monkeypatch.setattr(A, "get_setting", lambda k, *a: "key" if k == "acoustid_api_key" else "")
+    boom = type("m", (), {"match": staticmethod(
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("fpcalc exited with status 3")))})
+    monkeypatch.setitem(__import__("sys").modules, "acoustid", boom)
+    class P:
+        returncode = 2
+        stdout = ""
+        stderr = "ERROR: Could not open the input file (Invalid data found when processing input)\n"
+    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: P())
+    f = tmp_path / "Surface Pressure.flac"; f.write_bytes(b"")
+    with caplog.at_level("WARNING"):
+        score, _t, _a = A._acoustid.verify_detail(f, "Jessica Darrow", "Surface Pressure")
+    assert score is None
+    msg = caplog.text
+    assert "Surface Pressure.flac" in msg
+    assert "0 bytes" in msg
+    assert "Invalid data found" in msg
