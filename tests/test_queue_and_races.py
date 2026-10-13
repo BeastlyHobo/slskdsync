@@ -263,3 +263,23 @@ def test_deleting_a_downloading_track_cancels_its_transfer(A, auth, job, monkeyp
     conn.commit(); conn.close()
     auth.delete("/api/tracks/1")
     assert cancelled == [("peer", "x\\T.flac")]
+
+
+def test_new_playlist_tracks_join_the_playlist_job(A, auth, job):
+    """'New?' → '+ Queue' used to make separate jobs the playlist's M3U never saw."""
+    r = auth.post("/api/download/batch", json={
+        "source": "slskd", "playlist_job_id": job,
+        "tracks": [{"artist": "A", "title": "New Song", "track_number": 7, "duration": 200}]})
+    assert r.get_json()["queued"] == 1
+    conn = A.get_conn()
+    t = conn.execute("SELECT job_id, track_number, duration FROM tracks").fetchone()
+    jobs = conn.execute("SELECT COUNT(*) FROM import_jobs").fetchone()[0]
+    conn.close()
+    assert (t["job_id"], t["track_number"], t["duration"], jobs) == (job, 7, 200, 1)
+    # without it, still one track-type job per song
+    auth.post("/api/download/batch", json={"tracks": [{"artist": "B", "title": "Other"}]})
+    conn = A.get_conn()
+    assert conn.execute("SELECT COUNT(*) FROM import_jobs").fetchone()[0] == 2
+    conn.close()
+    assert auth.post("/api/download/batch", json={
+        "playlist_job_id": 999, "tracks": [{"artist": "C", "title": "X"}]}).status_code == 404

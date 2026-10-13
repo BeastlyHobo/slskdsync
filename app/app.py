@@ -4254,7 +4254,8 @@ def api_playlist_diff(job_id):
         key = ((t.artist or "").lower().strip(), (t.title or "").lower().strip())
         if key not in existing_set:
             new_tracks.append({"artist": t.artist, "title": t.title,
-                                "album": t.album, "cover_url": t.cover_url})
+                                "album": t.album, "cover_url": t.cover_url,
+                                "track_number": t.track_number, "duration": t.duration})
 
     return jsonify({"ok": True, "new_tracks": new_tracks, "total_source": len(source_tracks)})
 
@@ -5586,6 +5587,11 @@ def api_download_batch():
     diff). Each track becomes its own track-type job so heterogeneous tracks are
     searched individually rather than batched into one album search.
 
+    With ``playlist_job_id`` (the Playlists page's "New?" check) the tracks join
+    that playlist's own job instead, exactly as a sync would add them. In
+    separate jobs they never made it into the playlist's M3U until the next
+    full sync re-found them.
+
     Returns a per-track ``results`` array aligned to the input order, with each
     entry one of: 'queued', 'in_library', 'error'.
     """
@@ -5594,6 +5600,14 @@ def api_download_batch():
     source = data.get("source", "slskd")
     conn = get_conn()
     cur = conn.cursor()
+    pl_job = None
+    if data.get("playlist_job_id") is not None:
+        pl_job = conn.execute(
+            "SELECT id FROM import_jobs WHERE id=? AND source_type NOT IN ('track','redownload')",
+            (data.get("playlist_job_id"),)).fetchone()
+        if not pl_job:
+            conn.close()
+            return jsonify({"ok": False, "error": "playlist not found"}), 404
     results = []
     queued = skipped = 0
     for t in tracks:
@@ -5607,15 +5621,18 @@ def api_download_batch():
             skipped += 1
             continue
         src_id = "" if source == "monochrome" else (t.get("source_id") or "").strip()
-        cur.execute(
-            "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
-            ("search", "track", "", 0, "queued"),
-        )
-        jid = cur.lastrowid
+        if pl_job:
+            jid = pl_job["id"]
+        else:
+            cur.execute(
+                "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
+                ("search", "track", "", 0, "queued"),
+            )
+            jid = cur.lastrowid
         cur.execute(
             "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source,duration)"
             " VALUES(?,?,?,?,?,?,?,?,?)",
-            (jid, artist, (t.get("album") or "").strip(), title, 0, src_id,
+            (jid, artist, (t.get("album") or "").strip(), title, (int(t["track_number"]) if str(t.get("track_number", "")).isdigit() else 0), src_id,
              (t.get("cover_url") or t.get("cover") or "").strip(), source, _secs(t.get("duration"))),
         )
         results.append("queued")

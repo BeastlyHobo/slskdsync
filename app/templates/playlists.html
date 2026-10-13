@@ -267,7 +267,7 @@ function queueOneNew(jobId, btn) {
   fetch('/api/download/batch', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({tracks: [track], source: 'slskd'}),
+    body: JSON.stringify({tracks: [track], source: 'slskd', playlist_job_id: jobId}),
   }).then(r => r.json())
     .then(d => {
       if (!d.ok) { markQueueBtn(btn, 'error', d.error); return; }
@@ -289,7 +289,7 @@ function queueAllNew(jobId, btn) {
   fetch('/api/download/batch', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({tracks: pending.map(p => p.track), source: 'slskd'}),
+    body: JSON.stringify({tracks: pending.map(p => p.track), source: 'slskd', playlist_job_id: jobId}),
   }).then(r => r.json())
     .then(d => {
       if (!d.ok) { btn.textContent = '✗ ' + esc(d.error || 'Error'); btn.style.color = 'var(--err)'; btn.disabled = false; return; }
