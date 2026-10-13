@@ -95,8 +95,10 @@
 </div>{# /app-shell #}
 
 {# Bottom navigation (mobile <920px) #}
+{# Stats and Logs stay in the desktop sidebar; on a phone eight tabs left
+   49px each and clipped the last label. Both are linked from Settings. #}
 <nav class="bottom-nav">
-  {% for href, label, icon in nav_items %}
+  {% for href, label, icon in nav_items if href not in ('/stats', '/logs') %}
   <a href="{{ href }}" class="{{ 'active' if request.path == href else '' }}">
     <span class="nav-icon">{{ icon | safe }}</span><span class="nav-label">{{ label }}</span>
   </a>
@@ -112,6 +114,17 @@ function showToast(msg, duration) {
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), duration || 2500);
 }
+</script>
+
+<script>
+// iOS scrolls the window itself to keep a focused input above the keyboard,
+// and doesn't always scroll it back when the keyboard closes. On phones the
+// window should never be scrolled (.content-col is the scroller), so any
+// offset left behind is that leftover — undo it.
+document.addEventListener('focusout', () => {
+  if (!window.matchMedia('(max-width: 919px)').matches) return;
+  setTimeout(() => { if (window.scrollY) window.scrollTo(0, 0); }, 100);
+});
 </script>
 
 <script>
