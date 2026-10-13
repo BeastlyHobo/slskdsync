@@ -856,8 +856,13 @@ class DeezerProvider:
             "title": album.get("title", ""),
             "artist": album_artist,
             "artist_id": str(album.get("artist", {}).get("id", "")),
-            "cover": album.get("cover_medium", ""),
+            "cover": album.get("cover_big", "") or album.get("cover_medium", ""),
             "release_date": album.get("release_date", ""),
+            "label": album.get("label", ""),
+            "genres": [g.get("name", "") for g in (album.get("genres") or {}).get("data", [])],
+            "duration": album.get("duration", 0),
+            "record_type": album.get("record_type", ""),
+            "nb_tracks": album.get("nb_tracks", 0),
             "tracks": [
                 {
                     "id": str(t.get("id", "")),
@@ -868,6 +873,38 @@ class DeezerProvider:
                     "type": "track",
                 }
                 for t in tracks_data.get("data", [])
+            ],
+        }
+
+    def get_track(self, track_id: str) -> dict:
+        """One track in depth, for the song page: release, credits, and the
+        30-second preview — hearing what the song should sound like is the
+        quickest check against a wrong grab."""
+        t = self._get(f"/track/{track_id}")
+        album = t.get("album") or {}
+        artist = t.get("artist") or {}
+        return {
+            "id": str(track_id),
+            "title": t.get("title", ""),
+            "title_version": t.get("title_version", ""),
+            "artist": artist.get("name", ""),
+            "artist_id": str(artist.get("id", "")),
+            "artist_picture": artist.get("picture_medium", ""),
+            "album": album.get("title", ""),
+            "album_id": str(album.get("id", "")),
+            "cover": album.get("cover_big", "") or album.get("cover_medium", ""),
+            "duration": t.get("duration", 0),
+            "track_position": t.get("track_position", 0),
+            "disk_number": t.get("disk_number", 0),
+            "release_date": t.get("release_date", "") or album.get("release_date", ""),
+            "isrc": t.get("isrc", ""),
+            "bpm": t.get("bpm", 0),
+            "explicit": bool(t.get("explicit_lyrics")),
+            "preview": t.get("preview", ""),
+            "rank": t.get("rank", 0),
+            "contributors": [
+                {"name": c.get("name", ""), "role": c.get("role", ""), "id": str(c.get("id", ""))}
+                for c in (t.get("contributors") or [])
             ],
         }
 
@@ -3917,7 +3954,8 @@ def _attention_items(conn) -> dict:
         " ORDER BY b.flagged_at DESC"
     ).fetchall()
     low = conn.execute(
-        "SELECT id, artist, title, album, path, acoustid_score FROM library_index"
+        "SELECT id, artist, title, album, path, acoustid_score, acoustid_title, acoustid_artist"
+        " FROM library_index"
         " WHERE acoustid_score IS NOT NULL AND acoustid_score >= 0 AND acoustid_score < 0.5"
         " AND path NOT IN (SELECT path FROM bad_flags)"
         " ORDER BY acoustid_score"
@@ -4472,6 +4510,14 @@ def api_search():
 def api_artist(artist_id):
     try:
         return jsonify(_deezer.get_artist(artist_id))
+    except Exception as ex:
+        return jsonify({"error": str(ex)}), 500
+
+
+@app.route("/api/track/<track_id>")
+def api_track(track_id):
+    try:
+        return jsonify(_deezer.get_track(track_id))
     except Exception as ex:
         return jsonify({"error": str(ex)}), 500
 

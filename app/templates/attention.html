@@ -78,10 +78,16 @@
   {% for t in low %}
   <div class="missing-row att-row" data-path="{{ t.path }}">
     <div class="missing-info">
-      <div class="missing-title">{{ t.title or '—' }}
-        <span class="aid-badge aid-red">ID {{ (t.acoustid_score * 100) | int }}%</span>
+      {# Badge outside the title: the title ellipsizes, and took the badge with it. #}
+      <div class="att-title-row">
+        <div class="missing-title">{{ t.title or '—' }}</div>
+        <span class="aid-badge aid-red">{{ 'Wrong song' if t.acoustid_score == 0 else 'ID %d%%' % ((t.acoustid_score * 100) | int) }}</span>
       </div>
       <div class="missing-sub">{{ t.artist or '' }}{% if t.album %} · {{ t.album }}{% endif %}</div>
+      {% if t.acoustid_title %}
+      <div class="missing-sub" style="color:var(--err)">Sounds like “{{ t.acoustid_title }}”{% if t.acoustid_artist %} by {{ t.acoustid_artist }}{% endif %}</div>
+      {% endif %}
+      <a class="missing-sub" style="color:var(--accent)" href="/library?path={{ t.path | urlencode }}">Open in Library — identify or rename ›</a>
     </div>
     <div class="missing-search">
       <input class="ms-input" type="text" value="{{ ((t.artist or '') ~ ' ' ~ (t.title or '')) | trim }}"
@@ -98,6 +104,8 @@
 .att-section { margin-bottom: 1.4rem; }
 .att-head { display:flex; align-items:center; gap:.6rem; margin-bottom:.15rem; }
 .att-title { font-size:.92rem; font-weight:700; }
+.att-title-row { display:flex; align-items:center; gap:.4rem; min-width:0; }
+.att-title-row .missing-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .att-count { display:inline-block; background:var(--surface2); border:1px solid var(--border);
   border-radius:var(--radius-pill); font-size:0.75rem; padding:.05rem .5rem; margin-left:.25rem;
   color:var(--text-muted); }

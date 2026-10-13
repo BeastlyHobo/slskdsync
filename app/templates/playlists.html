@@ -49,8 +49,9 @@
     <a class="pl-link" href="{{ job.source_url }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open original">↗</a>
     {% endif %}
   </div>
-  {% if job.playlist_name or job.needs_fix or job.source_url %}
   <div class="pl-actions-row">
+    <a class="pl-regen-btn" href="/library?playlist={{ job.id }}&name={{ (job.playlist_name or job.source_url or '') | urlencode }}"
+       title="This playlist's songs in your Library">♫ Songs</a>
     {% if job.playlist_name and job.source_url %}
     <button class="pl-regen-btn" style="color:var(--ok);border-color:rgba(80,200,120,0.35)"
       onclick="syncNow({{ job.id }},this)" title="Re-check source, queue new songs, refresh M3U + Navidrome">⟳ Sync</button>
@@ -72,7 +73,6 @@
     <button class="pl-regen-btn" onclick="checkFresh({{ job.id }},this)" title="Check source playlist for new tracks">⟳ New?</button>
     {% endif %}
   </div>
-  {% endif %}
   <div class="pl-new-tracks" id="new-tracks-{{ job.id }}" style="display:none;border-top:1px solid var(--border);padding:.5rem .85rem"></div>
   {% if job.needs_fix and missing.get(job.id) %}
   <div class="pl-missing" id="plmissing-{{ job.id }}">

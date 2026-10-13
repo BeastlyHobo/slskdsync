@@ -109,7 +109,10 @@
       <button id="tm-q-replace"  class="tm-q" onclick="fxOpen('replace')">↺<span>Re-download</span></button>
       <button id="tm-flag-btn"   class="tm-q tm-flag" onclick="toggleBad()">⚑<span>Flag bad</span></button>
     </div>
-    <a id="tm-nav-btn" class="lib-sm-btn tm-nav" target="_blank" rel="noopener" style="display:none">▶ Open in Navidrome</a>
+    <div class="tm-links">
+      <a id="tm-song-link" class="lib-sm-btn tm-nav">ⓘ Song info &amp; preview ›</a>
+      <a id="tm-nav-btn" class="lib-sm-btn tm-nav" target="_blank" rel="noopener" style="display:none">▶ Navidrome</a>
+    </div>
 
     {# Identify: what does AcoustID hear in this file? #}
     <div id="fx-identify" class="fx-panel" style="display:none">
@@ -224,8 +227,10 @@
 .tm-q:disabled { opacity:.4; cursor:default; }
 .tm-flag.on { background:var(--err); border-color:transparent; color:#fff; }
 .tm-flag.on span { color:#fff; }
-.tm-nav { display:block; width:100%; box-sizing:border-box; text-align:center;
-  text-decoration:none; padding:.4rem; }
+.tm-links { display:flex; gap:.4rem; }
+.tm-nav:hover { text-decoration:none; }
+.tm-nav { display:block; flex:1; box-sizing:border-box; text-align:center;
+  text-decoration:none; padding:.45rem; font-size:.75rem; }
 
 /* Stored AcoustID verdict */
 .tm-aid-verdict { display:flex; flex-direction:column; gap:.35rem; margin-bottom:.7rem;
@@ -790,7 +795,7 @@ function renderArtistAlbums() {
     </div>
     <div class="lib-hero-actions">
       <button class="lib-sm-btn" onclick="verifyTracks(_pageTracks, this)">🎧 Verify all ${all.length}</button>
-      <a class="lib-sm-btn" href="/search?type=artist&q=${encodeURIComponent(ctx.artist)}">Discography &amp; top songs ›</a>
+      <a class="lib-sm-btn" href="${esc(artistUrl(ctx.artist))}">Discography &amp; top songs ›</a>
     </div>`;
 
   const shelf = albums.map(al => {
@@ -869,7 +874,7 @@ function renderAlbumTracks() {
     </div>
     <div class="lib-hero-actions">
       <button class="lib-sm-btn" onclick="verifyTracks(_pageTracks, this)">🎧 Verify album</button>
-      <a class="lib-sm-btn" href="/search?type=album&q=${encodeURIComponent(((ctx.artist||'') + ' ' + (ctx.album||'')).trim())}">Full tracklist &amp; missing songs ›</a>
+      <a class="lib-sm-btn" href="${esc(albumUrl(ctx.album, ctx.artist))}">Full tracklist &amp; missing songs ›</a>
     </div>`;
   const key = sortFor('album-tracks');
   const q = searchVal();
@@ -1273,6 +1278,8 @@ function showTrackInfo(rowEl) {
   // Nothing on disk (a playlist entry that never downloaded) → nothing to fix.
   ['tm-q-identify','tm-q-rename','tm-q-replace'].forEach(id =>
     document.getElementById(id).disabled = !t.path);
+  // The catalog's view of this song: preview, release, the rest of the album.
+  document.getElementById('tm-song-link').href = songUrl({title: t.title, artist: t.artist, album: t.album});
   const navBtn = document.getElementById('tm-nav-btn');
   if (NAV_URL && (t.title || t.artist)) {
     navBtn.href = NAV_URL + '/app/#/search?q=' + encodeURIComponent(((t.artist||'') + ' ' + (t.title||'')).trim());
@@ -1640,10 +1647,39 @@ try {
     if (Array.isArray(saved.stack)) navStack.push(...saved.stack);
   }
 } catch(e) {}
+// Links from other tabs (libraryUrl in base.html) open a page directly, with
+// Library home underneath so Back has somewhere to go.
+let _openOnLoad = null;
+(function () {
+  const P = new URLSearchParams(location.search);
+  const g = k => P.get(k) || '';
+  const open = (v, c) => { navStack.length = 0; navStack.push({view: 'home', ctx: {}}); view = v; ctx = c; };
+  if (g('artist') && g('album')) open('album-tracks', {artist: g('artist'), album: g('album')});
+  else if (g('artist')) open('artist-albums', {artist: g('artist')});
+  else if (g('playlist')) open('playlist-tracks', {jobId: +g('playlist'), name: g('name')});
+  else if (g('path') || g('song') || g('q')) {
+    let t = null;
+    if (g('path')) t = ALL_TRACKS.find(x => x.path === g('path'));
+    if (!t && g('song')) {
+      const [a, ti] = g('song').toLowerCase().split('||').map(x => x.trim());
+      t = ALL_TRACKS.find(x => (x.artist || '').toLowerCase().trim() === a && (x.title || '').toLowerCase().trim() === ti);
+    }
+    if (t) { open('album-tracks', {artist: artistKey(t), album: t.album || '(Unknown)'}); _openOnLoad = t; }
+    else {
+      open('songs', {});
+      document.getElementById('lib-search').value = g('q') || (g('song') || '').replace('||', ' ');
+    }
+  } else return;
+  saveNav();
+  // Drop the query so a reload or a later visit doesn't re-open it.
+  try { history.replaceState(null, '', location.pathname); } catch (e) {}
+})();
+
 baseDepth = navStack.length;
 try { history.replaceState({libDepth: navStack.length}, ''); } catch(e) {}
 
 render();
+if (_openOnLoad) showTrackInfo({dataset: {path: _openOnLoad.path}});
 </script>
 
 {% endblock %}

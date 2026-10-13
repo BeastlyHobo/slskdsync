@@ -190,3 +190,22 @@ def test_a_hit_stops_reading_tags_once_it_finds_its_file(A, watch, monkeypatch):
 
     assert find(A, watch, "Someone", "Song 7") is not None
     assert len(reads) <= 20
+
+
+def test_track_page_maps_deezer_track_fields(A, auth, monkeypatch):
+    """Fixture shaped per Deezer's documented /track/{id} object."""
+    payload = {
+        "id": 3135556, "title": "Harder, Better, Faster, Stronger", "title_version": "",
+        "isrc": "GBDUW0000059", "duration": 224, "track_position": 4, "disk_number": 1,
+        "release_date": "2001-03-07", "explicit_lyrics": False, "bpm": 123.4,
+        "preview": "https://cdns-preview-d.dzcdn.net/stream/x.mp3", "rank": 951000,
+        "contributors": [{"id": 27, "name": "Daft Punk", "role": "Main"}],
+        "artist": {"id": 27, "name": "Daft Punk", "picture_medium": "https://e/a.jpg"},
+        "album": {"id": 302127, "title": "Discovery", "cover_big": "https://e/c.jpg"},
+    }
+    monkeypatch.setattr(A._deezer, "_get", lambda path, **kw: payload)
+    d = auth.get("/api/track/3135556").get_json()
+    assert (d["title"], d["artist"], d["album"], d["album_id"], d["artist_id"]) == (
+        "Harder, Better, Faster, Stronger", "Daft Punk", "Discovery", "302127", "27")
+    assert d["preview"].endswith(".mp3") and d["release_date"] == "2001-03-07"
+    assert d["contributors"] == [{"name": "Daft Punk", "role": "Main", "id": "27"}]
