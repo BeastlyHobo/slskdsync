@@ -219,3 +219,47 @@ def test_download_stores_the_song_length(A, auth):
     got = {r["artist"]: r["duration"] for r in conn.execute("SELECT artist, duration FROM tracks")}
     conn.close()
     assert got == {"A": 238, "B": 0}
+
+
+def test_watch_folder_prefers_the_file_that_was_requested(A, job, tmp_path):
+    """Two same-titled files in the watch folder: the one slskd was asked for
+    wins, not whichever the title match finds first."""
+    watch = tmp_path / "dl"
+    (watch / "Other Album").mkdir(parents=True)
+    (watch / "Pablo Honey").mkdir()
+    other = watch / "Other Album" / "02 - Creep.flac"
+    mine = watch / "Pablo Honey" / "02 - Creep.flac"
+    for f in (other, mine):
+        f.write_bytes(b"x")
+    A.set_setting("download_watch_path", str(watch))
+    conn = A.get_conn()
+    conn.execute("INSERT INTO tracks(job_id,artist,title,slskd_state,slskd_download_filename)"
+                 " VALUES(?,?,?,?,?)", (job, "Radiohead", "Creep", "downloading",
+                                        r"@@music\Radiohead\Pablo Honey\02 - Creep.flac"))
+    t = conn.execute("SELECT * FROM tracks").fetchone()
+    conn.close()
+    assert A.discover_download_for_track(t, [other, mine]) == mine
+
+
+def test_transfer_files_reads_slskds_per_user_shape(appmod):
+    data = {"username": "peer", "directories": [
+        {"directory": "Music\\Album", "files": [
+            {"id": "abc", "filename": "Music\\Album\\01 - A.flac", "state": "Queued, Remotely"}]}]}
+    files = appmod.SlskdClient._transfer_files(data)
+    assert [(f["id"], f["filename"]) for f in files] == [("abc", "Music\\Album\\01 - A.flac")]
+    # the flat list shape the old parser handled still works
+    assert len(appmod.SlskdClient._transfer_files([{"files": files}])) == 1
+
+
+def test_deleting_a_downloading_track_cancels_its_transfer(A, auth, job, monkeypatch):
+    cancelled = []
+    monkeypatch.setattr(A.SlskdClient, "cancel_download",
+                        lambda self, u, f: cancelled.append((u, f)) or True)
+    monkeypatch.setattr(A.SlskdClient, "cancel_search", lambda self, sid: None)
+    conn = A.get_conn()
+    conn.execute("INSERT INTO tracks(job_id,artist,title,slskd_state,slskd_download_user,"
+                 "slskd_download_filename) VALUES(?,?,?,?,?,?)",
+                 (job, "A", "T", "downloading", "peer", "x\\T.flac"))
+    conn.commit(); conn.close()
+    auth.delete("/api/tracks/1")
+    assert cancelled == [("peer", "x\\T.flac")]

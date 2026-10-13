@@ -1663,41 +1663,66 @@ class SlskdClient:
             except Exception:
                 pass
 
-    def get_user_transfers(self, username: str) -> dict[str, str]:
-        """Return a mapping of filename → state for all slskd downloads from username.
-        States of interest: 'Errored', 'Cancelled', 'TimedOut', 'Completed', 'InProgress'."""
+    @staticmethod
+    def _transfer_files(data) -> list[dict]:
+        """The file entries in a transfers response, whatever its shape: for one
+        user slskd returns {username, directories: [{files: [...]}]}; the
+        all-users form is a list of those; some builds return flatter lists."""
+        out: list[dict] = []
+        stack = data if isinstance(data, list) else [data]
+        for item in stack:
+            if not isinstance(item, dict):
+                continue
+            if "filename" in item:
+                out.append(item)
+            for d in item.get("directories") or []:
+                out.extend(f for f in (d.get("files") or []) if isinstance(f, dict))
+            out.extend(f for f in (item.get("files") or []) if isinstance(f, dict))
+        return out
+
+    def _user_transfer_files(self, username: str) -> list[dict]:
         if not username:
-            return {}
+            return []
         url = f"{self.base}/api/v0/transfers/downloads/{username}"
         try:
             r = requests.get(url, headers=self._headers(), auth=self._auth(), timeout=15)
             if r.status_code != 200:
-                return {}
-            data = r.json()
-            result: dict[str, str] = {}
-            # slskd v0 returns a list of directory objects each with a "files" array;
-            # some builds return a flat list directly.
-            if isinstance(data, list):
-                for item in data:
-                    if isinstance(item, dict) and "files" in item:
-                        for f in item["files"]:
-                            fn = f.get("filename", "")
-                            st = f.get("state", "")
-                            if isinstance(st, dict):
-                                st = st.get("name", "")  # {name: "Errored", …}
-                            if fn:
-                                result[fn] = str(st)
-                    elif isinstance(item, dict) and "filename" in item:
-                        fn = item.get("filename", "")
-                        st = item.get("state", "")
-                        if isinstance(st, dict):
-                            st = st.get("name", "")
-                        if fn:
-                            result[fn] = str(st)
-            return result
+                return []
+            return self._transfer_files(r.json())
         except Exception as ex:
-            logger.debug(f"[slskd] get_user_transfers({username}): {ex}")
-            return {}
+            logger.debug(f"[slskd] transfers({username}): {ex}")
+            return []
+
+    def get_user_transfers(self, username: str) -> dict[str, str]:
+        """Return a mapping of filename → state for all slskd downloads from username.
+        States of interest: 'Errored', 'Cancelled', 'TimedOut', 'Completed', 'InProgress'."""
+        result: dict[str, str] = {}
+        for f in self._user_transfer_files(username):
+            st = f.get("state", "")
+            if isinstance(st, dict):
+                st = st.get("name", "")  # {name: "Errored", …}
+            if f.get("filename"):
+                result[f["filename"]] = str(st)
+        return result
+
+    def cancel_download(self, username: str, filename: str) -> bool:
+        """Cancel and remove a queued/in-progress download. A transfer we've given
+        up on would otherwise still land in the watch folder later — where a
+        track with the same title could claim it as its own."""
+        if not (username and filename):
+            return False
+        for f in self._user_transfer_files(username):
+            if f.get("filename") == filename and f.get("id"):
+                try:
+                    r = requests.delete(
+                        f"{self.base}/api/v0/transfers/downloads/{username}/{f['id']}",
+                        params={"remove": "true"}, headers=self._headers(),
+                        auth=self._auth(), timeout=10)
+                    return r.status_code < 300
+                except Exception as ex:
+                    logger.debug(f"[slskd] cancel_download({username}): {ex}")
+                    return False
+        return False
 
     def get_search_results(self, search_id: str) -> list[dict] | None:
         """Returns None if the search is still running, [] if complete with no results,
@@ -2077,6 +2102,30 @@ def discover_download_for_track(track: sqlite3.Row,
     if not audio_files:
         logger.warning(f"[discover] Watch path {watch} contains no audio files")
         return None
+
+    # The file we asked slskd for is the best evidence there is: slskd saves it
+    # under the peer's own filename. Matching on that first stops a same-titled
+    # file from another download (or a late one we'd abandoned) being claimed.
+    keys = track.keys() if hasattr(track, "keys") else ()
+    wanted = (track["slskd_download_filename"] or "") if "slskd_download_filename" in keys else ""
+    if wanted:
+        parts = wanted.replace("\\", "/").lower().rsplit("/", 2)
+        want_base = parts[-1]
+        want_dir = parts[-2] if len(parts) > 1 else ""
+        want_stem, _, want_ext = want_base.rpartition(".")
+        hits = [f for f in audio_files
+                # slskd appends "_<ticks>" when the name is already taken
+                if f.name.lower() == want_base
+                or (want_stem and f.name.lower().startswith(want_stem + "_")
+                    and f.name.lower().endswith("." + want_ext))]
+        # slskd saves into a folder named after the remote one, which tells two
+        # same-named files ("01 - Intro.flac") from different albums apart.
+        in_dir = [f for f in hits if want_dir and f.parent.name.lower() == want_dir]
+        pick = in_dir[0] if len(in_dir) == 1 else hits[0] if len(hits) == 1 else None
+        if pick:
+            logger.debug(f"[discover] Requested-file match: {pick}")
+            return pick
+
     if not title:
         return None
 
@@ -3053,6 +3102,7 @@ def _worker_tick():
                 slskd.cancel_search(row["slskd_search_id"])
             except Exception:
                 pass
+        slskd.cancel_download(user, row["slskd_download_filename"] or "")
         tried = set(u for u in (row["slskd_tried_users"] or "").split(",") if u)
         if user:
             tried.add(user)
@@ -4696,12 +4746,16 @@ def api_discover_lb_recs():
 @app.route("/api/tracks/<int:track_id>", methods=["DELETE"])
 def delete_track(track_id):
     conn = get_conn()
-    track = conn.execute("SELECT slskd_search_id, job_id FROM tracks WHERE id=?",
+    track = conn.execute("SELECT slskd_search_id, job_id, slskd_state, slskd_download_user,"
+                         " slskd_download_filename FROM tracks WHERE id=?",
                          (track_id,)).fetchone()
     conn.execute("DELETE FROM tracks WHERE id=?", (track_id,))
     conn.commit()
     if track:
         slskd = SlskdClient()
+        if track["slskd_state"] == "downloading":
+            slskd.cancel_download(track["slskd_download_user"] or "",
+                                  track["slskd_download_filename"] or "")
         # Only cancel the individual search if no other track shares this search_id
         if track["slskd_search_id"]:
             shared = conn.execute(
@@ -4732,9 +4786,14 @@ def retry_track(track_id):
     reset_peers = bool(data.get("reset_peers"))
     conn = get_conn()
     track = conn.execute(
-        "SELECT slskd_search_id, slskd_tried_users, local_path FROM tracks WHERE id=?",
+        "SELECT slskd_search_id, slskd_tried_users, local_path, slskd_state,"
+        " slskd_download_user, slskd_download_filename FROM tracks WHERE id=?",
         (track_id,),
     ).fetchone()
+    # A retried download mustn't arrive later and be claimed by another track.
+    if track and track["slskd_state"] == "downloading":
+        SlskdClient().cancel_download(track["slskd_download_user"] or "",
+                                      track["slskd_download_filename"] or "")
     # Only cancel the slskd search if no other track is still using it
     if track and track["slskd_search_id"]:
         shared = conn.execute(
