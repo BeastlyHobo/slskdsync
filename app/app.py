@@ -4260,6 +4260,163 @@ def api_playlist_diff(job_id):
     return jsonify({"ok": True, "new_tracks": new_tracks, "total_source": len(source_tracks)})
 
 
+def _m3u_paths(playlist_name: str) -> list[str]:
+    """The file paths a playlist's M3U lists, in order."""
+    if not playlist_name:
+        return []
+    try:
+        text = _m3u_path_for(playlist_name).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
+
+
+def _playlist_removal_plan(conn, job_id: int) -> tuple[Optional[list[int]], list[dict]]:
+    """The jobs that make up a playlist and the songs it put in the library.
+
+    Songs are its M3U (what Navidrome shows) plus every file its jobs
+    downloaded, including songs since dropped from the source. Each song says
+    whether this playlist downloaded it and which other playlists list it, so
+    the UI can suggest deleting only what nothing else uses. Returns
+    (None, []) when the job doesn't exist.
+    """
+    job = conn.execute("SELECT playlist_name, source_url FROM import_jobs WHERE id=?",
+                       (job_id,)).fetchone()
+    if not job:
+        return None, []
+    name = job["playlist_name"] or ""
+    url = job["source_url"] or ""
+    # Every import of the same playlist: the M3U builder and the nightly sync
+    # treat jobs sharing a name or source URL as one playlist.
+    ids = [r[0] for r in conn.execute(
+        "SELECT id FROM import_jobs WHERE id=? OR (?!='' AND playlist_name=?)"
+        " OR (? LIKE 'http%' AND source_url=?)",
+        (job_id, name.strip(), name, url, url))]
+    marks = ",".join("?" * len(ids))
+    dl = {r["local_path"]: r for r in conn.execute(
+        f"SELECT local_path, artist, title, album FROM tracks WHERE job_id IN ({marks})"
+        " AND slskd_state='completed' AND local_path IS NOT NULL", ids)}
+    paths = list(dict.fromkeys(_m3u_paths(name) + list(dl)))
+
+    used_by: dict[str, set[str]] = {}
+    for r in conn.execute(
+        f"SELECT DISTINCT j.playlist_name, t.local_path FROM tracks t"
+        f" JOIN import_jobs j ON j.id=t.job_id WHERE j.id NOT IN ({marks})"
+        " AND COALESCE(j.playlist_name,'')!='' AND t.slskd_state='completed'"
+        " AND t.local_path IS NOT NULL", ids):
+        used_by.setdefault(r["local_path"], set()).add(r["playlist_name"])
+    for (other,) in conn.execute(
+        f"SELECT DISTINCT playlist_name FROM import_jobs WHERE id NOT IN ({marks})"
+        " AND COALESCE(playlist_name,'')!=''", ids):
+        for p in _m3u_paths(other):
+            used_by.setdefault(p, set()).add(other)
+
+    lib = {r["path"]: r for r in conn.execute("SELECT path, artist, title, album FROM library_index")}
+    songs = []
+    for p in paths:
+        meta = dl.get(p) or lib.get(p)
+        f = Path(p)
+        songs.append({
+            "path": p,
+            "artist": (meta["artist"] if meta else "") or "",
+            "title": (meta["title"] if meta else "") or f.stem,
+            "album": (meta["album"] if meta else "") or "",
+            "downloaded": p in dl,
+            "other_playlists": sorted(used_by.get(p, ())),
+            "size": f.stat().st_size if f.is_file() else None,
+        })
+    return ids, songs
+
+
+@app.route("/api/playlists/<int:job_id>/songs")
+def api_playlist_songs(job_id):
+    """The songs a playlist put in the library, for the remove dialog."""
+    conn = get_conn()
+    ids, songs = _playlist_removal_plan(conn, job_id)
+    conn.close()
+    if ids is None:
+        return jsonify({"ok": False, "error": "Job not found"}), 404
+    return jsonify({"ok": True, "songs": songs})
+
+
+@app.route("/api/playlists/<int:job_id>/remove", methods=["POST"])
+def api_playlist_remove(job_id):
+    """Remove a playlist (its imports, queue rows, M3U and Navidrome copy, so
+    the nightly sync stops re-fetching it) and delete the song files picked.
+    Only this playlist's songs can be deleted through here."""
+    want = set(_json_body().get("delete_paths") or [])
+    conn = get_conn()
+    ids, songs = _playlist_removal_plan(conn, job_id)
+    if ids is None:
+        conn.close()
+        return jsonify({"ok": False, "error": "Job not found"}), 404
+    marks = ",".join("?" * len(ids))
+    names = {r[0] for r in conn.execute(
+        f"SELECT DISTINCT playlist_name FROM import_jobs WHERE id IN ({marks})"
+        " AND COALESCE(playlist_name,'')!=''", ids)}
+
+    # Stop anything still searching or downloading, or it lands after removal.
+    in_flight = conn.execute(
+        f"SELECT slskd_state, slskd_search_id, slskd_download_user, slskd_download_filename"
+        f" FROM tracks WHERE job_id IN ({marks}) AND slskd_state!='completed'"
+        " AND (slskd_search_id IS NOT NULL OR slskd_state='downloading')", ids).fetchall()
+    album_searches = [r[0] for r in conn.execute(
+        f"SELECT album_search_id FROM import_jobs WHERE id IN ({marks})"
+        " AND COALESCE(album_search_id,'')!=''", ids)]
+    if in_flight or album_searches:
+        slskd = SlskdClient()
+        for t in in_flight:
+            if t["slskd_state"] == "downloading":
+                slskd.cancel_download(t["slskd_download_user"] or "",
+                                      t["slskd_download_filename"] or "")
+            slskd.cancel_search(t["slskd_search_id"])
+        for sid in album_searches:
+            slskd.cancel_search(sid)
+
+    conn.execute(f"DELETE FROM tracks WHERE job_id IN ({marks})", ids)
+    conn.execute(f"DELETE FROM playlist_tracks WHERE job_id IN ({marks})", ids)
+    conn.execute(f"DELETE FROM import_jobs WHERE id IN ({marks})", ids)
+
+    deleted, failed = [], []
+    # Songs another playlist lists are always kept: that playlist's next sync
+    # would only download them again.
+    for p in [s["path"] for s in songs if s["path"] in want and not s["other_playlists"]]:
+        f, err = _library_file(p)
+        if not err:
+            try:
+                f.unlink()
+            except OSError as ex:
+                err = str(ex)
+        if err:
+            logger.warning(f"[playlist] Could not delete {p}: {err}")
+            failed.append({"path": p, "error": err})
+            continue
+        # A completed queue row anywhere counts as "owned", which would stop
+        # the song from ever being downloaded again.
+        conn.execute("DELETE FROM tracks WHERE local_path=? AND slskd_state='completed'", (p,))
+        conn.execute("DELETE FROM library_index WHERE path=?", (p,))
+        conn.execute("DELETE FROM bad_flags WHERE path=?", (p,))
+        deleted.append(f)
+    conn.commit()
+    conn.close()
+    with _lib_keys_lock:
+        _lib_keys_cache["at"] = 0.0   # the owned-songs set just changed
+    for f in deleted:
+        _prune_empty_parents(f.parent)
+
+    for name in names:
+        try:
+            _m3u_path_for(name).unlink(missing_ok=True)
+        except OSError as ex:
+            logger.warning(f"[m3u] Could not remove playlist file for '{name}': {ex}")
+        _navidrome_delete_imported(name)
+    if deleted or names:
+        _navidrome_start_scan()
+    logger.info(f"[playlist] Removed job(s) {ids} ({', '.join(names) or 'unnamed'}):"
+                f" deleted {len(deleted)} file(s), {len(failed)} failed")
+    return jsonify({"ok": True, "deleted": len(deleted), "failed": failed})
+
+
 def _tail_lines(path: Path, n: int) -> list[str]:
     """Last n non-blank lines of a file, reading only its tail in 256KB chunks
     from EOF — the Logs page polls every 3s and the log file grows to 5MB, so

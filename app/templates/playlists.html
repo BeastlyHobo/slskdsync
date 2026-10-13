@@ -72,6 +72,10 @@
     {% if job.source_url %}
     <button class="pl-regen-btn" onclick="checkFresh({{ job.id }},this)" title="Check source playlist for new tracks">⟳ New?</button>
     {% endif %}
+    <button class="pl-regen-btn pl-remove-btn" data-job="{{ job.id }}"
+      data-name="{{ (job.playlist_name or job.source_url or '')|e }}"
+      onclick="openRemove(+this.dataset.job,this.dataset.name)"
+      title="Remove this playlist and choose which of its songs to delete">🗑 Remove</button>
   </div>
   <div class="pl-new-tracks" id="new-tracks-{{ job.id }}" style="display:none;border-top:1px solid var(--border);padding:.5rem .85rem"></div>
   {% if job.needs_fix and missing.get(job.id) %}
@@ -100,6 +104,64 @@
 {% endfor %}
 </div>
 {% endif %}
+
+<div id="rm-modal" class="rm-overlay" style="display:none" onclick="if(event.target===this)closeRemove()">
+  <div class="rm-card" role="dialog" aria-modal="true" aria-labelledby="rm-title">
+    <button class="rm-close" onclick="closeRemove()" aria-label="Close">✕</button>
+    <div id="rm-title" class="rm-title"></div>
+    <p class="rm-sub">Stops syncing this playlist and removes it from Navidrome.
+      Tick the songs to delete from your library — unticked songs stay.
+      Songs another playlist uses are always kept.</p>
+    <div class="rm-tools">
+      <button class="pl-regen-btn" onclick="rmSelect('suggested')" title="Songs this playlist downloaded that nothing else uses">Suggested</button>
+      <button class="pl-regen-btn" onclick="rmSelect('all')">All</button>
+      <button class="pl-regen-btn" onclick="rmSelect('none')">None</button>
+      <span id="rm-summary" class="rm-summary"></span>
+    </div>
+    <div id="rm-list" class="rm-list"></div>
+    <div class="rm-foot">
+      <span id="rm-error" class="rm-error"></span>
+      <button class="pl-regen-btn" onclick="closeRemove()">Cancel</button>
+      <button id="rm-go" class="pl-regen-btn rm-go" onclick="confirmRemove()" disabled>Remove</button>
+    </div>
+  </div>
+</div>
+
+<style>
+.pl-regen-btn.pl-remove-btn { color: var(--err); border-color: color-mix(in oklab, var(--err), transparent 65%); margin-left: auto; }
+.rm-overlay { position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:1000;
+  display:flex; align-items:flex-end; justify-content:center; }
+@media(min-width:600px){ .rm-overlay{ align-items:center; padding:1rem; } }
+.rm-card { background:var(--surface-solid); border:1px solid var(--border);
+  border-radius:var(--radius-sm) var(--radius-sm) 0 0; width:100%; max-width:560px;
+  padding:1.1rem 1.1rem calc(1.1rem + var(--inset-bottom)); position:relative;
+  max-height:88dvh; display:flex; flex-direction:column; }
+@media(min-width:600px){ .rm-card{ border-radius:var(--radius-sm); } }
+.rm-close { position:absolute; top:.55rem; right:.6rem; background:none; border:none;
+  color:var(--text-muted); font-size:1rem; cursor:pointer; padding:.25rem .45rem; }
+.rm-title { font-size:1.05rem; font-weight:700; padding-right:1.6rem; overflow-wrap:anywhere; }
+.rm-sub { font-size:.8rem; color:var(--text-muted); margin:.35rem 0 .7rem; }
+.rm-tools { display:flex; gap:.35rem; align-items:center; flex-wrap:wrap; margin-bottom:.5rem; }
+.rm-summary { margin-left:auto; font-size:.75rem; color:var(--text-muted); font-family:var(--font-mono); }
+.rm-list { overflow-y:auto; overscroll-behavior:contain; flex:1; min-height:6rem;
+  border:1px solid var(--border); border-radius:var(--radius-sm); }
+.rm-row { display:flex; gap:.6rem; align-items:flex-start; padding:.45rem .65rem;
+  border-bottom:1px solid var(--border); cursor:pointer; }
+.rm-row:last-child { border-bottom:none; }
+.rm-row.rm-locked { cursor:default; opacity:.6; }
+.rm-row input { margin-top:.2rem; accent-color:var(--err); }
+.rm-info { min-width:0; flex:1; }
+.rm-song { font-size:.85rem; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rm-meta { font-size:.75rem; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rm-tag { display:inline-block; font-size:.68rem; padding:0 .4rem; margin:.15rem .25rem 0 0;
+  border-radius:var(--radius-pill); background:var(--surface2); color:var(--text-muted); }
+.rm-tag.rm-keep { background:var(--ok-bg); color:var(--ok); }
+.rm-foot { display:flex; gap:.4rem; align-items:center; justify-content:flex-end; margin-top:.75rem; }
+.rm-error { margin-right:auto; font-size:.75rem; color:var(--err); }
+.pl-regen-btn.rm-go { color:var(--err); border-color:color-mix(in oklab, var(--err), transparent 55%); }
+.pl-regen-btn.rm-go:disabled { opacity:.5; cursor:default; }
+.rm-empty { padding:1rem; font-size:.85rem; color:var(--text-muted); text-align:center; }
+</style>
 
 <script>
 function togglePl(id, hasMissing) {
@@ -344,6 +406,119 @@ function plSearch(input, trackId) {
       btn.textContent = 'Search';
     }
   }).catch(() => { btn.disabled = false; btn.textContent = 'Search'; });
+}
+
+// --- Remove a playlist and pick which of its songs to delete ---
+let _rm = null;   // {jobId, name, songs, picked:Set<index>}
+
+function fmtBytes(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
+  if (n >= 1e6) return Math.round(n / 1e6) + ' MB';
+  return Math.round(n / 1e3) + ' KB';
+}
+
+function rmDeletable(s) { return s.size != null && !s.other_playlists.length; }
+
+function openRemove(jobId, name) {
+  _rm = {jobId, name, songs: [], picked: new Set()};
+  document.getElementById('rm-title').textContent = `Remove “${name}”`;
+  document.getElementById('rm-list').innerHTML = '<div class="rm-empty">Loading songs…</div>';
+  document.getElementById('rm-error').textContent = '';
+  document.getElementById('rm-modal').style.display = '';
+  rmSummary();
+  fetch(`/api/playlists/${jobId}/songs`).then(r => r.json()).then(d => {
+    if (!_rm || _rm.jobId !== jobId) return;
+    if (!d.ok) { document.getElementById('rm-list').innerHTML = `<div class="rm-empty">${esc(d.error || 'Could not load songs')}</div>`; return; }
+    _rm.songs = d.songs;
+    rmSelect('suggested');
+  }).catch(() => {
+    document.getElementById('rm-list').innerHTML = '<div class="rm-empty">Network error</div>';
+  });
+}
+
+function closeRemove() {
+  document.getElementById('rm-modal').style.display = 'none';
+  _rm = null;
+}
+
+function rmSelect(mode) {
+  if (!_rm) return;
+  _rm.picked = new Set();
+  _rm.songs.forEach((s, i) => {
+    if (!rmDeletable(s)) return;
+    if (mode === 'all' || (mode === 'suggested' && s.downloaded)) _rm.picked.add(i);
+  });
+  rmRender();
+}
+
+function rmRender() {
+  const list = document.getElementById('rm-list');
+  if (!_rm.songs.length) {
+    list.innerHTML = '<div class="rm-empty">No songs from this playlist are in your library. Removing it only stops syncing.</div>';
+    rmSummary();
+    return;
+  }
+  list.innerHTML = _rm.songs.map((s, i) => {
+    const tags = [];
+    if (s.other_playlists.length) tags.push(`<span class="rm-tag rm-keep">kept · also in ${esc(s.other_playlists.join(', '))}</span>`);
+    if (s.size == null) tags.push('<span class="rm-tag">file missing</span>');
+    else if (!s.downloaded) tags.push('<span class="rm-tag" title="Matched a song you already had — not downloaded for this playlist">already owned</span>');
+    if (s.size != null) tags.push(`<span class="rm-tag">${fmtBytes(s.size)}</span>`);
+    const locked = !rmDeletable(s);
+    return `<label class="rm-row${locked ? ' rm-locked' : ''}">
+      <input type="checkbox" data-i="${i}"${_rm.picked.has(i) ? ' checked' : ''}${locked ? ' disabled' : ''}>
+      <div class="rm-info">
+        <div class="rm-song">${esc(s.title)}</div>
+        <div class="rm-meta">${esc([s.artist, s.album].filter(Boolean).join(' · '))}</div>
+        <div>${tags.join('')}</div>
+      </div></label>`;
+  }).join('');
+  list.querySelectorAll('input[data-i]').forEach(cb => cb.addEventListener('change', () => {
+    const i = +cb.dataset.i;
+    if (cb.checked) _rm.picked.add(i); else _rm.picked.delete(i);
+    rmSummary();
+  }));
+  rmSummary();
+}
+
+function rmSummary() {
+  const go = document.getElementById('rm-go');
+  const sum = document.getElementById('rm-summary');
+  if (!_rm) return;
+  const n = _rm.picked.size;
+  const bytes = [..._rm.picked].reduce((t, i) => t + (_rm.songs[i].size || 0), 0);
+  sum.textContent = _rm.songs.length ? `${n} of ${_rm.songs.length} to delete${n ? ' · ' + fmtBytes(bytes) : ''}` : '';
+  go.textContent = n ? `Remove & delete ${n} song${n !== 1 ? 's' : ''}` : 'Remove playlist only';
+  go.disabled = false;
+}
+
+function confirmRemove() {
+  if (!_rm) return;
+  const {jobId, name} = _rm;
+  const paths = [..._rm.picked].map(i => _rm.songs[i].path);
+  const msg = paths.length
+    ? `Permanently delete ${paths.length} song file${paths.length !== 1 ? 's' : ''} and remove “${name}”? This can't be undone.`
+    : `Remove “${name}”? Its songs stay in your library.`;
+  if (!confirm(msg)) return;
+  const go = document.getElementById('rm-go');
+  const err = document.getElementById('rm-error');
+  go.disabled = true;
+  go.textContent = 'Removing…';
+  err.textContent = '';
+  fetch(`/api/playlists/${jobId}/remove`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({delete_paths: paths}),
+  }).then(r => r.json()).then(d => {
+    if (!d.ok) { err.textContent = '✗ ' + (d.error || 'Remove failed'); rmSummary(); return; }
+    closeRemove();
+    // Imports of the same playlist (same name or source link) went with it.
+    document.querySelectorAll('.pl-remove-btn').forEach(b => {
+      if (+b.dataset.job === jobId || b.dataset.name === name) b.closest('.pl-card').remove();
+    });
+    let note = `Removed “${name}”` + (d.deleted ? ` · deleted ${d.deleted} song${d.deleted !== 1 ? 's' : ''}` : '');
+    if (d.failed.length) note += ` · ${d.failed.length} couldn't be deleted (see Logs)`;
+    showToast(note, 5000);
+  }).catch(() => { err.textContent = '✗ Network error'; rmSummary(); });
 }
 </script>
 {% endblock %}
