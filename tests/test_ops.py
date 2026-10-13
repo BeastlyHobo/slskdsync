@@ -170,3 +170,60 @@ def test_acoustid_ids_scope_verifies_only_the_given_rows(A, auth, monkeypatch):
     r = auth.post("/api/library/acoustid", json={"scope": "ids", "ids": [1, 3, 99, "2"]})
     assert r.get_json() == {"ok": True, "total": 2}
     assert sorted(got["ids"]) == [1, 3] and got["table"] == "library_index"
+
+
+def _lib_rows(A):
+    conn = A.get_conn()
+    rows = {r["path"]: dict(r) for r in conn.execute("SELECT * FROM library_index")}
+    conn.close()
+    return rows
+
+
+def test_rescan_keeps_ids_dates_and_verdicts_by_path(A, tmp_path):
+    root = tmp_path / "music"
+    for name in ("a", "b"):
+        (root / "Art" / "Alb").mkdir(parents=True, exist_ok=True)
+        (root / "Art" / "Alb" / f"{name}.mp3").write_bytes(b"x")
+    A.set_setting("library_path", str(root))
+    A.set_setting("navidrome_user", "")
+    A.scan_library()
+    before = _lib_rows(A)
+    a = str(root / "Art" / "Alb" / "a.mp3")
+    conn = A.get_conn()
+    conn.execute("UPDATE library_index SET acoustid_score=0.9, indexed_at='2020-01-01 00:00:00'"
+                 " WHERE path=?", (a,))
+    conn.commit(); conn.close()
+    (root / "Art" / "Alb" / "c.mp3").write_bytes(b"x")
+    A.scan_library()
+    after = _lib_rows(A)
+    assert after[a]["id"] == before[a]["id"]
+    assert after[a]["acoustid_score"] == 0.9
+    # filesystem scans date a file by its mtime, which beats the stored date
+    assert after[a]["indexed_at"] != "2020-01-01 00:00:00"
+    assert len(after) == 3 and len({r["id"] for r in after.values()}) == 3
+
+
+def test_a_scan_that_cannot_read_the_library_keeps_the_index(A, tmp_path):
+    conn = A.get_conn()
+    conn.execute("INSERT INTO library_index(artist,title,path,acoustid_score)"
+                 " VALUES('A','T','/m/t.mp3',0.9)")
+    conn.commit(); conn.close()
+    A.set_setting("library_path", str(tmp_path / "not-mounted"))
+    A.set_setting("navidrome_user", "")
+    A.scan_library()
+    assert list(_lib_rows(A)) == ["/m/t.mp3"]
+    assert A._scan_state["in_progress"] is False
+
+
+def test_finished_download_is_indexed_and_clears_stale_state(A, job):
+    conn = A.get_conn()
+    conn.execute("INSERT INTO tracks(job_id,artist,album,title) VALUES(?,'Art','Alb','Song')", (job,))
+    conn.execute("INSERT INTO bad_flags(path) VALUES('/m/s.flac')")
+    conn.execute("INSERT INTO library_index(artist,title,path,acoustid_score) VALUES('X','Y','/m/s.flac',0)")
+    t = conn.execute("SELECT * FROM tracks").fetchone()
+    A._index_download(conn, t, "/m/s.flac", (0.95, "Song", "Art"))
+    conn.commit()
+    rows = conn.execute("SELECT * FROM library_index").fetchall()
+    assert [(r["artist"], r["title"], r["acoustid_score"]) for r in rows] == [("Art", "Song", 0.95)]
+    assert conn.execute("SELECT COUNT(*) FROM bad_flags").fetchone()[0] == 0
+    conn.close()

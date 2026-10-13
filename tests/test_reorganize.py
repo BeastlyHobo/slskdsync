@@ -354,3 +354,48 @@ def test_failed_fingerprint_logs_the_cause(A, tmp_path, monkeypatch, caplog):
     assert "Surface Pressure.flac" in msg
     assert "0 bytes" in msg
     assert "Invalid data found" in msg
+
+
+def _queue_row(A, job, path, artist, title):
+    conn = A.get_conn()
+    conn.execute("INSERT INTO tracks(job_id,artist,title,slskd_state,local_path)"
+                 " VALUES(?,?,?,'completed',?)", (job, artist, title, str(path)))
+    conn.commit(); conn.close()
+
+
+def test_renaming_a_wrong_grab_frees_the_wanted_song(A, auth, lib, job, monkeypatch):
+    """The queue row still claimed the old song, so Search said it was owned."""
+    root, f = lib
+    monkeypatch.setattr(A, "tag_file", lambda *a, **k: None)
+    _queue_row(A, job, f, "Wrong Artist", "Wrong Title")
+    auth.post("/api/library/reorganize", json={
+        "path": str(f), "artist": "Other Artist", "title": "Other Song"})
+    conn = A.get_conn()
+    t = conn.execute("SELECT * FROM tracks").fetchone()
+    assert t["slskd_state"] == "failed" and t["local_path"] is None
+    assert "kept as Other Artist" in t["slskd_error"]
+    conn.close()
+    r = auth.post("/api/download", json={"artist": "Wrong Artist", "title": "Wrong Title"})
+    assert r.get_json()["ok"], r.get_json()
+
+
+def test_tidying_a_name_keeps_the_queue_row(A, auth, lib, job, monkeypatch):
+    root, f = lib
+    monkeypatch.setattr(A, "tag_file", lambda *a, **k: None)
+    _queue_row(A, job, f, "Wrong Artist", "Wrong Title")
+    r = auth.post("/api/library/reorganize", json={
+        "path": str(f), "artist": "Wrong Artist", "album": "Better Album", "title": "Wrong Title"})
+    conn = A.get_conn()
+    t = conn.execute("SELECT * FROM tracks").fetchone()
+    assert t["slskd_state"] == "completed" and t["local_path"] == r.get_json()["path"]
+    conn.close()
+
+
+def test_hand_picked_version_is_not_deduped_against_the_original(A, auth, job):
+    conn = A.get_conn()
+    conn.execute("INSERT INTO library_index(artist,title,path) VALUES('Radiohead','Creep','/m/c.mp3')")
+    conn.commit(); conn.close()
+    r = auth.post("/api/download", json={"artist": "Radiohead", "title": "Creep (Acoustic)"})
+    assert r.get_json()["ok"]
+    r = auth.post("/api/download", json={"artist": "Radiohead", "title": "Creep"})
+    assert r.get_json().get("skipped")
