@@ -296,3 +296,27 @@ def test_acoustid_scores_can_be_narrowed_to_ids(A, auth):
     conn.commit(); conn.close()
     assert set(auth.get("/api/library/acoustid/scores?ids=1,3").get_json()) == {"1", "3"}
     assert len(auth.get("/api/library/acoustid/scores").get_json()) == 3
+
+
+def test_cover_proxy_caches_hits_and_failures(A, auth, monkeypatch):
+    A.set_setting("navidrome_url", "http://nd")
+    A.set_setting("navidrome_user", "u")
+    calls = []
+
+    class R:
+        def __init__(self, status, ctype, body):
+            self.status_code, self.headers, self.content = status, {"content-type": ctype}, body
+
+    def fake_get(url, params, timeout):
+        calls.append(params["id"])
+        return R(200, "image/jpeg", b"JPEG") if params["id"] == "good" else R(404, "text/xml", b"")
+
+    monkeypatch.setattr(A.requests, "get", fake_get)
+    A._cover_fail.clear()
+    for _ in range(2):
+        r = auth.get("/api/library/cover/good")
+        assert r.status_code == 200 and r.data == b"JPEG"
+        r.close()
+        assert auth.get("/api/library/cover/bad").status_code == 404
+    # one Navidrome call each: the hit came from disk, the miss from memory
+    assert calls == ["good", "bad"]

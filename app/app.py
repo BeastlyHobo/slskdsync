@@ -77,7 +77,7 @@ try:
     _HAS_ANTHROPIC = True
 except ImportError:
     _HAS_ANTHROPIC = False
-from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory, Response, stream_with_context
+from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory, send_file, Response, stream_with_context
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.exceptions import HTTPException
 from dotenv import load_dotenv
@@ -4371,6 +4371,21 @@ def api_library_tracks():
     return resp
 
 
+# Cover art comes from Navidrome. Each fetch used to hold one of waitress's 8
+# threads for up to 5 s, uncached on failure, so a screenful of covers could
+# leave the API itself waiting. Now: covers are kept on disk after the first
+# fetch, failures are remembered for a while, and at most a few fetches run
+# at once — the rest give up quickly and the page shows its placeholder.
+_COVER_FAIL_TTL = 600
+_cover_fail: dict[str, float] = {}
+_cover_fetch_slots = threading.BoundedSemaphore(3)
+
+
+def _cover_cache_path(cover_art_id: str, size: str) -> Path:
+    key = hashlib.sha1(f"{cover_art_id}|{size}".encode()).hexdigest()
+    return DATA_DIR / "covers" / key[:2] / key
+
+
 @app.route("/api/library/cover/<path:cover_art_id>")
 def api_library_cover(cover_art_id):
     nav_url  = (get_setting("navidrome_url") or "").rstrip("/")
@@ -4379,20 +4394,44 @@ def api_library_cover(cover_art_id):
     if not nav_url or not nav_user:
         return "", 404
     size = request.args.get("size", "120")
+    if not size.isdigit():
+        size = "120"
+    cached = _cover_cache_path(cover_art_id, size)
+    if cached.is_file():
+        resp = send_file(cached, mimetype="image/jpeg", max_age=86400 * 30)
+        resp.headers["Cache-Control"] = "max-age=2592000, public"
+        return resp
+    key = f"{cover_art_id}|{size}"
+    if time.time() - _cover_fail.get(key, 0) < _COVER_FAIL_TTL:
+        return "", 404
+    if not _cover_fetch_slots.acquire(timeout=2):
+        return "", 503
     try:
         r = requests.get(
             f"{nav_url}/rest/getCoverArt",
             params={"u": nav_user, "p": nav_pass, "v": "1.16.1",
                     "c": "slskdsync", "id": cover_art_id, "size": size},
-            timeout=5,
+            timeout=(2, 4),
         )
-        if r.status_code != 200:
+        ctype = r.headers.get("content-type", "")
+        if r.status_code != 200 or not ctype.startswith("image/"):
+            _cover_fail[key] = time.time()
             return "", 404
-        resp = Response(r.content, content_type=r.headers.get("content-type", "image/jpeg"))
-        resp.headers["Cache-Control"] = "max-age=86400, public"
-        return resp
     except Exception:
+        _cover_fail[key] = time.time()
         return "", 404
+    finally:
+        _cover_fetch_slots.release()
+    try:
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cached.with_suffix(".tmp")
+        tmp.write_bytes(r.content)
+        tmp.replace(cached)
+    except OSError as ex:
+        logger.debug(f"[cover] cache write failed: {ex}")
+    resp = Response(r.content, content_type=ctype)
+    resp.headers["Cache-Control"] = "max-age=2592000, public"
+    return resp
 
 
 @app.route("/logs")
