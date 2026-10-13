@@ -244,6 +244,7 @@ def init_db():
         # what it actually is without fingerprinting again.
         ("acoustid_title", "TEXT DEFAULT NULL"),
         ("acoustid_artist", "TEXT DEFAULT NULL"),
+        ("duration", "INTEGER DEFAULT 0"),   # seconds, from the source; 0 = unknown
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
@@ -384,6 +385,21 @@ class TrackMeta:
     track_number: int = 0
     source_id: str = ""
     cover_url: str = ""
+    duration: int = 0          # seconds; 0 = unknown. Lets the scorer spot other versions.
+
+
+def _secs(v) -> int:
+    """A client-supplied duration in seconds, or 0 when missing/garbage."""
+    try:
+        n = int(float(v or 0))
+    except (TypeError, ValueError):
+        return 0
+    return n if 0 < n < 24 * 3600 else 0
+
+
+def _row_duration(row) -> int:
+    keys = row.keys() if hasattr(row, "keys") else ()
+    return int(row["duration"] or 0) if "duration" in keys else 0
 
 
 _LIVE_RE = re.compile(r'\b(live|unplugged|in concert|acoustic)\b', re.IGNORECASE)
@@ -427,6 +443,7 @@ class SpotifyProvider:
                     cover  = ((t.get("album") or {}).get("images") or [{}])[0].get("url", "")
                     tracks.append(TrackMeta(artist=artist, album=album,
                         title=t.get("name") or "Unknown", track_number=t.get("track_number") or 0,
+                        duration=round((t.get("duration_ms") or 0) / 1000),
                         source_id=t.get("id") or "", cover_url=cover))
                 data = client.next(data) if data.get("next") else None
             return "playlist", tracks
@@ -441,6 +458,7 @@ class SpotifyProvider:
                 artist = ", ".join(a["name"] for a in t.get("artists", [])) or "Unknown Artist"
                 tracks.append(TrackMeta(artist=artist, album=album_name, title=t.get("name") or "Unknown",
                                         track_number=t.get("track_number") or 0,
+                        duration=round((t.get("duration_ms") or 0) / 1000),
                                         source_id=t.get("id") or "", cover_url=cover))
             return "album", tracks
 
@@ -452,6 +470,7 @@ class SpotifyProvider:
             cover = ((t.get("album") or {}).get("images") or [{}])[0].get("url", "")
             return "track", [TrackMeta(artist=artist, album=album, title=t.get("name") or "Unknown",
                                        track_number=t.get("track_number") or 0,
+                        duration=round((t.get("duration_ms") or 0) / 1000),
                                        source_id=t.get("id") or "", cover_url=cover)]
 
         if "/artist/" in url:
@@ -464,6 +483,7 @@ class SpotifyProvider:
                 cover = ((t.get("album") or {}).get("images") or [{}])[0].get("url", "")
                 tracks.append(TrackMeta(artist=artist, album=album, title=t.get("name") or "Unknown",
                                         track_number=t.get("track_number") or 0,
+                        duration=round((t.get("duration_ms") or 0) / 1000),
                                         source_id=t.get("id") or "", cover_url=cover))
             return "artist", tracks
 
@@ -482,6 +502,7 @@ class SpotifyProvider:
             return TrackMeta(artist=artist, album=album,
                 title=t.name or "Unknown",
                 track_number=t.track_number or 0,
+                duration=round((getattr(t, "duration_ms", 0) or 0) / 1000),
                 source_id=t.id or "", cover_url=cover)
 
         with SpotifyClient() as client:
@@ -561,6 +582,7 @@ class AppleProvider:
                 album=result.get("collectionName", "Unknown Album"),
                 title=result.get("trackName", "Unknown Title"),
                 track_number=result.get("trackNumber", 0),
+                duration=round((result.get("trackTimeMillis") or 0) / 1000),
                 source_id=str(result.get("trackId", "")),
                 cover_url=cover,
             )]
@@ -586,6 +608,7 @@ class AppleProvider:
                     album=album_title,
                     title=r.get("trackName", ""),
                     track_number=r.get("trackNumber", 0),
+                    duration=round((r.get("trackTimeMillis") or 0) / 1000),
                     source_id=str(r.get("trackId", "")),
                     cover_url=album_cover,
                 )
@@ -624,6 +647,7 @@ class AppleProvider:
                         album=attrs.get("albumName", ""),
                         title=attrs.get("name", ""),
                         track_number=attrs.get("trackNumber", 0),
+                        duration=round((attrs.get("durationInMillis") or 0) / 1000),
                         source_id=song.get("id", ""),
                         cover_url=cover,
                     ))
@@ -692,6 +716,7 @@ class TidalProvider:
                 album=(d.get("album") or {}).get("title", "Unknown Album"),
                 title=d.get("title", "Unknown Title"),
                 track_number=d.get("trackNumber", 0),
+                duration=int(d.get("duration") or 0),
                 source_id=tid,
                 cover_url=_tidal_cover_url((d.get("album") or {}).get("cover", "")),
             )]
@@ -712,6 +737,7 @@ class TidalProvider:
                     album=album_name,
                     title=t.get("title", "Unknown Title"),
                     track_number=t.get("trackNumber", 0),
+                    duration=int(t.get("duration") or 0),
                     source_id=str(t.get("id", "")),
                     cover_url=cover,
                 ))
@@ -731,6 +757,7 @@ class TidalProvider:
                     album=(t.get("album") or {}).get("title", "Unknown Album"),
                     title=t.get("title", "Unknown Title"),
                     track_number=t.get("trackNumber", 0),
+                    duration=int(t.get("duration") or 0),
                     source_id=str(t.get("id", "")),
                     cover_url=cover,
                 ))
@@ -1744,6 +1771,19 @@ class SlskdClient:
         if want_a:
             score += 20 if want_a in _acoustid_norm(fn_l) else -40
 
+        # Length: Soulseek reports each file's duration and the source told us
+        # the song's. Far off means a live take, an extended mix, a skit, or a
+        # different song sharing the name — none of which the title gate sees.
+        want_len, got_len = track.duration or 0, result.get("length") or 0
+        if want_len and got_len:
+            off = abs(got_len - want_len)
+            if off <= 3:
+                score += 10
+            elif off > 30:
+                score -= 60
+            elif off > 10:
+                score -= 25
+
         # Availability — free slot means download starts immediately (+15)
         if result.get("has_slot"):
             score += 15
@@ -1815,7 +1855,8 @@ def _find_file_for_track(user_files: list, track: sqlite3.Row,
     """Return the best audio file for a track from a specific user's file list.
     Title match is required — a bare format score is not sufficient."""
     meta = TrackMeta(track["artist"] or "", track["album"] or "",
-                     track["title"] or "", track["track_number"] or 0)
+                     track["title"] or "", track["track_number"] or 0,
+                     duration=_row_duration(track))
     title_l = meta.title.lower()
     # Require the title to appear in the filename, same as _score_user_album_coverage
     candidates = [
@@ -2673,9 +2714,9 @@ def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str,
            and not _already_in_library(conn, t.artist, t.title)]
     for t in new:
         conn.execute(
-            "INSERT INTO tracks(job_id, artist, album, title, track_number, source_id, cover_url)"
-            " VALUES(?,?,?,?,?,?,?)",
-            (job_id, t.artist, t.album, t.title, t.track_number, t.source_id, t.cover_url),
+            "INSERT INTO tracks(job_id, artist, album, title, track_number, source_id, cover_url, duration)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (job_id, t.artist, t.album, t.title, t.track_number, t.source_id, t.cover_url, t.duration),
         )
     conn.execute(
         "UPDATE import_jobs SET last_synced_at=datetime('now'), last_sync_new=? WHERE id=?",
@@ -3166,7 +3207,8 @@ def _worker_tick():
         " AND (download_source IN ('slskd','') OR download_source IS NULL) LIMIT 3"
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
-                         t["track_number"] or 0, t["source_id"] or "")
+                         t["track_number"] or 0, t["source_id"] or "",
+                         duration=_row_duration(t))
         custom_raw = t["custom_search"] or ""      # guard compares the raw column
         custom = custom_raw.strip()
         attempt = t["slskd_search_attempt"] or 0
@@ -3210,7 +3252,8 @@ def _worker_tick():
         "SELECT * FROM tracks WHERE slskd_state='queued' AND slskd_search_id IS NOT NULL LIMIT 5"
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
-                         t["track_number"] or 0, t["source_id"] or "")
+                         t["track_number"] or 0, t["source_id"] or "",
+                         duration=_row_duration(t))
         results = slskd.get_search_results(t["slskd_search_id"])
         if results is None:
             continue  # search still running
@@ -5422,10 +5465,10 @@ def api_download_album():
             continue
         source_id = "" if source == "monochrome" else (t.get("source_id") or "").strip()
         cur.execute(
-            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source)"
-            " VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source,duration)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
             (job_id, artist, t.get("album", ""), title,
-             t.get("track_number", 0), source_id, t.get("cover", ""), source),
+             t.get("track_number", 0), source_id, t.get("cover", ""), source, _secs(t.get("duration"))),
         )
         count += 1
     conn.commit()
@@ -5468,9 +5511,9 @@ def api_download():
     )
     job_id = cur.lastrowid
     cur.execute(
-        "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source)"
-        " VALUES(?,?,?,?,?,?,?,?)",
-        (job_id, artist, album, title, 0, source_id, cover_url, dl_source),
+        "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source,duration)"
+        " VALUES(?,?,?,?,?,?,?,?,?)",
+        (job_id, artist, album, title, 0, source_id, cover_url, dl_source, _secs(data.get("duration"))),
     )
     conn.commit()
     conn.close()
@@ -5511,10 +5554,10 @@ def api_download_batch():
         )
         jid = cur.lastrowid
         cur.execute(
-            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source)"
-            " VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source,duration)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
             (jid, artist, (t.get("album") or "").strip(), title, 0, src_id,
-             (t.get("cover_url") or t.get("cover") or "").strip(), source),
+             (t.get("cover_url") or t.get("cover") or "").strip(), source, _secs(t.get("duration"))),
         )
         results.append("queued")
         queued += 1
@@ -5564,9 +5607,10 @@ def import_url():
             skipped += 1
             continue
         cur.execute(
-            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source)"
-            " VALUES(?,?,?,?,?,?,?,?)",
-            (job_id, t.artist, t.album, t.title, t.track_number, t.source_id, t.cover_url, dl_source),
+            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source,duration)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
+            (job_id, t.artist, t.album, t.title, t.track_number, t.source_id, t.cover_url, dl_source,
+             t.duration),
         )
     queued = len(tracks) - skipped
     conn.commit()

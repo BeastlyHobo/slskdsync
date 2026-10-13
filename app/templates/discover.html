@@ -250,11 +250,11 @@ function tilHtml(t) {
     <button class="btn-tile-slsk dl-btn"
       data-source="slskd"
       data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
-      data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">Soulseek</button>
+      data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}" data-duration="${t.duration||''}">Soulseek</button>
     <button class="btn-tile-mono dl-btn"
       data-source="monochrome"
       data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
-      data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">TIDAL</button>
+      data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}" data-duration="${t.duration||''}">TIDAL</button>
     ${radioBtn}`);
 
   // Song/album pages: ids here can be Apple's or ListenBrainz's rather than
@@ -299,11 +299,11 @@ function trackCardHtml(t) {
       <button class="btn btn-slsk dl-btn"
         data-source="slskd" data-title="${esc(t.title)}"
         data-artist="${esc(t.artist||'')}" data-album="${esc(t.album||'')}"
-        data-cover="${esc(t.cover||'')}">Soulseek</button>
+        data-cover="${esc(t.cover||'')}" data-duration="${t.duration||''}">Soulseek</button>
       <button class="btn btn-mono dl-btn"
         data-source="monochrome" data-title="${esc(t.title)}"
         data-artist="${esc(t.artist||'')}" data-album="${esc(t.album||'')}"
-        data-cover="${esc(t.cover||'')}">TIDAL</button>`;
+        data-cover="${esc(t.cover||'')}" data-duration="${t.duration||''}">TIDAL</button>`;
   return `
   <div class="track-card${inLib ? ' track-in-lib' : ''}">
     ${artHtml}
@@ -343,6 +343,7 @@ document.addEventListener('click', e => {
       artist: dlBtn.dataset.artist,
       album:  dlBtn.dataset.album,
       cover:  dlBtn.dataset.cover,
+      duration: dlBtn.dataset.duration,
     }, dlBtn.dataset.source);
     return;
   }
@@ -398,7 +399,7 @@ function queueDl(btn, item, source) {
   fetch('/api/download', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ artist:item.artist, album:item.album, title:item.title, cover:item.cover, source }),
+    body: JSON.stringify({ artist:item.artist, album:item.album, title:item.title, cover:item.cover, duration:item.duration, source }),
   })
   .then(r => r.json())
   .then(d => {

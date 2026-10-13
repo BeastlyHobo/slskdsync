@@ -198,3 +198,24 @@ def test_scorer_prefers_the_right_song_over_a_better_format(appmod):
     # punctuation and accents don't fake a title/artist miss
     m2 = A.TrackMeta("Björk", "", "Don't Be Sad", 1)
     assert c.score_result({"filename": r"Bjork\01 - Dont Be Sad.flac"}, m2) > 100
+
+
+def test_scorer_uses_song_length_when_known(appmod):
+    A = appmod
+    c = A.SlskdClient()
+    m = A.TrackMeta("Radiohead", "OK Computer", "Paranoid Android", 2, duration=383)
+    studio = {"filename": r"Radiohead\OK Computer\02 - Paranoid Android.mp3", "bitRate": 320, "length": 384}
+    live = {"filename": r"Radiohead\Bootlegs\02 - Paranoid Android.flac", "length": 452}
+    assert c.score_result(studio, m) > c.score_result(live, m)
+    # unknown length on either side changes nothing
+    assert c.score_result({**live, "length": 0}, m) == c.score_result(
+        live, A.TrackMeta("Radiohead", "OK Computer", "Paranoid Android", 2))
+
+
+def test_download_stores_the_song_length(A, auth):
+    auth.post("/api/download", json={"artist": "A", "title": "T", "duration": "238"})
+    auth.post("/api/download", json={"artist": "B", "title": "U", "duration": "nonsense"})
+    conn = A.get_conn()
+    got = {r["artist"]: r["duration"] for r in conn.execute("SELECT artist, duration FROM tracks")}
+    conn.close()
+    assert got == {"A": 238, "B": 0}
