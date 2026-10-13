@@ -4728,29 +4728,29 @@ def api_ai_suggest(track_id):
             max_tokens=512,
             system=system,
             messages=[{"role": "user", "content": user_msg}],
+            # Anthropic's shape: the schema sits directly under format.schema.
+            # The nested {"json_schema": {"name", "schema"}} form is OpenAI's
+            # and made every request fail with a 400.
             output_config={"format": {
                 "type": "json_schema",
-                "json_schema": {
-                    "name": "suggestions",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "queries": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "q":   {"type": "string"},
-                                        "why": {"type": "string"},
-                                    },
-                                    "required": ["q", "why"],
-                                    "additionalProperties": False,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "queries": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "q":   {"type": "string"},
+                                    "why": {"type": "string"},
                                 },
-                            }
-                        },
-                        "required": ["queries"],
-                        "additionalProperties": False,
+                                "required": ["q", "why"],
+                                "additionalProperties": False,
+                            },
+                        }
                     },
+                    "required": ["queries"],
+                    "additionalProperties": False,
                 },
             }},
         )
@@ -4869,6 +4869,10 @@ def api_library_acoustid():
         conn.close()
         if not ids:
             return jsonify({"error": "no tracks matched"}), 404
+        # Without a key every fingerprint is skipped, so "ID" used to finish
+        # instantly having changed nothing and said nothing.
+        if not (get_setting("acoustid_api_key") or "").strip():
+            return jsonify({"error": "Add an AcoustID API key in Settings to identify songs"}), 400
         threading.Thread(target=_run_lib_acoustid, args=(ids, table), daemon=True).start()
         started = True
         return jsonify({"ok": True, "total": len(ids)})

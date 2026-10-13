@@ -166,6 +166,7 @@ def test_acoustid_ids_scope_verifies_only_the_given_rows(A, auth, monkeypatch):
     conn.commit()
     conn.close()
     got = {}
+    A.set_setting("acoustid_api_key", "k")
     monkeypatch.setattr(A, "_run_lib_acoustid", lambda ids, table: got.update(ids=ids, table=table))
     r = auth.post("/api/library/acoustid", json={"scope": "ids", "ids": [1, 3, 99, "2"]})
     assert r.get_json() == {"ok": True, "total": 2}
@@ -227,3 +228,41 @@ def test_finished_download_is_indexed_and_clears_stale_state(A, job):
     assert [(r["artist"], r["title"], r["acoustid_score"]) for r in rows] == [("Art", "Song", 0.95)]
     assert conn.execute("SELECT COUNT(*) FROM bad_flags").fetchone()[0] == 0
     conn.close()
+
+
+def test_ai_suggest_sends_anthropic_structured_output_shape(A, auth, job, monkeypatch):
+    """format must be {"type": "json_schema", "schema": {...}} — the nested
+    OpenAI-style {"json_schema": {"name", "schema"}} made every call a 400."""
+    pytest.importorskip("anthropic")
+    from anthropic.types import JSONOutputFormatParam
+    sent = {}
+
+    class FakeMessages:
+        def create(self, **kw):
+            sent.update(kw)
+            block = type("B", (), {"type": "text", "text": '{"queries": [{"q": "a b", "why": "x"}]}'})
+            return type("R", (), {"content": [block]})
+
+    class FakeClient:
+        def __init__(self, **kw):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(A._anthropic, "Anthropic", FakeClient)
+    A.set_setting("anthropic_api_key", "k")
+    conn = A.get_conn()
+    conn.execute("INSERT INTO tracks(job_id,artist,title) VALUES(?,'A','T')", (job,))
+    conn.commit(); conn.close()
+    r = auth.post("/api/tracks/1/ai-suggest").get_json()
+    assert r["ok"] and r["suggestions"][0]["q"] == "a b"
+    fmt = sent["output_config"]["format"]
+    assert set(fmt) == set(JSONOutputFormatParam.__annotations__)
+    assert fmt["schema"]["required"] == ["queries"]
+
+
+def test_acoustid_without_a_key_says_so(A, auth):
+    conn = A.get_conn()
+    conn.execute("INSERT INTO library_index(id, artist, title, path) VALUES (1,'A','T','/m/t.mp3')")
+    conn.commit(); conn.close()
+    r = auth.post("/api/library/acoustid", json={"scope": "track", "id": 1})
+    assert r.status_code == 400 and "AcoustID API key" in r.get_json()["error"]
+    assert A._lib_acoustid_state["in_progress"] is False
