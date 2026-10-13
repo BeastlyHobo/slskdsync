@@ -155,3 +155,18 @@ def test_worker_survives_a_failing_scheduled_step(A, monkeypatch):
     t.start()
     t.join(timeout=10)
     assert not t.is_alive(), "worker thread died instead of logging and continuing"
+
+
+def test_acoustid_ids_scope_verifies_only_the_given_rows(A, auth, monkeypatch):
+    """A filtered Library view verifies what it shows, not the whole library."""
+    conn = A.get_conn()
+    for i in (1, 2, 3):
+        conn.execute("INSERT INTO library_index(id, artist, title, path) VALUES (?,?,?,?)",
+                     (i, "A", f"T{i}", f"/music/A/T{i}.mp3"))
+    conn.commit()
+    conn.close()
+    got = {}
+    monkeypatch.setattr(A, "_run_lib_acoustid", lambda ids, table: got.update(ids=ids, table=table))
+    r = auth.post("/api/library/acoustid", json={"scope": "ids", "ids": [1, 3, 99, "2"]})
+    assert r.get_json() == {"ok": True, "total": 2}
+    assert sorted(got["ids"]) == [1, 3] and got["table"] == "library_index"

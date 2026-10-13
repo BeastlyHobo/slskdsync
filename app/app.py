@@ -4716,6 +4716,15 @@ def api_library_acoustid():
             ids = [r["id"] for r in conn.execute(
                 "SELECT id FROM library_index WHERE artist=?",
                 (data.get("artist"),)).fetchall()]
+        elif scope == "ids":
+            # Exactly the rows a filtered Library view is showing.
+            want = [i for i in (data.get("ids") or []) if isinstance(i, int)]
+            ids = []
+            for k in range(0, len(want), 500):
+                chunk = want[k:k + 500]
+                ids += [r["id"] for r in conn.execute(
+                    f"SELECT id FROM library_index WHERE id IN ({','.join('?' * len(chunk))})",
+                    chunk).fetchall()]
         elif scope == "playlist":
             table = "tracks"
             ids = [r["id"] for r in conn.execute(

@@ -1445,7 +1445,7 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
   letter-spacing: 0.04em;
   padding: 0.45rem 0.5rem 0.2rem;
   position: sticky;
-  top: 52px;
+  top: calc(var(--topbar-h) + var(--inset-top));
   background: var(--bg);
   z-index: 2;
 }
@@ -1548,14 +1548,6 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
   font-size: 0.9rem;
 }
 
-/* AcoustID filter row */
-#aid-filter-row {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-}
-
 /* Library search input */
 #lib-search {
   width: 100%;
@@ -1576,7 +1568,7 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
 #back-row {
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 0.45rem;
+  margin-bottom: 0.3rem;
 }
 
 #back-btn {
@@ -1590,22 +1582,6 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
   display: flex;
   align-items: center;
   gap: 0.3rem;
-}
-
-#view-title {
-  font-size: 0.88rem;
-  font-weight: 700;
-  flex: 1;
-  text-align: center;
-  margin-right: 2rem;
-}
-
-/* Verify progress row */
-#verify-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
 }
 
 .aid-progress-bar-wrap {

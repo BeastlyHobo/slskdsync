@@ -1,8 +1,11 @@
 {% extends 'base.html' %}
 {% block content %}
 
-<div class="page-head">
-  <h1 class="page-title">Library</h1>
+<div class="page-head lib-head">
+  <div id="back-row" style="display:none">
+    <button onclick="goBack()" id="back-btn">‹ <span id="back-label">Library</span></button>
+  </div>
+  <h1 class="page-title" id="view-title">Library</h1>
 </div>
 
 {% if needs_scan %}
@@ -16,76 +19,75 @@
 </div>
 {% endif %}
 
-<!-- Top bar: back button (hidden on home) + search + sort -->
-<div id="top-bar" style="margin-bottom:.6rem">
-  <div id="back-row" style="display:none">
-    <button onclick="goBack()" id="back-btn">
-      ‹ <span id="back-label">Library</span>
-    </button>
-    <span id="view-title"></span>
-  </div>
-  <div style="display:flex;gap:.4rem;align-items:center">
-    <input id="lib-search" type="search" placeholder="Search library…" oninput="applyFilters()" style="flex:1">
-    <select id="lib-sort" style="display:none;font-size:.75rem;padding:.3rem .5rem;background:var(--surface2);
-            color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer"
-            onchange="setSortBy(this.value)">
-      <option value="title">Title A–Z</option>
-      <option value="artist">Artist A–Z</option>
-      <option value="album">Album A–Z</option>
-      <option value="added">Recently added</option>
-    </select>
-  </div>
+<!-- Artist / album header, rendered per view -->
+<div id="lib-hero"></div>
+
+<!-- Search + sort + filter, all on one row -->
+<div class="lib-toolbar">
+  <input id="lib-search" type="search" placeholder="Search library…" autocomplete="off">
+  <select id="lib-sort" class="lib-sort" aria-label="Sort" style="display:none"
+          onchange="setSortBy(this.value)"></select>
+  <button id="lib-filter-btn" class="lib-filter-btn" style="display:none"
+          onclick="toggleFilterPanel()" aria-expanded="false">Filter</button>
 </div>
 
-<!-- AcoustID filter chips (shown only on track views) -->
-<div id="aid-filter-row" style="display:none">
-  <button class="af-chip active" onclick="setAidFilter('all',this)">All</button>
-  <button class="af-chip" onclick="setAidFilter('matched',this)">✓ ≥80%</button>
-  <button class="af-chip" onclick="setAidFilter('uncertain',this)">~ 50–79%</button>
-  <button class="af-chip" onclick="setAidFilter('mismatch',this)">✗ &lt;50%</button>
-  <button class="af-chip" onclick="setAidFilter('unchecked',this)">? Not checked</button>
-</div>
-
-<!-- Flagged filter chips -->
-<div id="rating-filter-row" style="display:none">
-  <button class="af-chip active" onclick="setRatingFilter('all',this)">All</button>
-  <button class="af-chip" onclick="setRatingFilter('flagged',this)">⭐ Flagged</button>
-  <button class="af-chip" onclick="setRatingFilter('unflagged',this)">Unflagged</button>
-</div>
-
-<!-- Format filter chips -->
-<div id="fmt-filter-row" style="display:none">
-  <button class="af-chip active" onclick="setFmtFilter('all',this)">All</button>
-  <button class="af-chip" onclick="setFmtFilter('lossless',this)">Lossless</button>
-  <button class="af-chip" onclick="setFmtFilter('lossy',this)">Lossy</button>
-</div>
-
-<!-- Bad / wrong-grab filter chips -->
-<div id="bad-filter-row" style="display:none">
-  <button class="af-chip active" onclick="setBadFilter('all',this)">All</button>
-  <button class="af-chip" onclick="setBadFilter('bad',this)">⚑ Bad only</button>
-  <button class="af-chip" onclick="setBadFilter('good',this)">Hide bad</button>
-</div>
-
-<!-- Verify-all + progress (shown during verification) -->
-<div id="verify-row" style="display:none">
-  <button id="verify-view-btn" class="lib-sm-btn" onclick="verifyCurrentView()">↻ Verify all in view</button>
-  <div id="aid-progress-wrap" style="flex:1;display:none">
-    <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.15rem">
-      <span id="aid-progress-text">Identifying…</span>
+<!-- Filters live behind one button; the active ones show as removable chips. -->
+<div id="lib-filter-panel" class="lib-filter-panel" style="display:none">
+  <div class="lf-group">
+    <div class="lf-label">AcoustID</div>
+    <div class="lf-chips" data-filter="aid">
+      <button class="af-chip active" data-val="all">All</button>
+      <button class="af-chip" data-val="matched">✓ ≥80%</button>
+      <button class="af-chip" data-val="uncertain">~ 50–79%</button>
+      <button class="af-chip" data-val="mismatch">✗ &lt;50%</button>
+      <button class="af-chip" data-val="unknown">ID ? Not in AcoustID</button>
+      <button class="af-chip" data-val="unchecked">Not checked</button>
     </div>
-    <div class="aid-progress-bar-wrap">
-      <div id="aid-progress-bar" style="width:0%"></div>
+  </div>
+  <div class="lf-group">
+    <div class="lf-label">Format</div>
+    <div class="lf-chips" data-filter="fmt">
+      <button class="af-chip active" data-val="all">All</button>
+      <button class="af-chip" data-val="lossless">Lossless</button>
+      <button class="af-chip" data-val="lossy">Lossy</button>
     </div>
+  </div>
+  <div class="lf-group">
+    <div class="lf-label">Wrong grabs</div>
+    <div class="lf-chips" data-filter="bad">
+      <button class="af-chip active" data-val="all">All</button>
+      <button class="af-chip" data-val="bad">⚑ Flagged bad</button>
+      <button class="af-chip" data-val="good">Hide bad</button>
+    </div>
+  </div>
+  <div class="lf-group">
+    <div class="lf-label">Navidrome rating</div>
+    <div class="lf-chips" data-filter="rating">
+      <button class="af-chip active" data-val="all">All</button>
+      <button class="af-chip" data-val="flagged">1★ in Navidrome</button>
+      <button class="af-chip" data-val="unflagged">Not 1★</button>
+    </div>
+  </div>
+  <button id="verify-view-btn" class="lib-sm-btn lf-verify" onclick="verifyCurrentView()">🎧 Verify everything in this view</button>
+</div>
+<div id="lib-active" class="lib-active"></div>
+
+<!-- AcoustID progress (shown while a multi-track verify runs) -->
+<div id="aid-progress-wrap" class="lib-progress" style="display:none">
+  <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.15rem">
+    <span id="aid-progress-text">Identifying…</span>
+  </div>
+  <div class="aid-progress-bar-wrap">
+    <div id="aid-progress-bar" style="width:0%"></div>
   </div>
 </div>
 
 <!-- Content area -->
 <div id="lib-content"></div>
 
-<!-- Track detail modal -->
+<!-- Song sheet -->
 <div id="track-modal" class="tm-overlay" style="display:none" onclick="if(event.target===this)closeTrackModal()">
-  <div class="tm-card">
+  <div class="tm-card" role="dialog" aria-modal="true" aria-labelledby="tm-title">
     <button class="tm-close" onclick="closeTrackModal()" aria-label="Close">✕</button>
     <div class="tm-head">
       <div id="tm-cover"></div>
@@ -95,75 +97,82 @@
         <div id="tm-badges" class="tm-badges"></div>
       </div>
     </div>
-    <div id="tm-meta" class="tm-meta"></div>
-    <div class="tm-actions">
-      <a id="tm-nav-btn" class="lib-sm-btn tm-nav" target="_blank" rel="noopener" style="display:none">▶ Open in Navidrome</a>
-      <button id="tm-flag-btn" class="lib-sm-btn tm-flag" onclick="toggleBad()">⚑ Flag as bad</button>
-      <div id="tm-aid-verdict" class="tm-aid-verdict" style="display:none"></div>
-      <div class="tm-redl-label">Wrong file?</div>
 
-      {# Step 1 — the two things you can do about a bad grab. #}
-      <div id="fx-choice" class="fx-choice">
-        <button class="lib-sm-btn" onclick="fxShow('replace')">🗑 Delete &amp; get another</button>
-        <button class="lib-sm-btn" onclick="fxShow('identify')">🔎 Keep it — it's a different song</button>
-      </div>
+    <div id="tm-aid-verdict" class="tm-aid-verdict" style="display:none"></div>
 
-      {# Step 2a — replace. #}
-      <div id="fx-replace" class="fx-panel" style="display:none">
-        <div class="tm-hint">Queues a fresh Soulseek search, skipping the peer that
-          served this file. The current file is kept until the replacement lands,
-          then removed — so you're never left with nothing.</div>
-        <div class="tm-redl-row">
-          <input id="tm-query" type="text" placeholder="search query…">
-          <button id="tm-redl-btn" class="lib-sm-btn" onclick="doRedownload()">↺ Delete &amp; re-download</button>
-        </div>
-        <button class="fx-back" onclick="fxShow('')">← Back</button>
-      </div>
-
-      {# Step 2b — keep the file, correct what it claims to be. #}
-      <div id="fx-identify" class="fx-panel" style="display:none">
-        <div class="tm-hint">Keeps the file and re-files it under the right name,
-          so Navidrome shows it as what it actually is.</div>
-        <button id="fx-aid-btn" class="lib-sm-btn" onclick="fxIdentify()">🎧 Identify with AcoustID</button>
-        <div id="fx-aid-out" class="fx-out"></div>
-
-        <div class="fx-sep">or name it yourself</div>
-        <div class="fx-tabs">
-          <button class="fx-tab active" data-fxtab="search" onclick="fxTab('search')">Search</button>
-          <button class="fx-tab" data-fxtab="manual" onclick="fxTab('manual')">Type it</button>
-          <button class="fx-tab" data-fxtab="link"   onclick="fxTab('link')">Paste link</button>
-        </div>
-
-        <div id="fx-tab-search" class="fx-tabpanel">
-          <div class="tm-redl-row">
-            <input id="fx-search-q" type="text" placeholder="artist and title…"
-              onkeydown="if(event.key==='Enter')fxSearch()">
-            <button class="lib-sm-btn" onclick="fxSearch()">Search</button>
-          </div>
-          <div id="fx-search-out" class="fx-out"></div>
-        </div>
-
-        <div id="fx-tab-manual" class="fx-tabpanel" style="display:none">
-          <input id="fx-m-artist" class="fx-input" type="text" placeholder="Artist">
-          <input id="fx-m-album"  class="fx-input" type="text" placeholder="Album (optional)">
-          <input id="fx-m-title"  class="fx-input" type="text" placeholder="Title">
-          <button class="lib-sm-btn" onclick="fxApplyManual()">Rename &amp; organize</button>
-        </div>
-
-        <div id="fx-tab-link" class="fx-tabpanel" style="display:none">
-          <div class="tm-redl-row">
-            <input id="fx-link" type="text" placeholder="Spotify / Apple Music / TIDAL track link"
-              onkeydown="if(event.key==='Enter')fxResolveLink()">
-            <button class="lib-sm-btn" onclick="fxResolveLink()">Fetch</button>
-          </div>
-          <div id="fx-link-out" class="fx-out"></div>
-        </div>
-
-        <button class="fx-back" onclick="fxShow('')">← Back</button>
-      </div>
-
-      <div id="tm-redl-result" class="tm-result"></div>
+    {# The four things you do to a song, one tap each. Identify used to sit
+       two levels down under "Wrong file? → Keep it — it's a different song",
+       which asked for the answer before you had it. #}
+    <div class="tm-quick">
+      <button id="tm-q-identify" class="tm-q" onclick="fxOpen('identify')">🎧<span>Identify</span></button>
+      <button id="tm-q-rename"   class="tm-q" onclick="fxOpen('rename')">✎<span>Rename</span></button>
+      <button id="tm-q-replace"  class="tm-q" onclick="fxOpen('replace')">↺<span>Re-download</span></button>
+      <button id="tm-flag-btn"   class="tm-q tm-flag" onclick="toggleBad()">⚑<span>Flag bad</span></button>
     </div>
+    <a id="tm-nav-btn" class="lib-sm-btn tm-nav" target="_blank" rel="noopener" style="display:none">▶ Open in Navidrome</a>
+
+    {# Identify: what does AcoustID hear in this file? #}
+    <div id="fx-identify" class="fx-panel" style="display:none">
+      <div class="fx-panel-title">What is this file really?</div>
+      <div id="fx-aid-out" class="fx-out"></div>
+      <button id="fx-aid-btn" class="lib-sm-btn" onclick="fxIdentify()">🎧 Listen again</button>
+    </div>
+
+    {# Rename: keep the file, re-file it under the right name. #}
+    <div id="fx-rename" class="fx-panel" style="display:none">
+      <div class="fx-panel-title">Keep the file, rename it</div>
+      <div class="tm-hint">Re-files and retags it so Navidrome shows it as what it actually is.</div>
+      <div class="fx-tabs">
+        <button class="fx-tab active" data-fxtab="search" onclick="fxTab('search')">Search</button>
+        <button class="fx-tab" data-fxtab="manual" onclick="fxTab('manual')">Type it</button>
+        <button class="fx-tab" data-fxtab="link"   onclick="fxTab('link')">Paste link</button>
+      </div>
+
+      <div id="fx-tab-search" class="fx-tabpanel">
+        <div class="tm-redl-row">
+          <input id="fx-search-q" type="text" placeholder="artist and title…"
+            onkeydown="if(event.key==='Enter')fxSearch()">
+          <button class="lib-sm-btn" onclick="fxSearch()">Search</button>
+        </div>
+        <div id="fx-search-out" class="fx-out"></div>
+      </div>
+
+      <div id="fx-tab-manual" class="fx-tabpanel" style="display:none">
+        <input id="fx-m-artist" class="fx-input" type="text" placeholder="Artist">
+        <input id="fx-m-album"  class="fx-input" type="text" placeholder="Album (optional)">
+        <input id="fx-m-title"  class="fx-input" type="text" placeholder="Title">
+        <button class="lib-sm-btn" onclick="fxApplyManual()">Rename &amp; organize</button>
+      </div>
+
+      <div id="fx-tab-link" class="fx-tabpanel" style="display:none">
+        <div class="tm-redl-row">
+          <input id="fx-link" type="text" placeholder="Spotify / Apple Music / TIDAL track link"
+            onkeydown="if(event.key==='Enter')fxResolveLink()">
+          <button class="lib-sm-btn" onclick="fxResolveLink()">Fetch</button>
+        </div>
+        <div id="fx-link-out" class="fx-out"></div>
+      </div>
+    </div>
+
+    {# Re-download: delete this copy and fetch another. #}
+    <div id="fx-replace" class="fx-panel" style="display:none">
+      <div class="fx-panel-title">Delete &amp; get another copy</div>
+      <div class="tm-hint">Queues a fresh Soulseek search, skipping the peer that
+        served this file. The current file is kept until the replacement lands,
+        then removed — so you're never left with nothing.</div>
+      <div class="tm-redl-row">
+        <input id="tm-query" type="text" placeholder="search query…">
+        <button id="tm-redl-btn" class="lib-sm-btn" onclick="doRedownload()">↺ Re-download</button>
+      </div>
+    </div>
+
+    <div id="tm-redl-result" class="tm-result"></div>
+
+    {# After a rename: the song you actually wanted is still missing. #}
+    <div id="fx-after" class="fx-after" style="display:none"></div>
+
+    <div class="tm-section-label">Details</div>
+    <div id="tm-meta" class="tm-meta"></div>
   </div>
 </div>
 
@@ -173,7 +182,8 @@
 @media(min-width:600px){ .tm-overlay{ align-items:center; padding:1rem; } }
 .tm-card { background:var(--surface-solid); border:1px solid var(--border);
   border-radius:var(--radius-sm) var(--radius-sm) 0 0; width:100%; max-width:480px;
-  padding:1.1rem; position:relative; max-height:88dvh; overflow-y:auto; }
+  padding:1.1rem 1.1rem calc(1.1rem + var(--inset-bottom)); position:relative;
+  max-height:88dvh; overflow-y:auto; overscroll-behavior:contain; }
 @media(min-width:600px){ .tm-card{ border-radius:var(--radius-sm); } }
 .tm-close { position:absolute; top:.55rem; right:.6rem; background:none; border:none;
   color:var(--text-muted); font-size:1rem; cursor:pointer; padding:.25rem .45rem; line-height:1; }
@@ -182,24 +192,44 @@
 .tm-head-info { min-width:0; flex:1; }
 .tm-title { font-size:1.05rem; font-weight:700; line-height:1.25; }
 .tm-sub { font-size:.82rem; color:var(--text-muted); margin-top:.15rem; }
+.tm-sub .tm-link { background:none; border:none; padding:0; font:inherit; color:var(--accent);
+  cursor:pointer; text-align:left; }
 .tm-badges { margin-top:.45rem; display:flex; gap:.35rem; flex-wrap:wrap; align-items:center; }
+.tm-section-label { font-size:.6875rem; font-weight:700; color:var(--text-faint);
+  text-transform:uppercase; letter-spacing:.06em; margin:1rem 0 .4rem; }
 .tm-meta { display:grid; grid-template-columns:auto 1fr; gap:.32rem .8rem; font-size:.76rem;
-  margin-bottom:1rem; padding:.7rem .8rem; background:var(--surface2); border-radius:var(--radius-sm); }
+  padding:.7rem .8rem; background:var(--surface2); border-radius:var(--radius-sm); }
 .tm-meta .k { color:var(--text-faint); white-space:nowrap; }
 .tm-meta .v { color:var(--text); overflow-wrap:anywhere; font-family:var(--font-mono); }
-.tm-redl-label { font-size:.78rem; font-weight:600; margin-bottom:.45rem; }
 .tm-redl-row { display:flex; gap:.4rem; }
 .tm-redl-row input { flex:1; min-width:0; padding:.45rem .7rem; border-radius:var(--radius-sm);
   border:1px solid var(--border); background:var(--surface2); color:var(--text);
   font-size:.8rem; font-family:var(--font-mono); }
 .tm-redl-row input:focus { border-color:var(--accent); outline:none; }
 .tm-redl-row .lib-sm-btn { flex-shrink:0; white-space:nowrap; }
-.tm-hint { font-size:0.6875rem; color:var(--text-faint); margin-top:.45rem; line-height:1.4; }
+.tm-hint { font-size:0.6875rem; color:var(--text-faint); line-height:1.4; }
 .tm-result { font-size:.76rem; margin-top:.5rem; }
+.tm-result:empty { display:none; }
+
+/* Quick actions */
+.tm-quick { display:grid; grid-template-columns:repeat(4, 1fr); gap:.4rem; margin-bottom:.5rem; }
+.tm-q { display:flex; flex-direction:column; align-items:center; gap:.2rem;
+  padding:.55rem .2rem; border-radius:var(--radius-sm); background:var(--surface2);
+  border:1px solid var(--border); color:var(--text); font-size:1rem; font-family:var(--font-ui);
+  cursor:pointer; transition:background .14s, border-color .14s; }
+.tm-q span { font-size:.6875rem; font-weight:600; color:var(--text-muted); }
+.tm-q:hover { background:var(--surface3); }
+.tm-q.active { border-color:var(--accent); background:var(--accent-soft); }
+.tm-q.active span { color:var(--text); }
+.tm-q:disabled { opacity:.4; cursor:default; }
+.tm-flag.on { background:var(--err); border-color:transparent; color:#fff; }
+.tm-flag.on span { color:#fff; }
+.tm-nav { display:block; width:100%; box-sizing:border-box; text-align:center;
+  text-decoration:none; padding:.4rem; }
 
 /* Stored AcoustID verdict */
-.tm-aid-verdict { display:flex; flex-direction:column; gap:.35rem; margin-bottom:.55rem;
-  padding-bottom:.55rem; border-bottom:1px solid var(--border); }
+.tm-aid-verdict { display:flex; flex-direction:column; gap:.35rem; margin-bottom:.7rem;
+  padding:.6rem .7rem; border-radius:var(--radius-sm); background:var(--surface2); }
 .fx-verdict { font-size:.76rem; line-height:1.45; color:var(--text-muted); }
 .fx-verdict.ok  { color:var(--ok); }
 .fx-verdict.bad { color:var(--err); font-weight:600; }
@@ -207,16 +237,10 @@
 .fx-linkbtn { background:none; border:none; padding:0; font:inherit;
   color:var(--accent); text-decoration:underline; cursor:pointer; }
 
-/* Fix-a-wrong-grab flow */
-.fx-choice { display:flex; flex-direction:column; gap:.4rem; }
-.fx-choice .lib-sm-btn { text-align:left; }
-.fx-panel { display:flex; flex-direction:column; gap:.5rem; }
-.fx-panel .tm-hint { margin-top:0; }
-.fx-back { align-self:flex-start; background:none; border:none; padding:.2rem 0;
-  color:var(--text-muted); font-size:.75rem; font-family:var(--font-ui); cursor:pointer; }
-.fx-back:hover { color:var(--text); }
-.fx-sep { font-size:0.6875rem; color:var(--text-faint); text-transform:uppercase;
-  letter-spacing:.06em; margin-top:.3rem; }
+/* Fix-a-wrong-grab panels */
+.fx-panel { display:flex; flex-direction:column; gap:.5rem; margin-top:.7rem;
+  padding-top:.7rem; border-top:1px solid var(--border); }
+.fx-panel-title { font-size:.8rem; font-weight:700; }
 .fx-tabs { display:flex; gap:.3rem; flex-wrap:wrap; }
 .fx-tab { padding:.28rem .6rem; border-radius:var(--radius-pill); font-size:.72rem;
   font-weight:600; font-family:var(--font-ui); cursor:pointer; color:var(--text-muted);
@@ -228,6 +252,7 @@
   font-family:var(--font-ui); min-width:0; }
 .fx-input:focus { border-color:var(--accent); outline:none; }
 .fx-out { display:flex; flex-direction:column; gap:.3rem; }
+.fx-out:empty { display:none; }
 .fx-none { font-size:.75rem; color:var(--text-muted); }
 .fx-cand { display:flex; align-items:center; gap:.5rem; padding:.4rem .55rem;
   background:var(--surface2); border:1px solid var(--border);
@@ -238,10 +263,84 @@
 .fx-cand-sub { font-size:.72rem; color:var(--text-muted); white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis; }
 .fx-cand .lib-sm-btn { flex-shrink:0; }
-.tm-flag { width:100%; margin-bottom:.9rem; }
-.tm-flag.on { background:var(--err); color:#fff; border-color:transparent; }
-.tm-nav { display:block; width:100%; box-sizing:border-box; text-align:center;
-  text-decoration:none; margin-bottom:.5rem; }
+#fx-aid-btn { align-self:flex-start; }
+.fx-after { margin-top:.6rem; padding:.65rem .75rem; border-radius:var(--radius-sm);
+  border:1px solid var(--accent-line); background:var(--accent-soft);
+  display:flex; flex-direction:column; gap:.45rem; font-size:.78rem; }
+.fx-after-btns { display:flex; gap:.4rem; flex-wrap:wrap; }
+.fx-after-btns .lib-sm-btn, .fx-after-btns a.lib-sm-btn { font-size:.75rem; padding:.35rem .7rem;
+  text-decoration:none; }
+
+/* Header + toolbar */
+.lib-head { margin-bottom:.7rem; }
+.lib-head .page-title { overflow-wrap:anywhere; }
+.lib-toolbar { display:flex; gap:.4rem; align-items:center; margin-bottom:.55rem; }
+.lib-toolbar #lib-search { flex:1; min-width:0; }
+.lib-sort { flex-shrink:1; min-width:0; max-width:42%; font-size:.78rem; padding:.45rem .5rem;
+  background:var(--surface2); color:var(--text); border:1px solid var(--border);
+  border-radius:var(--radius-pill); cursor:pointer; font-family:var(--font-ui); }
+.lib-filter-btn { flex-shrink:0; font-size:.78rem; font-weight:600; padding:.45rem .8rem;
+  border-radius:var(--radius-pill); background:var(--surface2); color:var(--text-muted);
+  border:1px solid var(--border); font-family:var(--font-ui); cursor:pointer; white-space:nowrap; }
+.lib-filter-btn.on { color:var(--text); border-color:var(--accent); }
+.lib-filter-panel { display:flex; flex-direction:column; gap:.55rem; padding:.7rem .75rem;
+  margin-bottom:.6rem; background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-sm); }
+.lf-label { font-size:.6875rem; font-weight:700; color:var(--text-faint);
+  text-transform:uppercase; letter-spacing:.06em; margin-bottom:.3rem; }
+.lf-chips { display:flex; gap:.35rem; flex-wrap:wrap; }
+.lf-chips .af-chip { font-size:.75rem; padding:5px 11px; }
+.lf-verify { align-self:flex-start; font-size:.75rem; padding:.35rem .7rem; }
+.lib-active { display:flex; gap:.35rem; flex-wrap:wrap; margin-bottom:.5rem; }
+.lib-active:empty { display:none; }
+.lib-active .af-chip { font-size:.72rem; padding:4px 10px; }
+.lib-progress { margin-bottom:.6rem; }
+.lib-count { font-size:.75rem; color:var(--text-muted); margin-bottom:.35rem; }
+
+/* Artist / album header */
+.lib-hero { display:flex; gap:.9rem; align-items:center; margin-bottom:.7rem; }
+.lib-hero-art { width:96px; height:96px; flex-shrink:0; border-radius:var(--radius-sm);
+  overflow:hidden; background:var(--surface2); display:flex; align-items:center;
+  justify-content:center; color:var(--text-muted); }
+.lib-hero-art.round { border-radius:50%; }
+.lib-hero-art, .album-cover-wrap { position:relative; }
+.lib-hero-art .album-ph { height:auto; }
+.art-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+.lib-hero-info { min-width:0; flex:1; }
+.lib-hero-kicker { font-size:.6875rem; font-weight:700; color:var(--text-faint);
+  text-transform:uppercase; letter-spacing:.06em; }
+.lib-hero-title { font-size:1.3rem; font-weight:800; line-height:1.15; letter-spacing:-.01em;
+  overflow-wrap:anywhere; margin:.1rem 0 .2rem; }
+.lib-hero-sub { font-size:.78rem; color:var(--text-muted); }
+.lib-hero-sub .tm-link { background:none; border:none; padding:0; font:inherit;
+  color:var(--accent); cursor:pointer; }
+.lib-hero-aid { font-size:.72rem; color:var(--text-faint); margin-top:.25rem; }
+.lib-hero-actions { display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.8rem; }
+.lib-hero-actions .lib-sm-btn { font-size:.75rem; padding:.4rem .75rem; text-decoration:none;
+  border-radius:var(--radius-pill); }
+.lib-section { font-size:.75rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--text-muted); margin:.9rem 0 .45rem; }
+
+/* Rows */
+.lib-row { cursor:pointer; }
+.lib-row .lib-id-btn { font-size:.72rem; padding:.3rem .55rem; }
+.lib-trackno { width:1.4rem; text-align:right; font-size:.75rem; color:var(--text-faint);
+  flex-shrink:0; font-variant-numeric:tabular-nums; }
+.shelf { display:flex; gap:.65rem; overflow-x:auto; padding:.1rem 0 .5rem;
+  -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+.shelf::-webkit-scrollbar { display:none; }
+.shelf-card { width:112px; flex-shrink:0; cursor:pointer; }
+.shelf-card .album-cover-wrap { border-radius:var(--radius-sm); position:relative; }
+.shelf-card .album-ph { color:var(--text-muted); }
+.shelf-title { font-size:.78rem; font-weight:600; margin-top:.35rem; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.shelf-sub { font-size:.6875rem; color:var(--text-muted); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; display:flex; gap:.3rem; align-items:center; }
+.album-grid-lib { grid-template-columns:repeat(auto-fill, minmax(104px, 1fr)); gap:.8rem; }
+.album-card-lib .album-cover-wrap { border-radius:var(--radius-sm); }
+.album-card-title { font-size:.8rem; margin-top:.35rem; }
+.album-card-sub { display:flex; gap:.3rem; align-items:center; }
+
 .recent-shelf { display:flex; gap:.6rem; overflow-x:auto; padding:.35rem 0 .6rem;
   -webkit-overflow-scrolling:touch; }
 .recent-card { width:96px; flex-shrink:0; cursor:pointer; }
@@ -262,11 +361,7 @@ const NAV_URL       = {{ nav_public | tojson }};
 // Navigation state
 let view         = 'home';   // home | artists | albums | songs | playlists | artist-albums | album-tracks | playlist-tracks
 let ctx          = {};       // {artist, album, jobId, name} depending on view
-let aidFilter    = 'all';
-let ratingFilter = 'all';
-let fmtFilter    = 'all';
-let flaggedBadFilter = 'all';
-let sortBy       = 'artist';
+const filters    = {aid:'all', fmt:'all', bad:'all', rating:'all'};
 let songsPage    = 1;
 const PAGE_SIZE  = 300;
 let aidRunning        = false;
@@ -274,23 +369,109 @@ let _verifyingTrackId = null;   // id of the single track currently being verifi
 let _verifyingBtn     = null;   // button that triggered single-track verify
 let _plTracks         = [];     // tracks currently shown in playlist-tracks view
 
+// Natural order: "Song 2" before "Song 10", case- and accent-insensitive.
+const _coll = new Intl.Collator(undefined, {numeric:true, sensitivity:'base'});
+const cmp = (a, b) => _coll.compare(a || '', b || '');
+
+// ── Sorting ───────────────────────────────────────────────────────────────
+// Each view gets the orders that make sense for it; the choice is remembered
+// per view across visits.
+const SORTS = {
+  'songs':           [['artist','Artist'],['title','Title'],['album','Album'],['added','Recently added'],['aid','ID score'],['format','Format']],
+  'album-tracks':    [['track','Track order'],['title','Title'],['aid','ID score'],['format','Format']],
+  'artist-albums':   [['album','Album'],['title','Title'],['added','Recently added'],['aid','ID score'],['format','Format']],
+  'playlist-tracks': [['playlist','Playlist order'],['title','Title'],['artist','Artist'],['aid','ID score']],
+  'artists':         [['name','Name'],['tracks','Most songs'],['added','Recently added']],
+  'albums':          [['album','Title'],['artist','Artist'],['added','Recently added'],['tracks','Most songs']],
+};
+let sortPrefs = {};
+try { sortPrefs = JSON.parse(localStorage.getItem('lib_sort') || '{}') || {}; } catch(e) {}
+function sortFor(v) {
+  const opts = SORTS[v] || [];
+  return opts.some(o => o[0] === sortPrefs[v]) ? sortPrefs[v] : (opts[0] || [''])[0];
+}
+function setSortBy(val) {
+  sortPrefs[view] = val;
+  try { localStorage.setItem('lib_sort', JSON.stringify(sortPrefs)); } catch(e) {}
+  songsPage = 1;
+  render();
+}
+function showSort(v) {
+  const sel = document.getElementById('lib-sort');
+  const opts = SORTS[v];
+  if (!opts) { sel.style.display = 'none'; return; }
+  sel.innerHTML = opts.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+  sel.value = sortFor(v);
+  sel.style.display = '';
+}
+
+// Leading track number from "07 - Title.flac" / "07. Title.mp3"; filenames
+// without one sort after those that have one.
+function trackNo(t) {
+  const base = (t.path || '').split('/').pop();
+  const m = base.match(/^(\d{1,3})\s*[-.\s_]/);
+  return m ? parseInt(m[1], 10) : null;
+}
+// Worst first: wrong song, then unidentified/uncertain, then verified, then unchecked.
+function aidRank(s) { return s == null ? 2 : s < 0 ? 0.6 : s; }
+function sortTracks(list, key) {
+  const by = {
+    title:  (a, b) => cmp(a.title, b.title),
+    artist: (a, b) => cmp(a.artist, b.artist) || cmp(a.album, b.album) || cmp(a.title, b.title),
+    album:  (a, b) => cmp(a.album, b.album) || ((trackNo(a) ?? 999) - (trackNo(b) ?? 999)) || cmp(a.title, b.title),
+    added:  (a, b) => (b.indexed_at || '').localeCompare(a.indexed_at || '') || cmp(a.title, b.title),
+    aid:    (a, b) => aidRank(a.acoustid_score) - aidRank(b.acoustid_score) || cmp(a.title, b.title),
+    format: (a, b) => (LOSSLESS_EXTS.has(b.ext) - LOSSLESS_EXTS.has(a.ext)) || cmp(a.ext, b.ext) || cmp(a.title, b.title),
+    track:  (a, b) => ((trackNo(a) ?? 999) - (trackNo(b) ?? 999)) || cmp(a.title, b.title),
+  }[key];
+  return by ? [...list].sort(by) : list;   // 'playlist' keeps server order
+}
+
 // ── AcoustID ─────────────────────────────────────────────────────────────
 
 function aidBadgeHtml(score) {
   if (score === null || score === undefined) return '';
   if (score < 0) return '<span class="aid-badge aid-gray">ID ?</span>';
+  // 0 is the "identified as a different recording" sentinel, not 0% confidence.
+  if (score === 0) return '<span class="aid-badge aid-red">Wrong song</span>';
   const pct = Math.round(score * 100);
   if (score < 0.5)  return `<span class="aid-badge aid-red">ID ${pct}%</span>`;
   if (score < 0.8)  return `<span class="aid-badge aid-yellow">ID ${pct}%</span>`;
   return `<span class="aid-badge aid-green">ID ${pct}%</span>`;
 }
 
+// Group (artist/album) badges only flag problems — a sea of green "ID 97%"
+// on every row is noise, and an unchecked group says nothing.
+function groupAidBadge(tracks) {
+  const w = groupWorstAid(tracks);
+  return w != null && w >= 0 && w < 0.8 ? aidBadgeHtml(w) : '';
+}
+
+function aidSummary(tracks) {
+  let ok = 0, bad = 0, unsure = 0, none = 0;
+  tracks.forEach(t => {
+    const s = t.acoustid_score;
+    if (s == null) none++;
+    else if (s >= 0.8) ok++;
+    else if (s >= 0 && s < 0.5) bad++;
+    else unsure++;
+  });
+  const parts = [];
+  if (ok)     parts.push(`✓ ${ok} verified`);
+  if (bad)    parts.push(`<span style="color:var(--err)">✗ ${bad} wrong</span>`);
+  if (unsure) parts.push(`~ ${unsure} unsure`);
+  if (none)   parts.push(`? ${none} unchecked`);
+  return parts.join(' · ');
+}
+
 function aidPassesFilter(score) {
-  if (aidFilter === 'all')       return true;
-  if (aidFilter === 'unchecked') return score === null || score === undefined;
-  if (aidFilter === 'matched')   return score != null && score >= 0.8;
-  if (aidFilter === 'uncertain') return score != null && score >= 0.5 && score < 0.8;
-  if (aidFilter === 'mismatch')  return score != null && score < 0.5;
+  const f = filters.aid;
+  if (f === 'all')       return true;
+  if (f === 'unchecked') return score === null || score === undefined;
+  if (f === 'matched')   return score != null && score >= 0.8;
+  if (f === 'uncertain') return score != null && score >= 0.5 && score < 0.8;
+  if (f === 'mismatch')  return score != null && score >= 0 && score < 0.5;
+  if (f === 'unknown')   return score != null && score < 0;
   return true;
 }
 
@@ -301,8 +482,8 @@ function groupWorstAid(tracks) {
 
 function verifyLib(scope, params, btn) {
   if (aidRunning) return;
-  if (btn) { btn._orig = btn.textContent; btn.disabled=true; btn.textContent='…'; }
-  const restore = () => { if(btn){ btn.disabled=false; btn.textContent = btn._orig || '↻'; } };
+  if (btn) { btn._orig = btn.innerHTML; btn.disabled=true; btn.textContent='…'; }
+  const restore = () => { if(btn){ btn.disabled=false; btn.innerHTML = btn._orig || '↻'; } };
   if (scope === 'track' && params.id != null) {
     _verifyingTrackId = params.id;
     _verifyingBtn     = btn || null;
@@ -324,11 +505,19 @@ function verifyLib(scope, params, btn) {
   }).catch(restore);
 }
 
+// Verify exactly what's on screen (search and filters applied), not the whole
+// library: "Verify all in view" on a filtered Songs list used to fingerprint
+// every file — hours on a big library, blocking every single-track ID.
+let _viewTracks = [];   // filtered list behind the current view
+let _pageTracks = [];   // every track of the current artist/album page
+function verifyTracks(list, btn) {
+  const ids = list.filter(t => t.id != null).map(t => t.id);
+  if (!ids.length) { showToast('Nothing here to verify'); return; }
+  verifyLib('ids', {ids}, btn);
+}
 function verifyCurrentView() {
-  if (view==='album-tracks')     verifyLib('album',   {artist:ctx.artist, album:ctx.album});
-  else if (view==='artist-albums') verifyLib('artist', {artist:ctx.artist});
-  else if (view==='playlist-tracks') verifyLib('playlist',{job_id:ctx.jobId});
-  else verifyLib('all', {});
+  if (view==='playlist-tracks') verifyLib('playlist',{job_id:ctx.jobId});
+  else verifyTracks(_viewTracks);
 }
 
 function showProgress(done, total) {
@@ -357,13 +546,7 @@ function pollAid() {
       // _modalTrack is the same object as its ALL_TRACKS entry, so it just got
       // the new values; repaint whatever the modal is showing.
       if (_modalTrack && _modalTrack.id != null) {
-        const badges = document.getElementById('tm-badges');
-        if (badges) {
-          const newB = aidBadgeHtml(_modalTrack.acoustid_score);
-          const old  = badges.querySelector('.aid-badge');
-          if (old) { if (newB) old.outerHTML = newB; else old.remove(); }
-          else if (newB) badges.insertAdjacentHTML('afterbegin', newB);
-        }
+        renderModalBadges(_modalTrack);
         renderAidVerdict(_modalTrack);
         renderModalMeta(_modalTrack, _modalDiskInfo);
       }
@@ -388,7 +571,7 @@ function pollAid() {
           }
         }
 
-        if (vBtn) { vBtn.disabled = false; vBtn.textContent = vBtn._orig || '↻ ID'; }
+        if (vBtn) { vBtn.disabled = false; vBtn.innerHTML = vBtn._orig || 'ID'; }
       } else {
         render();
       }
@@ -407,29 +590,54 @@ function coverHtml(t, size=38) {
             <div class="lib-cover-ph" style="width:${size}px;height:${size}px;display:none">${window.icon('music', Math.round(size*0.45))}</div>`;
   return `<div class="lib-cover-ph" style="width:${size}px;height:${size}px">${window.icon('music', Math.round(size*0.45))}</div>`;
 }
-function extClass(e){ return ['FLAC','ALAC','WAV','AIFF','AIF'].includes((e||'').toUpperCase()) ? 'lib-ext lossless' : 'lib-ext'; }
+function extClass(e){ return LOSSLESS_EXTS.has((e||'').toUpperCase()) ? 'lib-ext lossless' : 'lib-ext'; }
+// Placeholder underneath, image on top: a cover that 404s removes itself and
+// the placeholder shows through.
+function artHtml(url, iconName, size) {
+  return `<div class="album-ph">${window.icon(iconName, size)}</div>`
+       + (url ? `<img class="art-img" src="${esc(url)}" alt="" loading="lazy" onerror="this.remove()">` : '');
+}
+function artistKey(t) { return t.artist || '(Unknown)'; }
 
 // ── Track row ─────────────────────────────────────────────────────────────
-function trackRowHtml(t, showArtist=true) {
+// Tapping the row opens the song sheet; ID stays on the row too, since
+// fingerprinting a whole album one song at a time is a common errand.
+function trackRowHtml(t, opts={}) {
+  const showArtist = opts.showArtist !== false;
   const sub = showArtist ? `${esc(t.artist)}${t.album?' · '+esc(t.album):''}` : esc(t.album||'');
+  const no = opts.trackNo ? trackNo(t) : null;
   const verifyBtn = t.id!=null
-    ? `<button class="lib-sm-btn" style="font-size:.75rem;padding:.25rem .5rem" title="Verify"
-         onclick="event.stopPropagation();verifyLib('track',{id:${t.id}},this)">↻ ID</button>` : '';
-  return `<div class="lib-row${t.user_rating===1?' flagged':''}${t.flagged_bad?' bad':''}" data-path="${esc(t.path)}"${t.id!=null?` data-tid="${t.id}"`:''} onclick="showTrackInfo(this)" style="cursor:pointer">
-    ${coverHtml(t)}
+    ? `<button class="lib-sm-btn lib-id-btn" title="Identify with AcoustID"
+         onclick="event.stopPropagation();verifyLib('track',{id:${t.id}},this)">ID</button>` : '';
+  return `<div class="lib-row${t.user_rating===1?' flagged':''}${t.flagged_bad?' bad':''}" data-path="${esc(t.path)}"${t.id!=null?` data-tid="${t.id}"`:''} onclick="showTrackInfo(this)">
+    ${opts.trackNo ? `<span class="lib-trackno">${no ?? ''}</span>` : coverHtml(t)}
     <div class="lib-row-info">
       <div class="lib-row-title">${esc(t.title||'—')}</div>
-      <div class="lib-row-sub">${sub}</div>
+      <div class="lib-row-sub">${opts.trackNo && showArtist === false ? esc(t.artist) : sub}</div>
     </div>
     <div class="lib-row-right">
       ${t.flagged_bad?'<span class="bad-mark" title="Flagged as bad">⚑</span>':''}
       ${aidBadgeHtml(t.acoustid_score)}
       <span class="${extClass(t.ext)}">${esc(t.ext||'?')}</span>
       ${verifyBtn}
-      <button class="lib-sm-btn" style="font-size:.75rem;padding:.25rem .5rem" title="Wrong file?"
-        onclick="event.stopPropagation();showTrackInfo(this.closest('.lib-row'))">↺</button>
     </div>
   </div>`;
+}
+
+function trackListHtml(list, opts) {
+  const visible = list.slice(0, songsPage * PAGE_SIZE);
+  const remaining = list.length - visible.length;
+  const more = remaining > 0
+    ? `<div style="text-align:center;padding:.75rem 0">
+         <button class="lib-sm-btn" style="padding:.35rem .9rem;font-size:.75rem"
+           onclick="songsPage++;render()">Show ${Math.min(remaining,PAGE_SIZE)} more of ${remaining}</button>
+       </div>` : '';
+  return visible.map(t => trackRowHtml(t, opts)).join('') + more;
+}
+
+function passesAll(t) {
+  return aidPassesFilter(t.acoustid_score) && ratingPassesFilter(t.user_rating)
+      && fmtPassesFilter(t.ext) && badPassesFilter(t);
 }
 
 // ── Home / collection menu ────────────────────────────────────────────────
@@ -440,6 +648,7 @@ function renderHome() {
   if (q) { view='songs'; renderSongs(); return; }
   const artistCount = new Set(ALL_TRACKS.map(t=>t.artist)).size;
   const albumCount  = new Set(ALL_TRACKS.map(t=>t.artist+'\x00'+t.album)).size;
+  const wrong = ALL_TRACKS.filter(t => t.acoustid_score != null && t.acoustid_score >= 0 && t.acoustid_score < 0.5).length;
   // Monochrome icons on a neutral chip: the previous emoji-on-brand-colour
   // squares introduced four accent colours the design system doesn't have.
   const icons = [
@@ -461,6 +670,13 @@ function renderHome() {
           <div class="rc-sub">${esc(t.artist || '')}</div>
         </div>`).join('') + `</div>`
     : '';
+  const wrongHtml = wrong
+    ? `<div class="coll-row" onclick="filters.aid='mismatch';syncChips();navTo('songs')">
+        <div class="coll-icon" style="color:var(--err)">✗</div>
+        <span class="coll-label">Possibly wrong songs</span>
+        <span class="coll-count">${wrong}</span>
+        <span class="coll-chevron">›</span>
+      </div>` : '';
   document.getElementById('lib-content').innerHTML =
     `<div class="coll-section-title">Collection</div>` +
     icons.map(i => `
@@ -469,64 +685,77 @@ function renderHome() {
         <span class="coll-label">${i.label}</span>
         <span class="coll-count">${i.count}</span>
         <span class="coll-chevron">›</span>
-      </div>`).join('') + recentHtml;
+      </div>`).join('') + wrongHtml + recentHtml;
+}
+
+// ── Grouping helpers ──────────────────────────────────────────────────────
+function groupByArtist() {
+  const map = {};
+  ALL_TRACKS.forEach(t => {
+    const a = artistKey(t);
+    (map[a] = map[a] || []).push(t);
+  });
+  return map;
+}
+function newestAdded(tracks) {
+  return tracks.reduce((m, t) => (t.indexed_at || '') > m ? t.indexed_at : m, '');
+}
+function firstCover(tracks) {
+  const t = tracks.find(x => x.cover_url);
+  return t ? t.cover_url : '';
 }
 
 // ── Artists list ──────────────────────────────────────────────────────────
 function renderArtists() {
   setNav(true, 'Library', 'Artists');
-  document.getElementById('verify-row').style.display = 'none';
+  showSort('artists');
   const q = searchVal();
-  // Group tracks by artist
-  const map = {};
-  ALL_TRACKS.forEach(t => {
-    const a = t.artist || '(Unknown)';
-    if (!map[a]) map[a] = [];
-    map[a].push(t);
-  });
-  let artists = Object.keys(map).sort((a,b) => a.localeCompare(b));
+  const map = groupByArtist();
+  let artists = Object.keys(map);
   if (q) artists = artists.filter(a =>
-    a.toLowerCase().includes(q) || map[a].some(t => (t.album+' '+t.title).toLowerCase().includes(q)));
+    matchQ(fold(a), q) || map[a].some(t => matchQ(hay(t), q)));
+  const key = sortFor('artists');
+  if (key === 'tracks') artists.sort((a, b) => map[b].length - map[a].length || cmp(a, b));
+  else if (key === 'added') artists.sort((a, b) => newestAdded(map[b]).localeCompare(newestAdded(map[a])) || cmp(a, b));
+  else artists.sort(cmp);
 
   if (!artists.length) {
     document.getElementById('lib-content').innerHTML = '<div class="empty-lib">No artists match.</div>';
     return;
   }
 
-  // Group by first letter
+  const rowHtml = a => {
+    const tracks = map[a];
+    const albums = new Set(tracks.map(t=>t.album).filter(Boolean)).size;
+    const sub = `${albums} album${albums===1?'':'s'} · ${tracks.length} song${tracks.length===1?'':'s'}`;
+    const cover = firstCover(tracks);
+    return `<div class="artist-row" data-artist="${esc(a)}">
+      <div class="artist-avatar" style="overflow:hidden">${cover ? `<img src="${esc(cover)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover" onerror="this.remove()">` : window.icon('mic', 20)}</div>
+      <div class="artist-info" style="flex:1;min-width:0">
+        <div class="artist-name">${esc(a)}</div>
+        <div class="artist-sub">${sub}</div>
+      </div>
+      ${groupAidBadge(tracks)}
+      <span class="coll-chevron" style="margin-left:.2rem">›</span>
+    </div>`;
+  };
+
+  // The A–Z index only means something in name order.
+  if (key !== 'name') {
+    document.getElementById('lib-content').innerHTML = `<div class="az-list">${artists.map(rowHtml).join('')}</div>`;
+    return;
+  }
   const sections = {};
   artists.forEach(a => {
-    const ch = a[0].toUpperCase();
-    const key = /[A-Z]/.test(ch) ? ch : '#';
-    if (!sections[key]) sections[key] = [];
-    sections[key].push(a);
+    const ch = a[0].normalize('NFKD')[0].toUpperCase();
+    const k = /[A-Z]/.test(ch) ? ch : '#';
+    (sections[k] = sections[k] || []).push(a);
   });
   const letters = Object.keys(sections).sort((a,b) => a==='#' ? 1 : b==='#' ? -1 : a.localeCompare(b));
-
-  const listHtml = letters.map(letter => {
-    const rows = sections[letter].map(a => {
-      const tracks = map[a];
-      const albums = [...new Set(tracks.map(t=>t.album).filter(Boolean))];
-      const sub = `${albums.length} album${albums.length===1?'':'s'} · ${tracks.length} track${tracks.length===1?'':'s'}`;
-      const aJ  = esc(JSON.stringify(a));
-      return `<div class="artist-row" onclick="navTo('artist-albums',{artist:${aJ}})">
-        <div class="artist-avatar">${window.icon('mic', 22)}</div>
-        <div class="artist-info">
-          <div class="artist-name">${esc(a)}</div>
-          <div class="artist-sub">${sub}</div>
-        </div>
-        ${aidBadgeHtml(groupWorstAid(tracks))}
-        <button class="lib-sm-btn" style="margin-left:.35rem;flex-shrink:0"
-          onclick="event.stopPropagation();verifyLib('artist',{artist:${aJ}},this)">↻</button>
-        <span class="coll-chevron" style="margin-left:.2rem">›</span>
-      </div>`;
-    }).join('');
-    return `<div id="az-sec-${letter}" class="az-section-hdr">${letter}</div>${rows}`;
-  }).join('');
-
+  const listHtml = letters.map(letter =>
+    `<div id="az-sec-${letter}" class="az-section-hdr">${letter}</div>${sections[letter].map(rowHtml).join('')}`).join('');
   const sidebarHtml = letters.map(l =>
     `<span class="az-letter" onclick="jumpTo('az-sec-${l}')">${l}</span>`).join('');
-
   document.getElementById('lib-content').innerHTML =
     `<div class="az-wrap">
        <div class="az-list">${listHtml}</div>
@@ -534,128 +763,143 @@ function renderArtists() {
      </div>`;
 }
 
-// ── Artist → albums ───────────────────────────────────────────────────────
+// ── Artist page ───────────────────────────────────────────────────────────
 function renderArtistAlbums() {
-  setNav(true, 'Artists', ctx.artist);
-  showVerifyRow();
-  const tracks = ALL_TRACKS.filter(t => t.artist === ctx.artist);
+  setNav(true, navBackLabel('Artists'), '');
+  showSort('artist-albums');
+  showFilters();
+  const all = ALL_TRACKS.filter(t => artistKey(t) === ctx.artist);
   const map = {};
-  tracks.forEach(t => {
+  all.forEach(t => {
     const al = t.album || '(Unknown)';
-    if (!map[al]) map[al] = {cover_url:t.cover_url, tracks:[]};
-    map[al].tracks.push(t);
+    (map[al] = map[al] || []).push(t);
   });
-  const aJ = esc(JSON.stringify(ctx.artist));
-  const html = Object.keys(map).sort().map(al => {
-    const {cover_url, tracks:at} = map[al];
-    const alJ = esc(JSON.stringify(al));
-    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">${window.icon('disc', 26)}</div></div>`;
-    return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:ctx.artist,album:${alJ}})">
-      ${cover}
-      <div class="album-card-title">${esc(al)}</div>
-      <div class="album-card-sub">${at.length} track${at.length===1?'':'s'}</div>
-      <div class="album-card-actions">
-        ${aidBadgeHtml(groupWorstAid(at))}
-        <button class="lib-sm-btn" style="margin-left:auto;font-size:.75rem;padding:.25rem .5rem"
-          onclick="event.stopPropagation();verifyLib('album',{artist:${aJ},album:${alJ}},this)">↻</button>
+  const albums = Object.keys(map).sort(cmp);
+  const lossless = all.filter(t => LOSSLESS_EXTS.has(t.ext)).length;
+  const cover = firstCover(all);
+
+  document.getElementById('lib-hero').innerHTML = `
+    <div class="lib-hero">
+      <div class="lib-hero-art round">${artHtml(cover, 'mic', 36)}</div>
+      <div class="lib-hero-info">
+        <div class="lib-hero-kicker">Artist</div>
+        <h1 class="lib-hero-title">${esc(ctx.artist)}</h1>
+        <div class="lib-hero-sub">${albums.length} album${albums.length===1?'':'s'} · ${all.length} song${all.length===1?'':'s'}${all.length ? ` · ${lossless} lossless` : ''}</div>
+        <div class="lib-hero-aid">${aidSummary(all)}</div>
       </div>
+    </div>
+    <div class="lib-hero-actions">
+      <button class="lib-sm-btn" onclick="verifyTracks(_pageTracks, this)">🎧 Verify all ${all.length}</button>
+      <a class="lib-sm-btn" href="/search?type=artist&q=${encodeURIComponent(ctx.artist)}">Discography &amp; top songs ›</a>
+    </div>`;
+
+  const shelf = albums.map(al => {
+    const at = map[al];
+    return `<div class="shelf-card" data-album="${esc(al)}">
+      <div class="album-cover-wrap">${artHtml(firstCover(at), 'disc', 26)}</div>
+      <div class="shelf-title">${esc(al)}</div>
+      <div class="shelf-sub">${at.length} song${at.length===1?'':'s'} ${groupAidBadge(at)}</div>
     </div>`;
   }).join('');
-  document.getElementById('lib-content').innerHTML = `<div class="album-grid-lib">${html}</div>`;
+
+  const q = searchVal();
+  const songs = sortTracks(all.filter(t => passesAll(t) &&
+    matchQ(hay(t), q)), sortFor('artist-albums'));
+  _pageTracks = all; _viewTracks = songs;
+  document.getElementById('lib-content').innerHTML =
+    `<div class="lib-section">Albums</div><div class="shelf">${shelf}</div>
+     <div class="lib-section">Songs · ${songs.length}</div>` +
+    (songs.length ? trackListHtml(songs, {showArtist:false}) : '<div class="empty-lib">No songs match.</div>');
 }
 
 // ── Albums list ───────────────────────────────────────────────────────────
 function renderAlbums() {
   setNav(true, 'Library', 'Albums');
-  document.getElementById('verify-row').style.display = 'none';
+  showSort('albums');
   const q = searchVal();
   const map = {};
   ALL_TRACKS.forEach(t => {
-    const key = JSON.stringify([t.artist||'', t.album||'(Unknown)']);
-    if (!map[key]) map[key] = {artist:t.artist||'', album:t.album||'(Unknown)', cover_url:t.cover_url, tracks:[]};
+    const key = artistKey(t) + '\x00' + (t.album||'(Unknown)');
+    if (!map[key]) map[key] = {artist:artistKey(t), album:t.album||'(Unknown)', tracks:[]};
     map[key].tracks.push(t);
   });
-  let keys = Object.keys(map).sort((a,b)=>{
-    const [,al]=JSON.parse(a),[,bl]=JSON.parse(b); return al.localeCompare(bl);
-  });
-  if (q) keys = keys.filter(k=>{
-    const {artist,album,tracks}=map[k];
-    return (artist+' '+album).toLowerCase().includes(q)||tracks.some(t=>t.title.toLowerCase().includes(q));
-  });
-  if (!keys.length) { document.getElementById('lib-content').innerHTML='<div class="empty-lib">No albums match.</div>'; return; }
-  const html = keys.map(k => {
-    const {artist,album,cover_url,tracks} = map[k];
-    const aJ=esc(JSON.stringify(artist)), alJ=esc(JSON.stringify(album));
-    const cover = `<div class="album-cover-wrap">${cover_url ? `<img src="${esc(cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}<div class="album-ph">${window.icon('disc', 26)}</div></div>`;
-    return `<div class="album-card-lib" onclick="navTo('album-tracks',{artist:${aJ},album:${alJ}})">
-      ${cover}
-      <div class="album-card-title">${esc(album)}</div>
-      <div class="album-card-sub">${esc(artist)}</div>
-      <div class="album-card-actions">
-        ${aidBadgeHtml(groupWorstAid(tracks))}
-        <button class="lib-sm-btn" style="margin-left:auto;font-size:.75rem;padding:.25rem .5rem"
-          onclick="event.stopPropagation();verifyLib('album',{artist:${aJ},album:${alJ}},this)">↻</button>
-      </div>
-    </div>`;
-  }).join('');
-  document.getElementById('lib-content').innerHTML = `<div class="album-grid-lib">${html}</div>`;
+  let groups = Object.values(map);
+  if (q) groups = groups.filter(g =>
+    g.tracks.some(t => matchQ(hay(t), q)));
+  const key = sortFor('albums');
+  groups.sort({
+    album:  (a, b) => cmp(a.album, b.album) || cmp(a.artist, b.artist),
+    artist: (a, b) => cmp(a.artist, b.artist) || cmp(a.album, b.album),
+    added:  (a, b) => newestAdded(b.tracks).localeCompare(newestAdded(a.tracks)) || cmp(a.album, b.album),
+    tracks: (a, b) => b.tracks.length - a.tracks.length || cmp(a.album, b.album),
+  }[key] || ((a, b) => cmp(a.album, b.album)));
+  if (!groups.length) { document.getElementById('lib-content').innerHTML='<div class="empty-lib">No albums match.</div>'; return; }
+  const total = groups.length;
+  groups = groups.slice(0, songsPage * PAGE_SIZE);
+  const html = groups.map(g => `
+    <div class="album-card-lib" data-artist="${esc(g.artist)}" data-album="${esc(g.album)}">
+      <div class="album-cover-wrap">${artHtml(firstCover(g.tracks), 'disc', 26)}</div>
+      <div class="album-card-title">${esc(g.album)}</div>
+      <div class="album-card-sub"><span style="overflow:hidden;text-overflow:ellipsis">${esc(g.artist)}</span>${groupAidBadge(g.tracks)}</div>
+    </div>`).join('');
+  const more = total > groups.length
+    ? `<div style="text-align:center;padding:.75rem 0"><button class="lib-sm-btn" style="padding:.35rem .9rem;font-size:.75rem"
+         onclick="songsPage++;render()">Show more (${total - groups.length} left)</button></div>` : '';
+  document.getElementById('lib-content').innerHTML = `<div class="album-grid-lib">${html}</div>${more}`;
 }
 
-// ── Album → tracks ────────────────────────────────────────────────────────
+// ── Album page ────────────────────────────────────────────────────────────
 function renderAlbumTracks() {
-  const backLabel = view === 'album-tracks' && ctx._from === 'albums' ? 'Albums' : ctx.artist;
-  setNav(true, backLabel, ctx.album);
-  showVerifyRow();
-  let tracks = ALL_TRACKS
-    .filter(t => t.artist===ctx.artist && t.album===ctx.album)
-    .filter(t => aidPassesFilter(t.acoustid_score))
-    .filter(t => ratingPassesFilter(t.user_rating))
-    .filter(t => fmtPassesFilter(t.ext))
-    .filter(t => badPassesFilter(t));
+  setNav(true, navBackLabel(ctx._from === 'albums' ? 'Albums' : ctx.artist), '');
+  showSort('album-tracks');
+  showFilters();
+  const all = ALL_TRACKS.filter(t => artistKey(t)===ctx.artist && (t.album || '(Unknown)')===ctx.album);
+  const lossless = all.filter(t => LOSSLESS_EXTS.has(t.ext)).length;
+  const exts = [...new Set(all.map(t => t.ext).filter(Boolean))].join(' / ');
+  document.getElementById('lib-hero').innerHTML = `
+    <div class="lib-hero">
+      <div class="lib-hero-art">${artHtml(firstCover(all), 'disc', 36)}</div>
+      <div class="lib-hero-info">
+        <div class="lib-hero-kicker">Album</div>
+        <h1 class="lib-hero-title">${esc(ctx.album)}</h1>
+        <div class="lib-hero-sub"><button class="tm-link" data-goartist="${esc(ctx.artist)}">${esc(ctx.artist)}</button>
+          · ${all.length} song${all.length===1?'':'s'}${exts ? ' · ' + esc(exts) : ''}</div>
+        <div class="lib-hero-aid">${aidSummary(all)}</div>
+      </div>
+    </div>
+    <div class="lib-hero-actions">
+      <button class="lib-sm-btn" onclick="verifyTracks(_pageTracks, this)">🎧 Verify album</button>
+      <a class="lib-sm-btn" href="/search?type=album&q=${encodeURIComponent(((ctx.artist||'') + ' ' + (ctx.album||'')).trim())}">Full tracklist &amp; missing songs ›</a>
+    </div>`;
+  const key = sortFor('album-tracks');
+  const q = searchVal();
+  const tracks = sortTracks(all.filter(t => passesAll(t) && matchQ(hay(t), q)), key);
+  _pageTracks = all; _viewTracks = tracks;
   document.getElementById('lib-content').innerHTML = tracks.length
-    ? tracks.map(t=>trackRowHtml(t,false)).join('')
-    : '<div class="empty-lib">No tracks match filter.</div>';
+    ? tracks.map(t => trackRowHtml(t, {showArtist:false, trackNo: key === 'track'})).join('')
+    : '<div class="empty-lib">No tracks match the filter.</div>';
 }
-
-// ── Sort comparator ───────────────────────────────────────────────────────
-function sortComparator(a, b) {
-  if (sortBy === 'title') return (a.title||'').localeCompare(b.title||'');
-  if (sortBy === 'album') return (a.album||'').localeCompare(b.album||'') || (a.title||'').localeCompare(b.title||'');
-  if (sortBy === 'added') return (b.indexed_at||'').localeCompare(a.indexed_at||'');
-  return (a.artist||'').localeCompare(b.artist||'') || (a.album||'').localeCompare(b.album||'') || (a.title||'').localeCompare(b.title||'');
-}
-function setSortBy(val) { sortBy = val; songsPage = 1; render(); }
 
 // ── Songs list ────────────────────────────────────────────────────────────
 function renderSongs() {
   setNav(true, 'Library', 'Songs');
-  showVerifyRow();
-  document.getElementById('lib-sort').style.display = '';
-  document.getElementById('lib-sort').value = sortBy;
+  showSort('songs');
+  showFilters();
   const q = searchVal();
   const filtered = ALL_TRACKS.filter(t => {
-    if (q && !((t.artist+' '+t.album+' '+t.title).toLowerCase().includes(q))) return false;
-    return aidPassesFilter(t.acoustid_score) && ratingPassesFilter(t.user_rating) && fmtPassesFilter(t.ext) && badPassesFilter(t);
+    if (!matchQ(hay(t), q)) return false;
+    return passesAll(t);
   });
-  const sorted  = [...filtered].sort(sortComparator);
-  const visible  = sorted.slice(0, songsPage * PAGE_SIZE);
-  const remaining = sorted.length - visible.length;
-  const moreBtn  = remaining > 0
-    ? `<div style="text-align:center;padding:.75rem 0">
-         <button class="lib-sm-btn" style="padding:.3rem .9rem;font-size:.75rem"
-           onclick="songsPage++;renderSongs()">Load ${Math.min(remaining,PAGE_SIZE)} more of ${remaining}</button>
-       </div>`
-    : '';
+  const sorted = sortTracks(filtered, sortFor('songs'));
+  _viewTracks = sorted;
   document.getElementById('lib-content').innerHTML = sorted.length
-    ? `<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.35rem">${sorted.length} song${sorted.length===1?'':'s'}</div>`
-      + visible.map(t=>trackRowHtml(t)).join('') + moreBtn
+    ? `<div class="lib-count">${sorted.length} song${sorted.length===1?'':'s'}</div>` + trackListHtml(sorted)
     : '<div class="empty-lib">No songs match.</div>';
 }
 
 // ── Playlists list ────────────────────────────────────────────────────────
 function renderPlaylists() {
   setNav(true, 'Library', 'Playlists');
-  document.getElementById('verify-row').style.display = 'none';
   if (!ALL_PLAYLISTS.length) {
     document.getElementById('lib-content').innerHTML='<div class="empty-lib">No playlists imported yet.</div>';
     return;
@@ -666,7 +910,7 @@ function renderPlaylists() {
   // failed WCAG AA contrast. Now one neutral chip with a monochrome icon; the
   // source name is already shown in the text beside it.
   const srcIcon = {spotify:'disc',apple:'disc',tidal:'disc',deezer:'disc',search:'search'};
-  const rows = ALL_PLAYLISTS.filter(p => !q||(p.playlist_name||p.source_url||'').toLowerCase().includes(q)).map(p => {
+  const rows = ALL_PLAYLISTS.filter(p => matchQ(fold(p.playlist_name||p.source_url), q)).map(p => {
     const name = p.playlist_name || p.source_url || `Import #${p.id}`;
     const nJ   = esc(JSON.stringify(name));
     const src  = p.source || 'search';
@@ -680,7 +924,7 @@ function renderPlaylists() {
         <div class="playlist-sub">${esc(src)} · ${prog}</div>
       </div>
       <button class="lib-sm-btn" style="flex-shrink:0"
-        onclick="event.stopPropagation();verifyLib('playlist',{job_id:${p.id}},this)">↻ Verify</button>
+        onclick="event.stopPropagation();verifyLib('playlist',{job_id:${p.id}},this)">🎧 Verify</button>
       <span class="coll-chevron" style="margin-left:.35rem">›</span>
     </div>`;
   }).join('');
@@ -690,13 +934,35 @@ function renderPlaylists() {
 // ── Playlist → tracks ─────────────────────────────────────────────────────
 function renderPlaylistTracks() {
   setNav(true, 'Playlists', ctx.name);
-  showVerifyRow();
+  showSort('playlist-tracks');
+  showFilters();
+  const paint = () => {
+    if (!_plTracks.length) {
+      document.getElementById('lib-content').innerHTML =
+        '<div class="empty-lib">No downloaded tracks yet — check Queue for progress.</div>';
+      return;
+    }
+    const q = searchVal();
+    const f = sortTracks(_plTracks.filter(t => passesAll(t) &&
+      matchQ(hay(t), q)), sortFor('playlist-tracks'));
+    document.getElementById('lib-content').innerHTML = f.length
+      ? `<div class="lib-count">${_plTracks.length} track${_plTracks.length===1?'':'s'}</div>` + trackListHtml(f)
+      : `<div class="empty-lib">${_plTracks.length} track${_plTracks.length===1?'':'s'} downloaded but none match the current filter.</div>`;
+  };
+  // Re-sorting or filtering shouldn't refetch the playlist.
+  if (_plTracks._jobId === ctx.jobId) { paint(); return; }
   document.getElementById('lib-content').innerHTML = '<div class="empty-lib">Loading…</div>';
-  fetch(`/api/library/playlist/${ctx.jobId}`)
+  const jobId = ctx.jobId;
+  fetch(`/api/library/playlist/${jobId}`)
     .then(r=>r.json()).then(raw => {
+      if (view !== 'playlist-tracks' || ctx.jobId !== jobId) return;
       // Normalise to library-track shape so the detail modal and filters work.
       _plTracks = raw.map(t => {
         const lp = t.local_path || '';
+        // Prefer the library's own object for this file, so ID results and
+        // renames made from here show up everywhere.
+        const lib = lp && ALL_TRACKS.find(x => x.path === lp);
+        if (lib) return lib;
         return {
           id: null,                                  // not a library_index id
           artist: t.artist||'', album: t.album||'', title: t.title||'',
@@ -708,25 +974,17 @@ function renderPlaylistTracks() {
           flagged_bad: !!t.flagged_bad,
         };
       });
-      if (!_plTracks.length) {
-        document.getElementById('lib-content').innerHTML =
-          '<div class="empty-lib">No downloaded tracks yet — check Queue for progress.</div>';
-        return;
-      }
-      const f = _plTracks.filter(t =>
-        aidPassesFilter(t.acoustid_score) && ratingPassesFilter(t.user_rating) &&
-        fmtPassesFilter(t.ext) && badPassesFilter(t));
-      document.getElementById('lib-content').innerHTML = f.length
-        ? `<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.35rem">${_plTracks.length} track${_plTracks.length===1?'':'s'}</div>`
-          + f.map(t=>trackRowHtml(t)).join('')
-        : `<div class="empty-lib">${_plTracks.length} track${_plTracks.length===1?'':'s'} downloaded but none match the current filter.</div>`;
+      _plTracks._jobId = jobId;
+      paint();
     }).catch(()=>{ document.getElementById('lib-content').innerHTML='<div class="empty-lib">Failed to load.</div>'; });
 }
 
 // ── Navigation ────────────────────────────────────────────────────────────
+// Each drill-down is a browser history entry, so the phone's back gesture
+// steps back through Library instead of leaving it.
 
-// Stack so we can go back through multi-level drill
 const navStack = [];
+let baseDepth = 0;   // navStack depth restored from sessionStorage on load
 
 function saveNav() {
   try {
@@ -735,40 +993,68 @@ function saveNav() {
 }
 
 function navTo(newView, newCtx={}) {
-  navStack.push({view, ctx: Object.assign({},ctx)});
+  const box = document.getElementById('lib-search');
+  navStack.push({view, ctx: Object.assign({},ctx), q: box.value});
   view = newView;
   ctx  = Object.assign({}, newCtx);
+  // A search narrows a list; it shouldn't follow you into the artist or album
+  // you picked from it. Back restores it.
+  if (newView !== 'songs') box.value = '';
+  songsPage = 1;
+  saveNav();
+  try { history.pushState({libDepth: navStack.length}, ''); } catch(e) {}
+  render();
+  document.querySelector('.content-col')?.scrollTo(0, 0);
+  window.scrollTo(0, 0);
+}
+
+function popTo(depth) {
+  let q = '';
+  while (navStack.length > depth) {
+    const prev = navStack.pop();
+    view = prev.view;
+    ctx  = prev.ctx;
+    q    = prev.q || '';
+  }
+  // Home with text in the box redirects to Songs, so Back would bounce.
+  document.getElementById('lib-search').value = view === 'home' ? '' : q;
+  songsPage = 1;
   saveNav();
   render();
 }
 
 function goBack() {
-  if (navStack.length) {
-    const prev = navStack.pop();
-    view = prev.view;
-    ctx  = prev.ctx;
-  } else {
-    view = 'home'; ctx = {};
-    navStack.length = 0;
-  }
-  saveNav();
-  render();
+  if (navStack.length > baseDepth) { history.back(); return; }   // popstate does the rest
+  if (navStack.length) popTo(navStack.length - 1);
+  else { view = 'home'; ctx = {}; document.getElementById('lib-search').value = ''; saveNav(); render(); }
+  baseDepth = navStack.length;
+  try { history.replaceState({libDepth: navStack.length}, ''); } catch(e) {}
+}
+
+let _afterSheet = null;   // [view, ctx] to open once the sheet's entry is popped
+window.addEventListener('popstate', e => {
+  const st = e.state || {};
+  if (_modalTrack && !st.sheet) hideSheet();
+  const d = st.libDepth != null ? st.libDepth : baseDepth;
+  if (d < navStack.length) popTo(d);
+  if (_afterSheet) { const go = _afterSheet; _afterSheet = null; navTo(...go); }
+});
+
+function navBackLabel(fallback) {
+  const prev = navStack[navStack.length - 1];
+  const names = {home:'Library', artists:'Artists', albums:'Albums', songs:'Songs', playlists:'Playlists',
+                 'artist-albums': prev && prev.ctx.artist, 'album-tracks': prev && prev.ctx.album,
+                 'playlist-tracks': prev && prev.ctx.name};
+  return (prev && names[prev.view]) || fallback || 'Back';
 }
 
 function setNav(showBack, backLabel, title) {
-  const row  = document.getElementById('back-row');
-  const lbl  = document.getElementById('back-label');
-  const ttl  = document.getElementById('view-title');
-  row.style.display = showBack ? 'flex' : 'none';
-  if (showBack) { lbl.textContent = backLabel||'Back'; ttl.textContent = title||''; }
-}
-
-function showVerifyRow() {
-  document.getElementById('verify-row').style.display = 'flex';
-  document.getElementById('aid-filter-row').style.display = 'flex';
-  document.getElementById('rating-filter-row').style.display = 'flex';
-  document.getElementById('fmt-filter-row').style.display = 'flex';
-  document.getElementById('bad-filter-row').style.display = 'flex';
+  document.getElementById('back-row').style.display = showBack ? 'flex' : 'none';
+  if (showBack) document.getElementById('back-label').textContent = backLabel || 'Back';
+  // Artist/album pages carry their own header; the others show the view name.
+  const ttl = document.getElementById('view-title');
+  ttl.textContent = showBack ? (title || '') : 'Library';
+  ttl.style.display = (showBack && !title) ? 'none' : '';
 }
 
 function jumpTo(id) {
@@ -776,68 +1062,118 @@ function jumpTo(id) {
   if (el) el.scrollIntoView({behavior:'smooth',block:'start'});
 }
 
+// Delegated clicks for rows that carry names in data-* (names have quotes).
+document.getElementById('lib-content').addEventListener('click', e => {
+  const ar = e.target.closest('.artist-row[data-artist]');
+  if (ar) { navTo('artist-albums', {artist: ar.dataset.artist}); return; }
+  const sc = e.target.closest('.shelf-card[data-album]');
+  if (sc) { navTo('album-tracks', {artist: ctx.artist, album: sc.dataset.album}); return; }
+  const ac = e.target.closest('.album-card-lib[data-album]');
+  if (ac) { navTo('album-tracks', {artist: ac.dataset.artist, album: ac.dataset.album, _from: 'albums'}); return; }
+});
+document.getElementById('lib-hero').addEventListener('click', e => {
+  const a = e.target.closest('[data-goartist]');
+  if (a) navTo('artist-albums', {artist: a.dataset.goartist || '(Unknown)'});
+});
+
 // ── Filters ───────────────────────────────────────────────────────────────
-function searchVal() { return (document.getElementById('lib-search').value||'').toLowerCase().trim(); }
+const LOSSLESS_EXTS = new Set(['FLAC','ALAC','WAV','AIFF','AIF']);
+const FILTER_LABELS = {
+  aid:    {matched:'✓ ID ≥80%', uncertain:'~ ID 50–79%', mismatch:'✗ ID <50%', unknown:'ID ? Not in AcoustID', unchecked:'Not checked'},
+  fmt:    {lossless:'Lossless', lossy:'Lossy'},
+  bad:    {bad:'⚑ Flagged bad', good:'Hiding bad'},
+  rating: {flagged:'1★ in Navidrome', unflagged:'Not 1★'},
+};
+
+function searchVal() { return fold(document.getElementById('lib-search').value).trim(); }
+
+// Every word has to appear somewhere in artist/album/title, in any order —
+// "radiohead creep" used to find nothing because the album sits between them.
+function fold(s) { return (s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
+function hay(t) {
+  if (t._hay == null) t._hay = fold(`${t.artist} ${t.album} ${t.title}`);
+  return t._hay;
+}
+function matchQ(h, q) {   // h already folded
+  return !q || q.split(/\s+/).every(w => h.includes(w));
+}
+
+// Re-filtering thousands of rows on every keystroke made typing stutter.
+let _searchTimer = null;
+document.getElementById('lib-search').addEventListener('input', () => {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(applyFilters, 180);
+});
 function applyFilters() {
   songsPage = 1;
   if (view==='home' && searchVal()) navTo('songs'); else render();
 }
-function setAidFilter(val,btn) {
-  aidFilter=val;
-  document.querySelectorAll('#aid-filter-row .af-chip').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  render();
+
+function showFilters() {
+  document.getElementById('lib-filter-btn').style.display = '';
+  const active = Object.keys(filters).filter(k => filters[k] !== 'all');
+  const btn = document.getElementById('lib-filter-btn');
+  btn.textContent = active.length ? `Filter · ${active.length}` : 'Filter';
+  btn.classList.toggle('on', active.length > 0);
+  document.getElementById('lib-active').innerHTML = active.map(k =>
+    `<button class="af-chip active" data-clear="${k}" title="Remove filter">${FILTER_LABELS[k][filters[k]]} ✕</button>`).join('');
 }
 
-const LOSSLESS_EXTS = new Set(['FLAC','ALAC','WAV','AIFF','AIF']);
-
-function setRatingFilter(val,btn) {
-  ratingFilter=val;
-  document.querySelectorAll('#rating-filter-row .af-chip').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  render();
+function toggleFilterPanel(force) {
+  const p = document.getElementById('lib-filter-panel');
+  const open = force != null ? force : p.style.display === 'none';
+  p.style.display = open ? '' : 'none';
+  document.getElementById('lib-filter-btn').setAttribute('aria-expanded', open);
 }
+
+function syncChips() {
+  document.querySelectorAll('#lib-filter-panel .lf-chips').forEach(g => {
+    g.querySelectorAll('.af-chip').forEach(b =>
+      b.classList.toggle('active', b.dataset.val === filters[g.dataset.filter]));
+  });
+}
+
+document.getElementById('lib-filter-panel').addEventListener('click', e => {
+  const chip = e.target.closest('.af-chip[data-val]');
+  if (!chip) return;
+  filters[chip.closest('.lf-chips').dataset.filter] = chip.dataset.val;
+  syncChips();
+  songsPage = 1;
+  render();
+});
+document.getElementById('lib-active').addEventListener('click', e => {
+  const chip = e.target.closest('[data-clear]');
+  if (!chip) return;
+  filters[chip.dataset.clear] = 'all';
+  syncChips();
+  songsPage = 1;
+  render();
+});
+
 function ratingPassesFilter(r) {
-  if (ratingFilter==='all')      return true;
-  if (ratingFilter==='flagged')  return r===1;
-  if (ratingFilter==='unflagged') return r!==1;
+  if (filters.rating==='flagged')   return r===1;
+  if (filters.rating==='unflagged') return r!==1;
   return true;
-}
-
-function setFmtFilter(val,btn) {
-  fmtFilter=val;
-  document.querySelectorAll('#fmt-filter-row .af-chip').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  render();
 }
 function fmtPassesFilter(ext) {
-  if (fmtFilter==='all')      return true;
-  if (fmtFilter==='lossless') return LOSSLESS_EXTS.has((ext||'').toUpperCase());
-  if (fmtFilter==='lossy')    return !LOSSLESS_EXTS.has((ext||'').toUpperCase());
+  if (filters.fmt==='lossless') return LOSSLESS_EXTS.has((ext||'').toUpperCase());
+  if (filters.fmt==='lossy')    return !LOSSLESS_EXTS.has((ext||'').toUpperCase());
   return true;
 }
-
-function setBadFilter(val,btn) {
-  flaggedBadFilter=val;
-  document.querySelectorAll('#bad-filter-row .af-chip').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  songsPage=1;
-  render();
-}
 function badPassesFilter(t) {
-  if (flaggedBadFilter==='bad')  return !!t.flagged_bad;
-  if (flaggedBadFilter==='good') return !t.flagged_bad;
+  if (filters.bad==='bad')  return !!t.flagged_bad;
+  if (filters.bad==='good') return !t.flagged_bad;
   return true;
 }
 
 // ── Main render ───────────────────────────────────────────────────────────
 function render() {
-  document.getElementById('aid-filter-row').style.display = 'none';
-  document.getElementById('rating-filter-row').style.display = 'none';
-  document.getElementById('fmt-filter-row').style.display = 'none';
-  document.getElementById('bad-filter-row').style.display = 'none';
-  document.getElementById('verify-row').style.display = 'none';
+  document.getElementById('lib-hero').innerHTML = '';
   document.getElementById('lib-sort').style.display = 'none';
+  document.getElementById('lib-filter-btn').style.display = 'none';
+  document.getElementById('lib-active').innerHTML = '';
+  const trackView = ['songs','album-tracks','artist-albums','playlist-tracks'].includes(view);
+  if (!trackView) toggleFilterPanel(false);
   if (view==='home')             renderHome();
   else if (view==='artists')     renderArtists();
   else if (view==='albums')      renderAlbums();
@@ -848,24 +1184,14 @@ function render() {
   else if (view==='playlist-tracks') renderPlaylistTracks();
 }
 
-// ── Scan / Re-DL ──────────────────────────────────────────────────────────
+// ── Scan ──────────────────────────────────────────────────────────────────
 function triggerScan(btn) {
   btn.disabled=true; btn.textContent='…';
   fetch('/api/library/scan',{method:'POST'}).then(()=>setTimeout(()=>location.reload(),3000))
     .catch(()=>{btn.disabled=false;btn.textContent='Scan now';});
 }
-function redownload(btn,artist,album,title) {
-  btn.disabled=true; btn.textContent='…';
-  const row = btn.closest('.lib-row');
-  const old_path = row ? (row.dataset.path || '') : '';
-  fetch('/api/library/redownload',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({artist,album,title,old_path})}).then(r=>r.json()).then(d=>{
-    btn.textContent = d.ok?'✓':'!';
-    setTimeout(()=>{btn.disabled=false;btn.textContent='↺';},3000);
-  }).catch(()=>{btn.disabled=false;btn.textContent='↺';});
-}
 
-// ── Track detail modal ──────────────────────────────────────────────────────
+// ── Song sheet ────────────────────────────────────────────────────────────
 let _modalTrack    = null;
 let _modalDiskInfo = null;   // last disk-info response for the open modal
 
@@ -896,6 +1222,35 @@ function renderModalMeta(t, d) {
     `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join('');
 }
 
+function renderModalBadges(t) {
+  document.getElementById('tm-badges').innerHTML =
+    aidBadgeHtml(t.acoustid_score) + ` <span class="${extClass(t.ext)}">${esc(t.ext||'?')}</span>`;
+}
+
+// Artist and album in the sheet open their Library pages.
+function renderModalHead(t) {
+  document.getElementById('tm-cover').innerHTML = coverHtml(t, 72);
+  document.getElementById('tm-title').textContent = t.title || '—';
+  const inLib = ALL_TRACKS.includes(t);
+  document.getElementById('tm-sub').innerHTML = inLib
+    ? `<button class="tm-link" data-sheet-artist="${esc(t.artist)}">${esc(t.artist || 'Unknown artist')}</button>` +
+      (t.album ? ` · <button class="tm-link" data-sheet-album="${esc(t.album)}" data-sheet-artist="${esc(t.artist)}">${esc(t.album)}</button>` : '')
+    : esc((t.artist||'') + (t.album ? ' · '+t.album : ''));
+  renderModalBadges(t);
+}
+
+document.getElementById('tm-sub').addEventListener('click', e => {
+  const b = e.target.closest('.tm-link');
+  if (!b) return;
+  // Pop the sheet's history entry first, then drill in, so Back from the
+  // artist/album page returns to the list rather than to a dead sheet entry.
+  const artist = b.dataset.sheetArtist || '(Unknown)';
+  const go = b.dataset.sheetAlbum ? ['album-tracks', {artist, album: b.dataset.sheetAlbum}]
+                                  : ['artist-albums', {artist}];
+  if (history.state && history.state.sheet) { _afterSheet = go; history.back(); }
+  else { hideSheet(); navTo(...go); }
+});
+
 function showTrackInfo(rowEl) {
   const path = rowEl.dataset.path || '';
   const t = ALL_TRACKS.find(x => x.path === path)
@@ -903,22 +1258,21 @@ function showTrackInfo(rowEl) {
          || {path, ext:'', acoustid_score:null};
   _modalTrack    = t;
   _modalDiskInfo = null;
-  document.getElementById('tm-cover').innerHTML = coverHtml(t, 72);
-  document.getElementById('tm-title').textContent = t.title || '—';
-  document.getElementById('tm-sub').textContent = (t.artist||'') + (t.album ? ' · '+t.album : '');
-  document.getElementById('tm-badges').innerHTML =
-    aidBadgeHtml(t.acoustid_score) + ` <span class="${extClass(t.ext)}">${esc(t.ext||'?')}</span>`;
+  renderModalHead(t);
   document.getElementById('tm-query').value = ((t.artist||'')+' '+(t.title||'')).trim();
-  const res = document.getElementById('tm-redl-result'); res.textContent = ''; res.style.color = '';
-  const btn = document.getElementById('tm-redl-btn'); btn.disabled = false; btn.textContent = '↺ Delete & re-download';
-  fxShow('');
+  const btn = document.getElementById('tm-redl-btn'); btn.disabled = false; btn.textContent = '↺ Re-download';
+  fxOpen('');
   fxTab('search');
   ['fx-aid-out','fx-search-out','fx-link-out'].forEach(id => document.getElementById(id).innerHTML = '');
+  document.getElementById('fx-after').style.display = 'none';
   document.getElementById('fx-search-q').value = ((t.artist||'')+' '+(t.title||'')).trim();
   document.getElementById('fx-link').value = '';
   document.getElementById('fx-m-artist').value = t.artist || '';
   document.getElementById('fx-m-album').value  = t.album  || '';
   document.getElementById('fx-m-title').value  = t.title  || '';
+  // Nothing on disk (a playlist entry that never downloaded) → nothing to fix.
+  ['tm-q-identify','tm-q-rename','tm-q-replace'].forEach(id =>
+    document.getElementById(id).disabled = !t.path);
   const navBtn = document.getElementById('tm-nav-btn');
   if (NAV_URL && (t.title || t.artist)) {
     navBtn.href = NAV_URL + '/app/#/search?q=' + encodeURIComponent(((t.artist||'') + ' ' + (t.title||'')).trim());
@@ -929,7 +1283,12 @@ function showTrackInfo(rowEl) {
   updateFlagBtn();
   renderAidVerdict(t);
   renderModalMeta(t, null);
-  document.getElementById('track-modal').style.display = 'flex';
+  const modal = document.getElementById('track-modal');
+  if (modal.style.display === 'none') {
+    try { history.pushState({libDepth: navStack.length, sheet: 1}, ''); } catch(e) {}
+  }
+  modal.style.display = 'flex';
+  document.querySelector('#track-modal .tm-card').scrollTop = 0;
   if (t.id != null) {
     fetch(`/api/library/track-info/${t.id}`).then(r=>r.json()).then(d=>{
       if (d.ok && _modalTrack === t) { _modalDiskInfo = d; renderModalMeta(t, d); }
@@ -937,39 +1296,42 @@ function showTrackInfo(rowEl) {
   }
 }
 
-function closeTrackModal() {
+function hideSheet() {
   document.getElementById('track-modal').style.display = 'none';
   _modalTrack    = null;
   _modalDiskInfo = null;
 }
 
+function closeTrackModal() {
+  if (!_modalTrack && document.getElementById('track-modal').style.display === 'none') return;
+  if (history.state && history.state.sheet) history.back();   // popstate hides it
+  else hideSheet();
+}
+
 function updateFlagBtn() {
   const btn = document.getElementById('tm-flag-btn');
-  if (!_modalTrack || !_modalTrack.path) { btn.style.display = 'none'; return; }
-  btn.style.display = '';
-  if (_modalTrack.flagged_bad) {
-    btn.textContent = '⚑ Flagged bad — click to clear';
-    btn.classList.add('on');
-  } else {
-    btn.textContent = '⚑ Flag as bad';
-    btn.classList.remove('on');
-  }
+  btn.disabled = !(_modalTrack && _modalTrack.path);
+  const on = !!(_modalTrack && _modalTrack.flagged_bad);
+  btn.classList.toggle('on', on);
+  btn.querySelector('span').textContent = on ? 'Flagged' : 'Flag bad';
+  btn.title = on ? 'Flagged as a bad grab — tap to clear' : 'Flag as a bad grab';
 }
 
 function toggleBad() {
   if (!_modalTrack || !_modalTrack.path) return;
-  const next = !_modalTrack.flagged_bad;
+  const t = _modalTrack;
+  const next = !t.flagged_bad;
   const btn = document.getElementById('tm-flag-btn');
   btn.disabled = true;
   fetch('/api/library/flag-bad', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({path:_modalTrack.path, artist:_modalTrack.artist, title:_modalTrack.title, flagged:next}),
+    body: JSON.stringify({path:t.path, artist:t.artist, title:t.title, flagged:next}),
   }).then(r=>r.json()).then(d=>{
     btn.disabled = false;
     if (!d.ok) return;
-    _modalTrack.flagged_bad = d.flagged;
+    t.flagged_bad = d.flagged;
     // Keep the underlying ALL_TRACKS object in sync (same ref if from there)
-    const lib = ALL_TRACKS.find(x => x.path === _modalTrack.path);
+    const lib = ALL_TRACKS.find(x => x.path === t.path);
     if (lib) lib.flagged_bad = d.flagged;
     updateFlagBtn();
     render();
@@ -1029,7 +1391,7 @@ function renderAidVerdict(t) {
     fxCandidateHtml(t.acoustid_title, t.acoustid_artist, '',
                     score > 0 ? pct + ' match' : '', 'Rename to this') +
     `<div class="fx-verdict-more">Not right? <button class="fx-linkbtn"
-       onclick="fxShow('identify');fxIdentify()">see other matches</button></div>`;
+       onclick="fxOpen('identify')">see other matches</button></div>`;
   fxBindPicks(el);
   // Prefill "Type it" from the verdict so adding the album it can't know is
   // one tab away rather than retyping everything.
@@ -1039,15 +1401,20 @@ function renderAidVerdict(t) {
 }
 
 // ── Fix-a-wrong-grab flow ───────────────────────────────────────────────────
-// Two ways out of a bad download: replace it (delete + search again, avoiding
-// the peer that served it), or keep the file and re-file it as what it really
-// is. Everything here operates on _modalTrack.
+// Identify (what is it?), Rename (keep it as what it is), Re-download (throw
+// it away, get another). Everything here operates on _modalTrack.
 
-function fxShow(which) {
-  document.getElementById('fx-choice').style.display   = which ? 'none' : '';
-  document.getElementById('fx-replace').style.display  = which === 'replace'  ? '' : 'none';
-  document.getElementById('fx-identify').style.display = which === 'identify' ? '' : 'none';
+const FX_PANELS = {identify:'fx-identify', rename:'fx-rename', replace:'fx-replace'};
+
+function fxOpen(which) {
+  Object.entries(FX_PANELS).forEach(([k, id]) =>
+    document.getElementById(id).style.display = k === which ? '' : 'none');
+  document.getElementById('tm-q-identify').classList.toggle('active', which === 'identify');
+  document.getElementById('tm-q-rename').classList.toggle('active', which === 'rename');
+  document.getElementById('tm-q-replace').classList.toggle('active', which === 'replace');
   fxResult('', '');
+  // Identify does its work on open: tapping it is the request.
+  if (which === 'identify' && !document.getElementById('fx-aid-out').innerHTML) fxIdentify();
 }
 
 function fxResult(msg, kind) {
@@ -1069,26 +1436,35 @@ function fxTab(name) {
 
 function fxIdentify() {
   if (!_modalTrack || !_modalTrack.path) return;
+  const t   = _modalTrack;
   const btn = document.getElementById('fx-aid-btn');
   const out = document.getElementById('fx-aid-out');
   btn.disabled = true; btn.textContent = 'Listening…';
-  out.innerHTML = '';
+  out.innerHTML = '<div class="fx-none">🎧 Fingerprinting the file…</div>';
   fetch('/api/library/identify', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({path: _modalTrack.path}),
+    body: JSON.stringify({path: t.path}),
   }).then(r => r.json()).then(d => {
-    btn.disabled = false; btn.textContent = '🎧 Identify with AcoustID';
+    btn.disabled = false; btn.textContent = '🎧 Listen again';
+    if (_modalTrack !== t) return;
     if (d.error) { out.innerHTML = `<div class="fx-none">${esc(d.error)}</div>`; return; }
     if (!d.candidates || !d.candidates.length) {
       out.innerHTML = '<div class="fx-none">AcoustID could not identify this file. ' +
-                      'Name it yourself below.</div>';
+        'Use <button class="fx-linkbtn" onclick="fxOpen(\'rename\')">Rename</button> to name it yourself.</div>';
       return;
     }
-    out.innerHTML = d.candidates.map(c => fxCandidateHtml(
-      c.title, c.artist, '', Math.round((c.score || 0) * 100) + '% match')).join('');
+    const same = c => !aidDisagrees({title: t.title, artist: t.artist,
+                                     acoustid_title: c.title, acoustid_artist: c.artist});
+    const top = d.candidates[0];
+    const head = same(top)
+      ? `<div class="fx-verdict ok">✓ Sounds like the right song — “${esc(top.title)}” by ${esc(top.artist || '?')}.</div>`
+      : `<div class="fx-verdict bad">✗ This file sounds like a different song.</div>`;
+    out.innerHTML = head + d.candidates.map(c => fxCandidateHtml(
+      c.title, c.artist, '', Math.round((c.score || 0) * 100) + '% match',
+      same(c) ? 'Matches' : 'Rename to this', same(c))).join('');
     fxBindPicks(out);
   }).catch(() => {
-    btn.disabled = false; btn.textContent = '🎧 Identify with AcoustID';
+    btn.disabled = false; btn.textContent = '🎧 Listen again';
     out.innerHTML = '<div class="fx-none">Identify request failed.</div>';
   });
 }
@@ -1096,7 +1472,7 @@ function fxIdentify() {
 // --- shared candidate rendering ------------------------------------------
 // data-* rather than inline args: titles carry apostrophes and quotes.
 
-function fxCandidateHtml(title, artist, album, note, btnLabel) {
+function fxCandidateHtml(title, artist, album, note, btnLabel, noButton) {
   return `<div class="fx-cand" data-title="${esc(title || '')}"
        data-artist="${esc(artist || '')}" data-album="${esc(album || '')}">
     <div class="fx-cand-info">
@@ -1104,13 +1480,15 @@ function fxCandidateHtml(title, artist, album, note, btnLabel) {
       <div class="fx-cand-sub">${esc(artist || '')}${album ? ' · ' + esc(album) : ''}${
         note ? ' · ' + esc(note) : ''}</div>
     </div>
-    <button class="lib-sm-btn">${esc(btnLabel || 'Use this')}</button>
+    ${noButton ? `<span class="aid-badge aid-green">${esc(btnLabel)}</span>`
+               : `<button class="lib-sm-btn">${esc(btnLabel || 'Use this')}</button>`}
   </div>`;
 }
 
 function fxBindPicks(container) {
   container.querySelectorAll('.fx-cand').forEach(row => {
-    row.querySelector('button').addEventListener('click', () => {
+    const b = row.querySelector('button');
+    if (b) b.addEventListener('click', () => {
       fxApply(row.dataset.artist, row.dataset.album, row.dataset.title);
     });
   });
@@ -1167,35 +1545,63 @@ function fxApplyManual() {
 function fxApply(artist, album, title) {
   if (!_modalTrack || !_modalTrack.path) return;
   if (!artist || !title) { fxResult('Artist and title are both needed.', 'err'); return; }
+  const t = _modalTrack;
+  // What the file was supposed to be — still missing once it's renamed.
+  const wanted = {artist: t.artist, album: t.album, title: t.title};
   fxResult('Renaming…', '');
   fetch('/api/library/reorganize', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({path: _modalTrack.path, artist, album, title}),
+    body: JSON.stringify({path: t.path, artist, album, title}),
   }).then(r => r.json()).then(d => {
     if (!d.ok) { fxResult('✗ ' + (d.error || 'Failed'), 'err'); return; }
     // AcoustID identifies a recording, not a release, so a verdict rename has
     // no album and lands under "Unknown Album". Say so instead of letting it
     // turn up in Navidrome unexplained.
     fxResult(`✓ Saved as ${artist} — ${title}` +
-             (album ? '' : ' · filed under Unknown Album — add one with “Type it”'), 'ok');
-    // Keep the in-memory copy in step so the row and modal don't lie until the
-    // next scan; library_index ids are rebuilt on rescan, the path is the key.
-    const t = _modalTrack;
+             (album ? '' : ' · filed under Unknown Album — add one with Rename → “Type it”'), 'ok');
+    // Keep the in-memory copy in step so the list and sheet don't lie until
+    // the next scan; library_index ids are rebuilt on rescan, the path is the key.
     t.artist = artist; t.album = album; t.title = title;
     t.path = d.path; t.flagged_bad = false; t.acoustid_score = null;
-    const row = document.querySelector(`.lib-row[data-path="${CSS.escape(t.path)}"]`)
-             || document.querySelector('.lib-row[data-path]');
-    if (row && row.dataset.path !== d.path) row.dataset.path = d.path;
-    document.getElementById('tm-title').textContent = title;
-    document.getElementById('tm-sub').textContent = artist + (album ? ' · ' + album : '');
-    setTimeout(() => { closeTrackModal(); render(); }, 900);
+    t.acoustid_title = ''; t.acoustid_artist = ''; t._hay = null;
+    renderModalHead(t);
+    renderAidVerdict(t);
+    renderModalMeta(t, null);
+    fxOpen('');
+    fxShowAfter(wanted);
+    render();
   }).catch(() => fxResult('✗ Request failed', 'err'));
+}
+
+// The file is kept under its real name; the song that was wanted is still
+// missing. Offer to go get it, which is the next thing you'd do anyway.
+function fxShowAfter(w) {
+  const el = document.getElementById('fx-after');
+  if (!w.title) { el.style.display = 'none'; return; }
+  const q = ((w.artist || '') + ' ' + (w.title || '')).trim();
+  el.innerHTML = `<div>Still missing: <b>${esc(w.title)}</b>${w.artist ? ' by ' + esc(w.artist) : ''}</div>
+    <div class="fx-after-btns">
+      <button class="lib-sm-btn" id="fx-after-get">⬇ Get it via Soulseek</button>
+      <a class="lib-sm-btn" href="/search?q=${encodeURIComponent(q)}">Search for it ›</a>
+    </div>`;
+  el.style.display = '';
+  document.getElementById('fx-after-get').addEventListener('click', e => {
+    const b = e.currentTarget;
+    b.disabled = true; b.textContent = '…';
+    // No old_path: the file that was there now lives under its new name.
+    fetch('/api/library/redownload', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({artist: w.artist, album: w.album, title: w.title}),
+    }).then(r => r.json()).then(d => {
+      b.textContent = d.ok ? '✓ Queued — see Queue' : '✗ ' + (d.error || 'Failed');
+      if (!d.ok) b.disabled = false;
+    }).catch(() => { b.disabled = false; b.textContent = '✗ Network error'; });
+  });
 }
 
 function doRedownload() {
   if (!_modalTrack) return;
   const btn = document.getElementById('tm-redl-btn');
-  const res = document.getElementById('tm-redl-result');
   const query = document.getElementById('tm-query').value.trim();
   btn.disabled = true; btn.textContent = '…';
   fetch('/api/library/redownload', {
@@ -1205,25 +1611,22 @@ function doRedownload() {
   }).then(r=>r.json()).then(d=>{
     if (d.ok) {
       btn.textContent = '✓ Queued';
-      res.style.color = 'var(--ok)';
-      res.textContent = 'Re-download queued — track the progress in the Queue tab.';
+      fxResult('Re-download queued — track the progress in the Queue tab.', 'ok');
     } else {
       btn.disabled = false; btn.textContent = '↺ Re-download';
-      res.style.color = 'var(--err)';
-      res.textContent = '✗ ' + (d.error || 'Failed');
+      fxResult('✗ ' + (d.error || 'Failed'), 'err');
     }
   }).catch(() => {
     btn.disabled = false; btn.textContent = '↺ Re-download';
-    res.style.color = 'var(--err)';
-    res.textContent = '✗ Network error';
+    fxResult('✗ Network error', 'err');
   });
 }
 
 // The modal is authored inside the page's content block, which puts it several
-// levels down inside .app-shell — a flex container sized in dvh. A position:
-// fixed overlay only resolves against the viewport while no ancestor creates a
-// containing block, and on iOS that nesting is where full-screen overlays come
-// up short. Reparenting to <body> makes it structurally immune.
+// levels down inside .app-shell. A position:fixed overlay only resolves
+// against the viewport while no ancestor creates a containing block, and on
+// iOS that nesting is where full-screen overlays come up short. Reparenting to
+// <body> makes it structurally immune.
 document.body.appendChild(document.getElementById('track-modal'));
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTrackModal(); });
@@ -1237,6 +1640,8 @@ try {
     if (Array.isArray(saved.stack)) navStack.push(...saved.stack);
   }
 } catch(e) {}
+baseDepth = navStack.length;
+try { history.replaceState({libDepth: navStack.length}, ''); } catch(e) {}
 
 render();
 </script>
