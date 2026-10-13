@@ -240,6 +240,10 @@ def init_db():
         ("slskd_download_filename", "TEXT DEFAULT NULL"),
         ("acoustid_score", "REAL DEFAULT NULL"),
         ("replace_path", "TEXT DEFAULT NULL"),
+        # What the download-time fingerprint matched, so a wrong grab can name
+        # what it actually is without fingerprinting again.
+        ("acoustid_title", "TEXT DEFAULT NULL"),
+        ("acoustid_artist", "TEXT DEFAULT NULL"),
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
@@ -852,8 +856,13 @@ class DeezerProvider:
             "title": album.get("title", ""),
             "artist": album_artist,
             "artist_id": str(album.get("artist", {}).get("id", "")),
-            "cover": album.get("cover_medium", ""),
+            "cover": album.get("cover_big", "") or album.get("cover_medium", ""),
             "release_date": album.get("release_date", ""),
+            "label": album.get("label", ""),
+            "genres": [g.get("name", "") for g in (album.get("genres") or {}).get("data", [])],
+            "duration": album.get("duration", 0),
+            "record_type": album.get("record_type", ""),
+            "nb_tracks": album.get("nb_tracks", 0),
             "tracks": [
                 {
                     "id": str(t.get("id", "")),
@@ -864,6 +873,38 @@ class DeezerProvider:
                     "type": "track",
                 }
                 for t in tracks_data.get("data", [])
+            ],
+        }
+
+    def get_track(self, track_id: str) -> dict:
+        """One track in depth, for the song page: release, credits, and the
+        30-second preview — hearing what the song should sound like is the
+        quickest check against a wrong grab."""
+        t = self._get(f"/track/{track_id}")
+        album = t.get("album") or {}
+        artist = t.get("artist") or {}
+        return {
+            "id": str(track_id),
+            "title": t.get("title", ""),
+            "title_version": t.get("title_version", ""),
+            "artist": artist.get("name", ""),
+            "artist_id": str(artist.get("id", "")),
+            "artist_picture": artist.get("picture_medium", ""),
+            "album": album.get("title", ""),
+            "album_id": str(album.get("id", "")),
+            "cover": album.get("cover_big", "") or album.get("cover_medium", ""),
+            "duration": t.get("duration", 0),
+            "track_position": t.get("track_position", 0),
+            "disk_number": t.get("disk_number", 0),
+            "release_date": t.get("release_date", "") or album.get("release_date", ""),
+            "isrc": t.get("isrc", ""),
+            "bpm": t.get("bpm", 0),
+            "explicit": bool(t.get("explicit_lyrics")),
+            "preview": t.get("preview", ""),
+            "rank": t.get("rank", 0),
+            "contributors": [
+                {"name": c.get("name", ""), "role": c.get("role", ""), "id": str(c.get("id", ""))}
+                for c in (t.get("contributors") or [])
             ],
         }
 
@@ -1688,13 +1729,20 @@ class SlskdClient:
             br = result.get("bitRate", 0)
             score = 60 if br >= 320 else 50 if br >= 256 else 40 if br >= 192 else 30
 
-        # Metadata match
-        title_l = (track.title or "").lower()
-        artist_l = (track.artist or "").lower().split(",")[0].strip()
-        if title_l and title_l in basename_l:
+        # Relevance gates format. Format alone is worth up to +70, so a FLAC
+        # of the wrong song (same album, another title) or the same title by
+        # another artist used to outscore the right song as an MP3 — a steady
+        # source of wrong grabs. Compared on folded alphanumerics so "Don't"
+        # matches "Dont" and "Björk" matches "Bjork"; titles that fold to
+        # nothing (non-Latin scripts) skip the gate rather than fail it.
+        want_t = _acoustid_norm(_strip_version_tail(_META_PAREN_RE.sub("", track.title or "")))
+        want_a = _acoustid_norm((track.artist or "").split(",")[0])
+        if want_t and want_t not in _acoustid_norm(basename_l.rsplit(".", 1)[0]):
+            return -100
+        if want_t:
             score += 30
-        if artist_l and artist_l in fn_l:
-            score += 20
+        if want_a:
+            score += 20 if want_a in _acoustid_norm(fn_l) else -40
 
         # Availability — free slot means download starts immediately (+15)
         if result.get("has_slot"):
@@ -2655,8 +2703,13 @@ def scan_library() -> None:
     # Write timestamp before we start so even a failed scan resets the 24h cooldown.
     set_setting("last_library_scan", datetime.utcnow().isoformat(timespec="seconds"))
 
-    rows: list[tuple[str, str, str, str]] = []  # (artist, title, album, path)
+    # (artist, title, album, path, user_rating, cover_art_id, added)
+    rows: list[tuple] = []
     source = "unknown"
+    # A scan that couldn't finish must not replace the index: it's rebuilt by
+    # DELETE + INSERT, so a Navidrome hiccup or an unmounted library used to
+    # wipe the Library tab and every AcoustID verdict with it.
+    incomplete = ""
     try:
         nav_url = (get_setting("navidrome_url") or "").rstrip("/")
         nav_user = get_setting("navidrome_user") or ""
@@ -2676,6 +2729,7 @@ def scan_library() -> None:
                     data = r.json().get("subsonic-response", {})
                     if data.get("status") != "ok":
                         logger.warning(f"[library] Navidrome search3 error: {data.get('error')}")
+                        incomplete = f"Navidrome error: {data.get('error')}"
                         break
                     songs = data.get("searchResult3", {}).get("song", [])
                     for s in songs:
@@ -2683,13 +2737,17 @@ def scan_library() -> None:
                         # Navidrome returns path relative to music dir; make it absolute
                         if nav_path and not nav_path.startswith("/"):
                             nav_path = f"{music_path_str}/{nav_path}"
+                        # Navidrome's "created" is when the file first appeared —
+                        # the honest "date added".
+                        created = (s.get("created") or "")[:19].replace("T", " ")
                         rows.append((s.get("artist", ""), s.get("title", ""), s.get("album", ""), nav_path,
-                                     s.get("userRating"), s.get("coverArt")))
+                                     s.get("userRating"), s.get("coverArt"), created or None))
                     if len(songs) < 500:
                         break
                     offset += 500
                 except Exception as ex:
                     logger.warning(f"[library] Navidrome scan failed at offset {offset}: {ex}")
+                    incomplete = f"Navidrome scan failed at offset {offset}: {ex}"
                     break
             source = "navidrome"
         else:
@@ -2704,7 +2762,13 @@ def scan_library() -> None:
                     artist = parts[0] if len(parts) >= 3 else ""
                     album = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
                     title = num_re.sub("", f.stem)
-                    rows.append((artist, title, album, str(f), None, None))
+                    try:
+                        added = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(f.stat().st_mtime))
+                    except OSError:
+                        added = None
+                    rows.append((artist, title, album, str(f), None, None, added))
+            else:
+                incomplete = f"library path {music_path} does not exist"
             source = "filesystem"
 
         # Navidrome reports tag-derived paths that often don't match disk
@@ -2717,39 +2781,63 @@ def scan_library() -> None:
             fs_index = _build_fs_index(music_root)
             fixed = 0
             resolved_rows = []
-            for a, t, al, p, ur, ca in rows:
+            for a, t, al, p, ur, ca, added in rows:
                 rp = _resolve_path(p or "", a or "", t or "", al or "", fs_index)
                 if rp is not None and str(rp) != p:
                     fixed += 1
                     p = str(rp)
-                resolved_rows.append((a, t, al, p, ur, ca))
+                resolved_rows.append((a, t, al, p, ur, ca, added))
             rows = resolved_rows
             if fixed:
                 logger.info(f"[library] Repaired {fixed} mismatched paths via filesystem")
 
         conn = get_conn()
-        # AcoustID scores are app-generated and live in library_index, which we
-        # rebuild here — carry them across the rebuild by path so verifying a
-        # track isn't undone by the next scan. (user_rating / cover_art_id come
-        # from Navidrome each scan, so they don't need preserving.)
-        prev_scores = {
-            r["path"]: (r["acoustid_score"], r["acoustid_title"], r["acoustid_artist"])
+        existing = conn.execute("SELECT COUNT(*) FROM library_index").fetchone()[0]
+        if incomplete or (not rows and existing):
+            conn.close()
+            logger.warning(f"[library] Scan incomplete ({incomplete or 'found no tracks'})"
+                           f" — keeping the existing index of {existing} tracks")
+            with _scan_state_lock:
+                _scan_state.update({"in_progress": False, "source": source})
+            return
+        # The index is rebuilt here, so carry across by path everything that
+        # isn't re-read from the source: AcoustID results (app-generated), the
+        # row id (so a page loaded before the scan doesn't verify or describe
+        # a different file under a reused id) and the date the file was first
+        # indexed (so "Recently added" means something). user_rating and
+        # cover_art_id come from Navidrome each scan.
+        prev = {
+            r["path"]: r
             for r in conn.execute(
-                "SELECT path, acoustid_score, acoustid_title, acoustid_artist FROM library_index"
-                " WHERE acoustid_score IS NOT NULL AND path IS NOT NULL AND path != ''"
+                "SELECT id, path, indexed_at, acoustid_score, acoustid_title, acoustid_artist"
+                " FROM library_index WHERE path IS NOT NULL AND path != ''"
             )
         }
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        keep_id, new_rows, seen = [], [], set()
+        for a, t, al, p, ur, ca, added in rows:
+            old = prev.get(p)
+            vals = (a, t, al, source, p, ur, ca,
+                    added or (old["indexed_at"] if old else None) or now,
+                    *((old["acoustid_score"], old["acoustid_title"], old["acoustid_artist"])
+                      if old else (None, None, None)))
+            if old and p not in seen:
+                keep_id.append((old["id"], *vals))
+            else:
+                new_rows.append((None, *vals))
+            seen.add(p)
         conn.execute("DELETE FROM library_index")
+        # Rows keeping their id go in first, so a fresh row can't be handed an
+        # id that a later kept row still needs.
         conn.executemany(
-            "INSERT INTO library_index(artist, title, album, source, path, user_rating, cover_art_id,"
-            " acoustid_score, acoustid_title, acoustid_artist)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
-            [(a, t, al, source, p, ur, ca, *prev_scores.get(p, (None, None, None)))
-             for a, t, al, p, ur, ca in rows]
+            "INSERT INTO library_index(id, artist, title, album, source, path, user_rating,"
+            " cover_art_id, indexed_at, acoustid_score, acoustid_title, acoustid_artist)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            keep_id + new_rows,
         )
-        if prev_scores:
-            kept = sum(1 for _, _, _, p, _, _ in rows if prev_scores.get(p) is not None)
-            logger.info(f"[library] Preserved {kept}/{len(prev_scores)} AcoustID scores across rescan")
+        kept = sum(1 for r in keep_id if r[9] is not None)
+        if kept:
+            logger.info(f"[library] Preserved {kept} AcoustID scores across rescan")
         conn.commit()
         conn.close()
         with _scan_state_lock:
@@ -2784,6 +2872,27 @@ def _record_history(conn, track: sqlite3.Row, path: str, source: str,
         )
     except Exception as ex:
         logger.debug(f"[history] insert failed: {ex}")
+
+
+def _index_download(conn, track: sqlite3.Row, path: str, aid: tuple) -> None:
+    """Put a finished download into library_index straight away.
+
+    Only scan_library() used to write library_index, and it runs every 24h by
+    default — so a song you'd just downloaded wasn't in the Library tab, which
+    is exactly where you go to check whether it's the right one. The next
+    scan replaces this row by path (keeping its id, date and AcoustID result).
+    """
+    score, aid_title, aid_artist = aid
+    # Whatever was flagged or fingerprinted at this path before was another
+    # file; the verdict that counts now is this download's.
+    conn.execute("DELETE FROM bad_flags WHERE path=?", (path,))
+    conn.execute("DELETE FROM library_index WHERE path=?", (path,))
+    conn.execute(
+        "INSERT INTO library_index(artist, title, album, source, path,"
+        " acoustid_score, acoustid_title, acoustid_artist) VALUES (?,?,?,?,?,?,?,?)",
+        (track["artist"] or "", track["title"] or "", track["album"] or "", "download",
+         path, score, aid_title or None, aid_artist or None),
+    )
 
 
 def _cleanup_replaced_file(conn, track: sqlite3.Row, new_path: str) -> None:
@@ -2829,11 +2938,12 @@ def _library_norm_keys(conn) -> set:
     return keys
 
 
-def _already_in_library(conn, artist: str, title: str) -> bool:
+def _already_in_library(conn, artist: str, title: str, exact: bool = False) -> bool:
     """Return True if this artist+title exists in completed downloads or the
     library index. Exact (indexed) match first, then a normalized comparison so
     "Song (Remastered 2011)" or a feat.-suffixed variant of an owned track
-    doesn't get downloaded again."""
+    doesn't get downloaded again. exact=True skips the normalized pass, for a
+    track the user picked by hand — "Creep (Acoustic)" when "Creep" is owned."""
     if conn.execute(
         "SELECT 1 FROM tracks WHERE slskd_state='completed'"
         " AND lower(trim(artist))=lower(trim(?)) AND lower(trim(title))=lower(trim(?))",
@@ -2846,6 +2956,8 @@ def _already_in_library(conn, artist: str, title: str) -> bool:
         (artist, title)
     ).fetchone():
         return True
+    if exact:
+        return False
     k = _norm_key(artist, title)
     return bool(k[1]) and k in _library_norm_keys(conn)
 
@@ -3014,9 +3126,12 @@ def _worker_tick():
                         best_username, best_file["filename"], best_file.get("size", 0))
                     if ok:
                         _queued_this_tick.add(key)
+                        # slskd_queued_at starts the 30-minute stall clock;
+                        # without it a stalled album transfer sat in
+                        # 'downloading' forever.
                         conn.execute(
                             "UPDATE tracks SET slskd_state='downloading',"
-                            " slskd_search_id=?, slskd_tried_users=?,"
+                            " slskd_search_id=?, slskd_tried_users=?, slskd_queued_at=datetime('now'),"
                             " slskd_download_user=?, slskd_download_filename=? WHERE id=?",
                             (job["album_search_id"], best_username,
                              best_username, best_file["filename"], track["id"])
@@ -3221,8 +3336,11 @@ def _worker_tick():
 
     # downloading → check watch folder, organize
     library = get_setting("library_path") or "/music"
+    # No LIMIT: with one, twenty stalled rows (oldest first, no ORDER BY) hid
+    # every newer download from this check. Matching is in-memory against the
+    # single folder walk below, so checking them all is cheap.
     dl_rows_tick = conn.execute(
-        "SELECT * FROM tracks WHERE slskd_state='downloading' LIMIT 20"
+        "SELECT * FROM tracks WHERE slskd_state='downloading'"
     ).fetchall()
     # Walk the watch folder ONCE for the whole tick, not once per track.
     watch_files: list[Path] = []
@@ -3251,13 +3369,16 @@ def _worker_tick():
                                                    force_overwrite=bool(t["force_overwrite"]))
                 logger.info(f"[slskd] Organized to: {result}")
                 tag_file(Path(result), t)
-                aid_score = _acoustid.verify(Path(result), t["artist"] or "", t["title"] or "")
+                aid = _acoustid.verify_detail(Path(result), t["artist"] or "", t["title"] or "")
+                aid_score = aid[0]
                 _cleanup_replaced_file(conn, t, result)
                 _record_history(conn, t, result, "slskd", t["slskd_download_user"] or "", aid_score)
+                _index_download(conn, t, result, aid)
                 conn.execute(
                     "UPDATE tracks SET slskd_state='completed', local_path=?, acoustid_score=?,"
+                    " acoustid_title=?, acoustid_artist=?,"
                     " slskd_download_user=NULL, slskd_download_filename=NULL WHERE id=?",
-                    (result, aid_score, t["id"]))
+                    (result, aid_score, aid[1] or None, aid[2] or None, t["id"]))
                 conn.commit()
                 job = conn.execute("SELECT playlist_name FROM import_jobs WHERE id=?",
                                    (t["job_id"],)).fetchone()
@@ -3330,13 +3451,17 @@ def _worker_tick():
             logger.info(f"[monochrome] Completed: {final}")
             if Path(final).exists():
                 tag_file(Path(final), t)
-                aid_score = _acoustid.verify(Path(final), t["artist"] or "", t["title"] or "")
+                aid = _acoustid.verify_detail(Path(final), t["artist"] or "", t["title"] or "")
             else:
-                aid_score = None
+                aid = (None, "", "")
+            aid_score = aid[0]
             _cleanup_replaced_file(conn, t, final)
             _record_history(conn, t, final, "monochrome", "", aid_score)
-            conn.execute("UPDATE tracks SET slskd_state='completed', local_path=?, acoustid_score=? WHERE id=?",
-                         (final, aid_score, t["id"]))
+            if Path(final).exists():
+                _index_download(conn, t, final, aid)
+            conn.execute("UPDATE tracks SET slskd_state='completed', local_path=?, acoustid_score=?,"
+                         " acoustid_title=?, acoustid_artist=? WHERE id=?",
+                         (final, aid_score, aid[1] or None, aid[2] or None, t["id"]))
         else:
             logger.warning(f"[monochrome] All instances failed for '{t['title']}': {result}")
             # Fall back to slskd
@@ -3829,7 +3954,8 @@ def _attention_items(conn) -> dict:
         " ORDER BY b.flagged_at DESC"
     ).fetchall()
     low = conn.execute(
-        "SELECT id, artist, title, album, path, acoustid_score FROM library_index"
+        "SELECT id, artist, title, album, path, acoustid_score, acoustid_title, acoustid_artist"
+        " FROM library_index"
         " WHERE acoustid_score IS NOT NULL AND acoustid_score >= 0 AND acoustid_score < 0.5"
         " AND path NOT IN (SELECT path FROM bad_flags)"
         " ORDER BY acoustid_score"
@@ -4388,6 +4514,14 @@ def api_artist(artist_id):
         return jsonify({"error": str(ex)}), 500
 
 
+@app.route("/api/track/<track_id>")
+def api_track(track_id):
+    try:
+        return jsonify(_deezer.get_track(track_id))
+    except Exception as ex:
+        return jsonify({"error": str(ex)}), 500
+
+
 @app.route("/api/album/<album_id>")
 def api_album(album_id):
     try:
@@ -4594,29 +4728,29 @@ def api_ai_suggest(track_id):
             max_tokens=512,
             system=system,
             messages=[{"role": "user", "content": user_msg}],
+            # Anthropic's shape: the schema sits directly under format.schema.
+            # The nested {"json_schema": {"name", "schema"}} form is OpenAI's
+            # and made every request fail with a 400.
             output_config={"format": {
                 "type": "json_schema",
-                "json_schema": {
-                    "name": "suggestions",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "queries": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "q":   {"type": "string"},
-                                        "why": {"type": "string"},
-                                    },
-                                    "required": ["q", "why"],
-                                    "additionalProperties": False,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "queries": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "q":   {"type": "string"},
+                                    "why": {"type": "string"},
                                 },
-                            }
-                        },
-                        "required": ["queries"],
-                        "additionalProperties": False,
+                                "required": ["q", "why"],
+                                "additionalProperties": False,
+                            },
+                        }
                     },
+                    "required": ["queries"],
+                    "additionalProperties": False,
                 },
             }},
         )
@@ -4716,6 +4850,15 @@ def api_library_acoustid():
             ids = [r["id"] for r in conn.execute(
                 "SELECT id FROM library_index WHERE artist=?",
                 (data.get("artist"),)).fetchall()]
+        elif scope == "ids":
+            # Exactly the rows a filtered Library view is showing.
+            want = [i for i in (data.get("ids") or []) if isinstance(i, int)]
+            ids = []
+            for k in range(0, len(want), 500):
+                chunk = want[k:k + 500]
+                ids += [r["id"] for r in conn.execute(
+                    f"SELECT id FROM library_index WHERE id IN ({','.join('?' * len(chunk))})",
+                    chunk).fetchall()]
         elif scope == "playlist":
             table = "tracks"
             ids = [r["id"] for r in conn.execute(
@@ -4726,6 +4869,10 @@ def api_library_acoustid():
         conn.close()
         if not ids:
             return jsonify({"error": "no tracks matched"}), 404
+        # Without a key every fingerprint is skipped, so "ID" used to finish
+        # instantly having changed nothing and said nothing.
+        if not (get_setting("acoustid_api_key") or "").strip():
+            return jsonify({"error": "Add an AcoustID API key in Settings to identify songs"}), 400
         threading.Thread(target=_run_lib_acoustid, args=(ids, table), daemon=True).start()
         started = True
         return jsonify({"ok": True, "total": len(ids)})
@@ -4937,7 +5084,28 @@ def api_library_reorganize():
     )
     # The flag meant "this isn't the song it claims to be"; it now is.
     conn.execute("DELETE FROM bad_flags WHERE path=?", (str(src),))
+    # The queue row that downloaded this file still says it's the song that
+    # was wanted. Left alone, Search refused to queue that song ("already in
+    # your library") and its playlist's M3U pointed at a moved file. If the
+    # rename made it a different song, the wanted one is still missing: fail
+    # the row so Retry fetches it, and drop its path so a retry can't delete
+    # the file just kept. A rename that only tidies the name follows the file.
+    for row in conn.execute(
+        "SELECT id, artist, title FROM tracks WHERE local_path=? AND slskd_state='completed'",
+        (str(src),),
+    ).fetchall():
+        if _norm_key(row["artist"] or "", row["title"] or "") == _norm_key(meta["artist"], meta["title"]):
+            conn.execute("UPDATE tracks SET local_path=? WHERE id=?", (str(dst), row["id"]))
+        else:
+            conn.execute(
+                "UPDATE tracks SET slskd_state='failed', local_path=NULL, replace_path=NULL,"
+                " acoustid_score=NULL, acoustid_title=NULL, acoustid_artist=NULL, slskd_error=?"
+                " WHERE id=?",
+                (f"Wrong song — kept as {meta['artist']} — {meta['title']}", row["id"]),
+            )
     conn.commit()
+    with _lib_keys_lock:
+        _lib_keys_cache["at"] = 0.0   # the owned-songs set just changed
     conn.close()
     if dst != src:
         _prune_empty_parents(src.parent)
@@ -5233,7 +5401,7 @@ def api_download():
         source_id = (data.get("source_id") or "").strip()
 
     conn = get_conn()
-    if _already_in_library(conn, artist, title):
+    if _already_in_library(conn, artist, title, exact=True):
         conn.close()
         return jsonify({"ok": False, "skipped": True,
                         "message": f"\"{title}\" is already in your library"})

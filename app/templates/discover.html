@@ -257,10 +257,15 @@ function tilHtml(t) {
       data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">TIDAL</button>
     ${radioBtn}`);
 
+  // Song/album pages: ids here can be Apple's or ListenBrainz's rather than
+  // Deezer's, so link by name and let the page look it up.
+  const infoLink = isAlbum
+    ? `<a class="btn-tile-info" href="${esc(albumUrl(t.title, t.artist))}">Open album ›</a>`
+    : `<a class="btn-tile-info" href="${esc(songUrl({title: t.title, artist: t.artist, album: t.album, cover: t.cover}))}">ⓘ Song page</a>`;
   return `<div class="shelf-tile${inLib ? ' track-in-lib' : ''}" onclick="tileClick(this)">
     ${artHtml}
     ${inLib ? '<div class="shelf-tile-lib"></div>' : ''}
-    <div class="tile-actions">${dlBtns || '<span style="color:var(--text-muted);font-size:.75rem">Album</span>'}</div>
+    <div class="tile-actions">${dlBtns}${infoLink}</div>
     <div class="shelf-tile-title">${esc(t.title)}</div>
     <div class="shelf-tile-sub">${esc(t.artist || '')}</div>
   </div>`;
@@ -302,10 +307,11 @@ function trackCardHtml(t) {
   return `
   <div class="track-card${inLib ? ' track-in-lib' : ''}">
     ${artHtml}
-    <div class="track-info">
+    <a class="track-info" style="color:inherit;text-decoration:none"
+       href="${esc(songUrl({title: t.title, artist: t.artist, album: t.album, cover: t.cover}))}">
       <div class="track-title">${esc(t.title)}${badge}</div>
       <div class="track-sub">${esc(t.artist||'')}${t.album ? ' · ' + esc(t.album) : ''}</div>
-    </div>
+    </a>
     <div class="dl-btns">
       ${dlBtns}
       ${t.artist_id
@@ -353,7 +359,10 @@ document.addEventListener('click', e => {
 function loadArtistRadio(btn) {
   const artistId = btn.dataset.artistId;
   const artistName = btn.dataset.artist;
-  const tile = btn.closest('.shelf-tile');
+  // Results go after the row the button lives in — a tile shelf, a track
+  // list, or an earlier set of radio results. Looking only for a tile's
+  // shelf made Radio do nothing on ListenBrainz track lists.
+  const anchor = btn.closest('.radio-results') || btn.closest('.shelf-scroll, .disc-track-list');
   const origText = btn.textContent;
   btn.textContent = '…';
   btn.disabled = true;
@@ -362,18 +371,17 @@ function loadArtistRadio(btn) {
     .then(tracks => {
       btn.textContent = origText;
       btn.disabled = false;
-      const shelf = tile ? tile.closest('.shelf') : null;
-      if (!shelf) return;
-      let existing = shelf.nextElementSibling;
+      if (!anchor) return;
+      let existing = anchor.nextElementSibling;
       if (existing && existing.classList.contains('radio-results')) existing.remove();
-      if (!tracks || !tracks.length) return;
+      if (!tracks || !tracks.length) { showToast('No similar tracks found'); return; }
       const div = document.createElement('div');
       div.className = 'radio-results';
       div.innerHTML = `<div class="radio-label">↺ Similar to ${esc(artistName)}</div>
         <div class="disc-track-list card-list">` +
         tracks.slice(0, 10).map(t => trackCardHtml(t)).join('') +
         `</div>`;
-      shelf.insertAdjacentElement('afterend', div);
+      anchor.insertAdjacentElement('afterend', div);
       document.querySelectorAll('.shelf-tile.active').forEach(t => t.classList.remove('active'));
     })
     .catch(() => {

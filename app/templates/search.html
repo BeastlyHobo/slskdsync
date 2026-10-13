@@ -27,6 +27,38 @@
   </div>
 </div>
 
+<style>
+/* Song page */
+.song-hero { display:flex; gap:1rem; align-items:flex-end; margin:.4rem 0 .8rem; }
+.song-cover { width:132px; height:132px; flex-shrink:0; border-radius:var(--radius-sm);
+  object-fit:cover; background:var(--surface2); box-shadow:var(--shadow-lg); }
+.song-cover-ph { display:flex; align-items:center; justify-content:center; color:var(--text-muted); }
+.song-hero-info { min-width:0; flex:1; }
+.song-kicker { font-size:.6875rem; font-weight:700; color:var(--text-faint);
+  text-transform:uppercase; letter-spacing:.06em; }
+.song-title { font-size:1.3rem; font-weight:800; line-height:1.15; letter-spacing:-.01em;
+  margin:.15rem 0 .3rem; overflow-wrap:anywhere; }
+.song-version { font-weight:600; color:var(--text-muted); font-size:.95rem; }
+.song-by { font-size:.85rem; color:var(--text-muted); }
+.song-meta { font-size:.75rem; color:var(--text-faint); margin-top:.25rem; }
+.song-status { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; font-size:.8rem;
+  font-weight:600; padding:.55rem .75rem; border-radius:var(--radius-sm);
+  background:var(--surface2); border:1px solid var(--border); margin-bottom:.7rem; }
+.song-status.ok { color:var(--ok); }
+.song-status-link { margin-left:auto; font-weight:600; }
+.song-preview { width:100%; height:40px; margin-bottom:.2rem; }
+.song-hint { font-size:.6875rem; color:var(--text-faint); margin-bottom:.7rem; }
+.song-facts { display:grid; grid-template-columns:auto 1fr; gap:.32rem .9rem; font-size:.78rem;
+  padding:.7rem .8rem; background:var(--surface2); border-radius:var(--radius-sm); margin:.8rem 0; }
+.song-facts .k { color:var(--text-faint); white-space:nowrap; }
+.song-facts .v { color:var(--text); overflow-wrap:anywhere; }
+.song-section { display:flex; justify-content:space-between; align-items:baseline; gap:.5rem;
+  margin:1.1rem 0 .45rem; }
+.song-section .track-link { font-size:.75rem; text-transform:none; letter-spacing:0; font-weight:600; }
+.track-card[data-action="song"], .top-track-row[data-action="song"] { cursor:pointer; }
+.track-card.track-current { border-color:var(--accent); }
+</style>
+
 <script>
 const input = document.getElementById('q');
 const clearBtn = document.getElementById('clear-btn');
@@ -79,20 +111,53 @@ fetch('/api/status/sources').then(r => r.json()).then(d => {
   if (!d.monochrome) document.body.classList.add('no-mono');
 }).catch(() => {});
 
-// Restore last search on page load
+function setTab(tab) {
+  activeTab = tab;
+  tabBar.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+}
+
+// Other tabs link here for song/artist/album pages (see songUrl & co. in
+// base.html); with no link, restore the last search.
 (function() {
-  const q = sessionStorage.getItem('ss_query');
-  const tab = sessionStorage.getItem('ss_tab');
+  const P = new URLSearchParams(location.search);
+  const g = k => P.get(k) || '';
+  if (P.has('song')) {
+    loadSong({id: g('id'), title: g('title'), artist: g('artist'), album: g('album'), cover: g('cover'),
+              artist_id: g('artist_id'), album_id: g('album_id'), duration: +g('duration') || 0});
+    return;
+  }
+  if (g('artist_id')) { loadArtist(g('artist_id'), g('name')); return; }
+  if (g('album_id'))  { loadAlbum(g('album_id'), g('name'), g('artist'), g('cover')); return; }
+  if (g('album_name'))  { findAndOpen('album', g('album_name'), g('artist_name')); return; }
+  if (g('artist_name')) { findAndOpen('artist', g('artist_name'), ''); return; }
+  const q = g('q') || sessionStorage.getItem('ss_query');
+  const tab = g('type') || sessionStorage.getItem('ss_tab');
   if (q) {
     input.value = q;
     clearBtn.classList.add('visible');
-    if (tab) {
-      activeTab = tab;
-      tabBar.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-    }
+    if (tab) setTab(tab);
     triggerSearch(q);
   }
 })();
+
+// A Library artist/album has a name, not a catalog id: look it up and open
+// the best match, falling back to the result list.
+function findAndOpen(kind, name, artist) {
+  const q = kind === 'album' ? `${artist} ${name}`.trim() : name;
+  input.value = q;
+  clearBtn.classList.add('visible');
+  setTab(kind);
+  area.innerHTML = '<div class="loading"><span class="spinner"></span>Looking up…</div>';
+  fetch(`/api/search?type=${kind}&q=${encodeURIComponent(q)}`).then(r => r.json()).then(items => {
+    const n = s => (s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const hit = kind === 'artist'
+      ? items.find(a => n(a.name) === n(name))
+      : items.find(a => n(a.title) === n(name) && (!artist || n(a.artist) === n(artist)));
+    if (!hit) { kind === 'artist' ? renderArtists(items) : renderAlbums(items); return; }
+    if (kind === 'artist') loadArtist(hit.id, hit.name);
+    else loadAlbum(hit.id, hit.title, hit.artist, hit.cover);
+  }).catch(() => { area.innerHTML = '<div class="loading">Lookup failed — try again.</div>'; });
+}
 
 // ── Tabs ──────────────────────────────────────────────────────────────────
 tabBar.addEventListener('click', e => {
@@ -135,17 +200,23 @@ function reset() {
   area.innerHTML = '<div class="empty-state"><div class="empty-icon">' + window.icon('music', 40) + '</div><p>Search to discover music</p></div>';
 }
 
+let _searchSeq = 0;
 function triggerSearch(q) {
+  if (!q) { reset(); return; }
   sessionStorage.setItem('ss_query', q);
   sessionStorage.setItem('ss_tab', activeTab);
   saveHistory(q);
   area.innerHTML = '<div class="loading"><span class="spinner"></span>Searching…</div>';
-  fetch(`/api/search?q=${encodeURIComponent(q)}&type=${activeTab}`)
+  // A slow earlier query (or one for the other tab) mustn't overwrite the
+  // results of the latest one.
+  const seq = ++_searchSeq, tab = activeTab;
+  fetch(`/api/search?q=${encodeURIComponent(q)}&type=${tab}`)
     .then(r => r.json())
     .then(data => {
-      if (activeTab === 'track')  renderTracks(data, {album:'', cover:'', artist:''});
-      if (activeTab === 'artist') renderArtists(data);
-      if (activeTab === 'album')  renderAlbums(data);
+      if (seq !== _searchSeq || navStack.length) return;
+      if (tab === 'track')  renderTracks(data, {album:'', cover:'', artist:''});
+      if (tab === 'artist') renderArtists(data);
+      if (tab === 'album')  renderAlbums(data);
     })
     .catch(() => { area.innerHTML = '<div class="loading">Search failed — try again.</div>'; });
 }
@@ -182,6 +253,11 @@ area.addEventListener('click', e => {
     loadAlbum(albumEl.dataset.id, albumEl.dataset.name, albumEl.dataset.artist, albumEl.dataset.cover);
     return;
   }
+  // Anywhere else on a track row: its song page
+  const songEl = e.target.closest('[data-action="song"]');
+  if (songEl && !e.target.closest('button, a, audio')) {
+    try { loadSong(JSON.parse(songEl.dataset.song)); } catch (err) {}
+  }
 });
 function renderBreadcrumb() {
   if (!navStack.length) { breadcrumbEl.classList.add('hidden'); return; }
@@ -197,11 +273,26 @@ function renderBreadcrumb() {
   breadcrumbEl.innerHTML = parts.join('');
 }
 
-function navTo(idx) {
+// Each drill-down is a history entry so the phone's back gesture steps back
+// through artist/album/song pages instead of leaving Search.
+function pushFrame(frame) {
+  navStack.push(frame);
+  try { history.pushState({sdepth: navStack.length}, ''); } catch (e) {}
+  renderBreadcrumb();
+}
+window.addEventListener('popstate', e => {
+  const d = (e.state && e.state.sdepth) || 0;
+  if (d < navStack.length) navTo(d - 1, true);
+  else if (d > navStack.length) history.back();   // entry left over from a reset stack
+});
+
+function navTo(idx, fromHistory) {
+  // Breadcrumb taps go through history too, so Back stays in step.
+  if (!fromHistory && navStack.length - (idx + 1) > 0) { history.go((idx + 1) - navStack.length); return; }
   if (idx === -1) {
     navStack = [];
     renderBreadcrumb();
-    triggerSearch(input.value.trim());
+    triggerSearch(input.value.trim());   // empty box → the start screen
     return;
   }
   const frame = navStack[idx];
@@ -217,6 +308,7 @@ function renderTracks(tracks, albumCtx) {
     return;
   }
   const html = tracks.map(t => trackCardHtml({
+    id: t.id,
     title: t.title,
     artist: t.artist,
     album: t.album || albumCtx.album,
@@ -257,7 +349,7 @@ function trackCardHtml(t, hideDrillLinks) {
         data-album="${esc(t.album||'')}"
         data-cover="${esc(t.cover||'')}">TIDAL</button>`;
   return `
-  <div class="track-card${inLib ? ' track-in-lib' : ''}">
+  <div class="track-card${inLib ? ' track-in-lib' : ''}" data-action="song" data-song="${esc(JSON.stringify(t))}">
     ${t.cover
       ? `<img class="cover" src="${esc(t.cover)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
          <div class="cover-placeholder" style="display:none">${window.icon('music', 18)}</div>`
@@ -291,9 +383,8 @@ function renderArtists(artists) {
   area.innerHTML = `<div class="card-list">${html}</div>`;
 }
 
-function loadArtist(id, name) {
-  navStack.push({ name, restore: () => loadArtist(id, name) });
-  renderBreadcrumb();
+function loadArtist(id, name, restoring) {
+  if (!restoring) pushFrame({ name, restore: () => loadArtist(id, name, true) });
   area.innerHTML = '<div class="loading"><span class="spinner"></span>Loading…</div>';
   fetch(`/api/artist/${id}`)
     .then(r => r.json())
@@ -338,7 +429,7 @@ function renderArtistPage(data) {
             data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
             data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">TIDAL</button>`;
       return `
-      <div class="top-track-row${inLib ? ' track-in-lib' : ''}">
+      <div class="top-track-row${inLib ? ' track-in-lib' : ''}" data-action="song" data-song="${esc(JSON.stringify(t))}">
         <span class="top-track-num">${i + 1}</span>
         <div class="top-track-info">
           <div class="top-track-title">${esc(t.title)}${inLib ? ' <span class="in-lib-badge">✓</span>' : queued ? ' <span class="in-lib-badge">⏳</span>' : ''}</div>
@@ -384,9 +475,8 @@ function renderAlbums(albums) {
   area.innerHTML = `<div class="album-grid">${html}</div>`;
 }
 
-function loadAlbum(id, title, artist, cover) {
-  navStack.push({ name: title, restore: () => loadAlbum(id, title, artist, cover) });
-  renderBreadcrumb();
+function loadAlbum(id, title, artist, cover, restoring) {
+  if (!restoring) pushFrame({ name: title, restore: () => loadAlbum(id, title, artist, cover, true) });
   area.innerHTML = '<div class="loading"><span class="spinner"></span>Loading…</div>';
   fetch(`/api/album/${id}`)
     .then(r => r.json())
@@ -409,8 +499,21 @@ function renderAlbumPage(data, fallbackCover) {
         : `<div class="album-header-cover-ph">${window.icon('disc', 32)}</div>`}
       <div class="album-header-info">
         <div class="album-header-title">${esc(data.title)}</div>
-        <div class="album-header-artist">${esc(data.artist)}</div>
-        ${data.release_date ? `<div class="album-sub" style="margin-top:4px">${data.release_date.slice(0,4)}</div>` : ''}
+        <div class="album-header-artist">${data.artist_id
+          ? `<span class="track-link" data-action="artist" data-id="${esc(data.artist_id)}" data-name="${esc(data.artist)}">${esc(data.artist)}</span>`
+          : esc(data.artist)}</div>
+        <div class="album-sub" style="margin-top:4px;white-space:normal">${[
+          data.record_type && data.record_type !== 'album' ? data.record_type.toUpperCase() : '',
+          (data.release_date || '').slice(0, 4),
+          data.tracks.length ? `${data.tracks.length} songs` : '',
+          data.duration ? fmtLong(data.duration) : '',
+        ].filter(Boolean).join(' · ')}</div>
+        ${data.label || (data.genres || []).length ? `<div class="album-sub" style="white-space:normal">${esc([(data.genres || []).join(', '), data.label].filter(Boolean).join(' · '))}</div>` : ''}
+        ${(() => {
+          const have = data.tracks.filter(t => libIndex.has(libKeyOf(t.artist || data.artist, t.title))).length;
+          return `<div class="album-sub" style="margin-top:4px;color:${have === data.tracks.length && have ? 'var(--ok)' : 'var(--text-muted)'}">${
+            have ? `✓ You have ${have} of ${data.tracks.length}` : 'None of these in your library yet'}</div>`;
+        })()}
       </div>
     </div>
     <div class="dl-all-row">
@@ -419,9 +522,12 @@ function renderAlbumPage(data, fallbackCover) {
     </div>`;
 
   const tracks = data.tracks.map(t => trackCardHtml({
+    id: t.id,
     title: t.title,
     artist: t.artist || data.artist,
+    artist_id: data.artist_id,
     album: data.title,
+    album_id: data.id,
     cover,
     duration: t.duration,
   }, true)).join('');
@@ -482,7 +588,112 @@ function queueAll(tracks, source) {
   .catch(() => showToast('Network error', 3000));
 }
 
+// ── Song page ─────────────────────────────────────────────────────────────
+// Everything about one song in one place: whether you have it (and a way to
+// its Library entry to ID/rename it), a 30-second preview to check by ear,
+// release and credits, the rest of its album and more by the artist.
+function libKeyOf(artist, title) {
+  return (artist || '').toLowerCase().trim() + '||' + (title || '').toLowerCase().trim();
+}
+
+function loadSong(t, restoring) {
+  if (!restoring) pushFrame({ name: t.title || 'Song', restore: () => loadSong(t, true) });
+  renderSongPage(t, null);
+  const withId = t.id ? Promise.resolve(t.id)
+    // Arrived from Queue/Library with just a name: find it in the catalog.
+    : fetch(`/api/search?type=track&q=${encodeURIComponent(`${t.artist} ${t.title}`)}`)
+        .then(r => r.json()).then(items => {
+          const n = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const hit = items.find(i => n(i.title) === n(t.title) && n(i.artist) === n(t.artist))
+                   || items.find(i => n(i.title).includes(n(t.title)) && n(i.artist) === n(t.artist));
+          return hit ? hit.id : '';
+        });
+  withId.then(id => id ? fetch(`/api/track/${id}`).then(r => r.json()) : null)
+    .then(d => {
+      if (navStack[navStack.length - 1]?.name !== (t.title || 'Song')) return;   // navigated away
+      if (d && !d.error) renderSongPage(Object.assign({}, t, d), d);
+      else renderSongPage(t, {});
+    }).catch(() => renderSongPage(t, {}));
+}
+
+function renderSongPage(t, d) {
+  const key = libKeyOf(t.artist, t.title);
+  const inLib = libIndex.has(key), queued = !inLib && queuedIndex.has(key);
+  const cover = t.cover || '';
+  const status = inLib
+    ? `<div class="song-status ok">✓ In your library
+         <a class="song-status-link" href="${esc(libraryUrl({song: t.artist + '||' + t.title}))}">Open · ID · rename ›</a></div>`
+    : queued
+    ? `<div class="song-status">⏳ In your queue <a class="song-status-link" href="/">Queue ›</a></div>`
+    : '';
+  const meta = [fmtDur(t.duration), (t.release_date || '').slice(0, 4), t.explicit ? 'Explicit' : '']
+    .filter(Boolean).join(' · ');
+  const facts = [];
+  if (d && d.release_date) facts.push(['Released', d.release_date]);
+  if (d && d.track_position) facts.push(['Track', `${d.track_position}${d.disk_number > 1 ? ` (disc ${d.disk_number})` : ''}`]);
+  if (d && d.bpm) facts.push(['BPM', Math.round(d.bpm)]);
+  if (d && d.isrc) facts.push(['ISRC', d.isrc]);
+  const credits = d && (d.contributors || []).filter(c => c.name && c.name !== t.artist);
+  if (credits && credits.length) facts.push(['With', credits.map(c => c.name).join(', ')]);
+
+  area.innerHTML = `
+    <div class="song-hero">
+      ${cover ? `<img class="song-cover" src="${esc(cover)}" alt="" onerror="this.style.visibility='hidden'">`
+              : `<div class="song-cover song-cover-ph">${window.icon('music', 40)}</div>`}
+      <div class="song-hero-info">
+        <div class="song-kicker">Song</div>
+        <h1 class="song-title">${esc(t.title)}${t.title_version && !t.title.includes(t.title_version) ? ` <span class="song-version">${esc(t.title_version)}</span>` : ''}</h1>
+        <div class="song-by">${t.artist_id
+          ? `<span class="track-link" data-action="artist" data-id="${esc(t.artist_id)}" data-name="${esc(t.artist)}">${esc(t.artist)}</span>`
+          : esc(t.artist)}${t.album ? ' · ' + (t.album_id
+          ? `<span class="track-link" data-action="album" data-id="${esc(t.album_id)}" data-name="${esc(t.album)}" data-artist="${esc(t.artist)}" data-cover="${esc(cover)}">${esc(t.album)}</span>`
+          : esc(t.album)) : ''}</div>
+        ${meta ? `<div class="song-meta">${esc(meta)}</div>` : ''}
+      </div>
+    </div>
+    ${status}
+    ${d && d.preview ? `<audio class="song-preview" controls preload="none" src="${esc(d.preview)}"></audio>
+       <div class="song-hint">30-second preview — handy for checking a download by ear.</div>` : ''}
+    ${queued ? '' : `<div class="dl-all-row">
+      <button class="btn-dl-all btn-slsk dl-btn" data-source="slskd" data-title="${esc(t.title)}"
+        data-artist="${esc(t.artist || '')}" data-album="${esc(t.album || '')}" data-cover="${esc(cover)}">⬇ Soulseek</button>
+      <button class="btn-dl-all btn-mono dl-btn" data-source="monochrome" data-title="${esc(t.title)}"
+        data-artist="${esc(t.artist || '')}" data-album="${esc(t.album || '')}" data-cover="${esc(cover)}">⬇ TIDAL</button>
+    </div>`}
+    ${facts.length ? `<div class="song-facts">${facts.map(([k, v]) =>
+      `<span class="k">${esc(k)}</span><span class="v">${esc(String(v))}</span>`).join('')}</div>` : ''}
+    ${d === null ? '<div class="loading"><span class="spinner"></span>Loading details…</div>' : ''}
+    <div id="song-album"></div>
+    <div id="song-more"></div>`;
+
+  if (!d) return;
+  const albumId = t.album_id || d.album_id, artistId = t.artist_id || d.artist_id;
+  if (albumId) fetch(`/api/album/${albumId}`).then(r => r.json()).then(a => {
+    const el = document.getElementById('song-album');
+    if (!el || a.error || !(a.tracks || []).length) return;
+    el.innerHTML = `<div class="section-label song-section">On ${esc(a.title)}
+        <span class="track-link" data-action="album" data-id="${esc(a.id)}" data-name="${esc(a.title)}" data-artist="${esc(a.artist)}" data-cover="${esc(a.cover)}">Full album ›</span></div>
+      <div class="card-list">${a.tracks.map(x => trackCardHtml({
+        id: x.id, title: x.title, artist: x.artist || a.artist, artist_id: a.artist_id,
+        album: a.title, album_id: a.id, cover: a.cover, duration: x.duration,
+      }, true).replace('class="track-card', x.id === String(t.id || d.id) ? 'class="track-card track-current' : 'class="track-card')).join('')}</div>`;
+  }).catch(() => {});
+  if (artistId) fetch(`/api/artist/${artistId}`).then(r => r.json()).then(a => {
+    const el = document.getElementById('song-more');
+    const top = (a.top_tracks || []).filter(x => x.id !== String(t.id || d.id)).slice(0, 5);
+    if (!el || a.error || !top.length) return;
+    el.innerHTML = `<div class="section-label song-section">More by ${esc(a.name)}
+        <span class="track-link" data-action="artist" data-id="${esc(a.id)}" data-name="${esc(a.name)}">Artist ›</span></div>
+      <div class="card-list">${top.map(x => trackCardHtml(x)).join('')}</div>`;
+  }).catch(() => {});
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────
+function fmtLong(s) {
+  const m = Math.round(s / 60);
+  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+}
+
 function fmtDur(s) {
   if (!s) return '';
   return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;

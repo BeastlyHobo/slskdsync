@@ -155,3 +155,114 @@ def test_worker_survives_a_failing_scheduled_step(A, monkeypatch):
     t.start()
     t.join(timeout=10)
     assert not t.is_alive(), "worker thread died instead of logging and continuing"
+
+
+def test_acoustid_ids_scope_verifies_only_the_given_rows(A, auth, monkeypatch):
+    """A filtered Library view verifies what it shows, not the whole library."""
+    conn = A.get_conn()
+    for i in (1, 2, 3):
+        conn.execute("INSERT INTO library_index(id, artist, title, path) VALUES (?,?,?,?)",
+                     (i, "A", f"T{i}", f"/music/A/T{i}.mp3"))
+    conn.commit()
+    conn.close()
+    got = {}
+    A.set_setting("acoustid_api_key", "k")
+    monkeypatch.setattr(A, "_run_lib_acoustid", lambda ids, table: got.update(ids=ids, table=table))
+    r = auth.post("/api/library/acoustid", json={"scope": "ids", "ids": [1, 3, 99, "2"]})
+    assert r.get_json() == {"ok": True, "total": 2}
+    assert sorted(got["ids"]) == [1, 3] and got["table"] == "library_index"
+
+
+def _lib_rows(A):
+    conn = A.get_conn()
+    rows = {r["path"]: dict(r) for r in conn.execute("SELECT * FROM library_index")}
+    conn.close()
+    return rows
+
+
+def test_rescan_keeps_ids_dates_and_verdicts_by_path(A, tmp_path):
+    root = tmp_path / "music"
+    for name in ("a", "b"):
+        (root / "Art" / "Alb").mkdir(parents=True, exist_ok=True)
+        (root / "Art" / "Alb" / f"{name}.mp3").write_bytes(b"x")
+    A.set_setting("library_path", str(root))
+    A.set_setting("navidrome_user", "")
+    A.scan_library()
+    before = _lib_rows(A)
+    a = str(root / "Art" / "Alb" / "a.mp3")
+    conn = A.get_conn()
+    conn.execute("UPDATE library_index SET acoustid_score=0.9, indexed_at='2020-01-01 00:00:00'"
+                 " WHERE path=?", (a,))
+    conn.commit(); conn.close()
+    (root / "Art" / "Alb" / "c.mp3").write_bytes(b"x")
+    A.scan_library()
+    after = _lib_rows(A)
+    assert after[a]["id"] == before[a]["id"]
+    assert after[a]["acoustid_score"] == 0.9
+    # filesystem scans date a file by its mtime, which beats the stored date
+    assert after[a]["indexed_at"] != "2020-01-01 00:00:00"
+    assert len(after) == 3 and len({r["id"] for r in after.values()}) == 3
+
+
+def test_a_scan_that_cannot_read_the_library_keeps_the_index(A, tmp_path):
+    conn = A.get_conn()
+    conn.execute("INSERT INTO library_index(artist,title,path,acoustid_score)"
+                 " VALUES('A','T','/m/t.mp3',0.9)")
+    conn.commit(); conn.close()
+    A.set_setting("library_path", str(tmp_path / "not-mounted"))
+    A.set_setting("navidrome_user", "")
+    A.scan_library()
+    assert list(_lib_rows(A)) == ["/m/t.mp3"]
+    assert A._scan_state["in_progress"] is False
+
+
+def test_finished_download_is_indexed_and_clears_stale_state(A, job):
+    conn = A.get_conn()
+    conn.execute("INSERT INTO tracks(job_id,artist,album,title) VALUES(?,'Art','Alb','Song')", (job,))
+    conn.execute("INSERT INTO bad_flags(path) VALUES('/m/s.flac')")
+    conn.execute("INSERT INTO library_index(artist,title,path,acoustid_score) VALUES('X','Y','/m/s.flac',0)")
+    t = conn.execute("SELECT * FROM tracks").fetchone()
+    A._index_download(conn, t, "/m/s.flac", (0.95, "Song", "Art"))
+    conn.commit()
+    rows = conn.execute("SELECT * FROM library_index").fetchall()
+    assert [(r["artist"], r["title"], r["acoustid_score"]) for r in rows] == [("Art", "Song", 0.95)]
+    assert conn.execute("SELECT COUNT(*) FROM bad_flags").fetchone()[0] == 0
+    conn.close()
+
+
+def test_ai_suggest_sends_anthropic_structured_output_shape(A, auth, job, monkeypatch):
+    """format must be {"type": "json_schema", "schema": {...}} — the nested
+    OpenAI-style {"json_schema": {"name", "schema"}} made every call a 400."""
+    pytest.importorskip("anthropic")
+    from anthropic.types import JSONOutputFormatParam
+    sent = {}
+
+    class FakeMessages:
+        def create(self, **kw):
+            sent.update(kw)
+            block = type("B", (), {"type": "text", "text": '{"queries": [{"q": "a b", "why": "x"}]}'})
+            return type("R", (), {"content": [block]})
+
+    class FakeClient:
+        def __init__(self, **kw):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(A._anthropic, "Anthropic", FakeClient)
+    A.set_setting("anthropic_api_key", "k")
+    conn = A.get_conn()
+    conn.execute("INSERT INTO tracks(job_id,artist,title) VALUES(?,'A','T')", (job,))
+    conn.commit(); conn.close()
+    r = auth.post("/api/tracks/1/ai-suggest").get_json()
+    assert r["ok"] and r["suggestions"][0]["q"] == "a b"
+    fmt = sent["output_config"]["format"]
+    assert set(fmt) == set(JSONOutputFormatParam.__annotations__)
+    assert fmt["schema"]["required"] == ["queries"]
+
+
+def test_acoustid_without_a_key_says_so(A, auth):
+    conn = A.get_conn()
+    conn.execute("INSERT INTO library_index(id, artist, title, path) VALUES (1,'A','T','/m/t.mp3')")
+    conn.commit(); conn.close()
+    r = auth.post("/api/library/acoustid", json={"scope": "track", "id": 1})
+    assert r.status_code == 400 and "AcoustID API key" in r.get_json()["error"]
+    assert A._lib_acoustid_state["in_progress"] is False

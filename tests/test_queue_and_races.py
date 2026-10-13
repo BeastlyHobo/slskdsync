@@ -182,3 +182,19 @@ def test_retry_of_never_downloaded_track_does_not_force_replace(A, auth, job):
     r = _row(A, tid)
     assert r["force_overwrite"] == 0
     assert r["replace_path"] is None
+
+
+def test_scorer_prefers_the_right_song_over_a_better_format(appmod):
+    """A FLAC of the wrong song (or the same title by someone else) used to
+    outscore the right song as an MP3."""
+    A = appmod
+    c = A.SlskdClient()
+    m = A.TrackMeta("Radiohead", "Pablo Honey", "Creep", 2)
+    right = c.score_result({"filename": r"Radiohead\Pablo Honey\02 - Creep.mp3", "bitRate": 320}, m)
+    other_song = c.score_result({"filename": r"Radiohead - Creep EP\03 - Inside My Pocket.flac"}, m)
+    other_artist = c.score_result({"filename": r"Stone Temple Pilots\Core\06 - Creep.flac"}, m)
+    assert other_song < 0
+    assert right > other_artist > 0
+    # punctuation and accents don't fake a title/artist miss
+    m2 = A.TrackMeta("Björk", "", "Don't Be Sad", 1)
+    assert c.score_result({"filename": r"Bjork\01 - Dont Be Sad.flac"}, m2) > 100

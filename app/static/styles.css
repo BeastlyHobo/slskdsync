@@ -350,7 +350,7 @@ a:hover { text-decoration: underline; }
 main {
   flex: 1;
   padding: clamp(16px,3vw,30px);
-  padding-bottom: calc(var(--nav-h) + var(--inset-bottom) + 24px);
+  padding-bottom: 24px;
   max-width: var(--content-max);
   width: 100%;
   margin: 0 auto;
@@ -361,27 +361,32 @@ main {
 }
 
 /* ── Bottom navigation (mobile <920px) ──────────────────── */
+/* On phones the document itself never scrolls: body is a full-height column,
+   .content-col is the scroller and the nav is the column's last row. A
+   position:fixed bar (even promoted with translateZ) kept getting stranded
+   mid-screen on iOS — after momentum scrolling and, above all, after the
+   keyboard closed on the Search box and left the page offset. A bar that is
+   simply in flow at the bottom of a non-scrolling body has nothing to drift. */
+@media (max-width: 919px) {
+  html, body { height: 100%; overflow: hidden; }
+  body { display: flex; flex-direction: column; }
+  .app-shell { flex: 1; min-height: 0; }
+  .content-col {
+    height: 100%;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
 .bottom-nav {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  min-height: var(--nav-h);
+  flex-shrink: 0;
+  min-height: calc(var(--nav-h) + var(--inset-bottom));
   padding-bottom: var(--inset-bottom);
   background: var(--bar);
-  -webkit-backdrop-filter: var(--bar-blur);
-  backdrop-filter: var(--bar-blur);
   border-top: 1px solid var(--border);
   display: flex;
   z-index: 100;
-  /* iOS composites a backdrop-filtered fixed bar on its own, and during
-     momentum scrolling it can be left painted at a stale offset — the bar
-     stranded mid-screen with untouched pixels below it. Promoting it to its
-     own layer up front, and telling the compositor the position is what
-     changes, keeps it pinned. */
-  -webkit-transform: translateZ(0);
-  transform: translateZ(0);
-  will-change: transform;
 }
 
 @media (min-width: 920px) {
@@ -409,17 +414,16 @@ main {
 .bottom-nav a.active,
 .bottom-nav a:hover { color: var(--accent); text-decoration: none; }
 
-.bottom-nav a.active::before {
-  content: "";
-  position: absolute;
-  top: 4px;
-  width: 44px;
+/* The active pill is the icon's own background, so it can't drift away from
+   the icon the way an absolutely-placed ::before did once the bar's height
+   started to include the home-indicator inset. */
+.bottom-nav .nav-icon {
+  width: 48px;
   height: 28px;
   border-radius: var(--radius-pill);
-  background: var(--accent-soft);
+  transition: background .15s;
 }
-
-.bottom-nav .nav-icon { z-index: 1; }
+.bottom-nav a.active .nav-icon { background: var(--accent-soft); }
 .bottom-nav .nav-icon svg { width: 21px; height: 21px; }
 
 /* ── Flash messages ─────────────────────────────────────── */
@@ -702,6 +706,8 @@ main {
 }
 
 .search-input::placeholder { color: var(--text-muted); }
+/* The page draws its own clear button; hide the native one so there aren't two. */
+.search-input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 .search-input:focus { border-color: var(--accent); }
 
 .search-clear {
@@ -1285,10 +1291,10 @@ main {
 
 .coll-row:hover { background: var(--surface2); }
 
-/* Eight nav items don't fit at iPhone-SE width once labels are legible. Rather
+/* Narrower than ~340px the six labels collide. Rather
    than shrink the text back below the floor, drop to icons only; the label
    stays in the DOM for screen readers. */
-@media (max-width: 359px) {
+@media (max-width: 339px) {
   .bottom-nav .nav-label {
     position: absolute;
     width: 1px; height: 1px;
@@ -1439,7 +1445,7 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
   letter-spacing: 0.04em;
   padding: 0.45rem 0.5rem 0.2rem;
   position: sticky;
-  top: 52px;
+  top: calc(var(--topbar-h) + var(--inset-top));
   background: var(--bg);
   z-index: 2;
 }
@@ -1542,14 +1548,6 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
   font-size: 0.9rem;
 }
 
-/* AcoustID filter row */
-#aid-filter-row {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-}
-
 /* Library search input */
 #lib-search {
   width: 100%;
@@ -1570,7 +1568,7 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
 #back-row {
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 0.45rem;
+  margin-bottom: 0.3rem;
 }
 
 #back-btn {
@@ -1584,22 +1582,6 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
   display: flex;
   align-items: center;
   gap: 0.3rem;
-}
-
-#view-title {
-  font-size: 0.88rem;
-  font-weight: 700;
-  flex: 1;
-  text-align: center;
-  margin-right: 2rem;
-}
-
-/* Verify progress row */
-#verify-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
 }
 
 .aid-progress-bar-wrap {
@@ -2064,6 +2046,14 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
   color: var(--text-faint);
   font-family: var(--font-mono);
 }
+.pl-regen-result:empty { display: none; }
+a.pl-regen-btn { text-decoration: none; }
+
+/* On a phone the source badge repeats the first word of the line under the
+   name and squeezed the name down to a wrapping sliver. */
+@media (max-width: 599px) {
+  .pl-header .pl-source-badge { display: none; }
+}
 
 .pl-missing {
   display: none;
@@ -2289,6 +2279,17 @@ button > .icon, a > .icon, .att-title > .icon { margin-right: .3em; }
   font-family: var(--font-ui);
   white-space: nowrap;
 }
+
+.btn-tile-info {
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn-tile-info:hover { text-decoration: underline; }
 
 /* Genre chips toggle */
 .genre-toggle-wrap {
