@@ -4286,13 +4286,8 @@ def playlists():
 
 @app.route("/library")
 def library():
-    music_path_str = str(get_setting("library_path") or "/music")
     conn = get_conn()
-    lib_rows = conn.execute(
-        "SELECT id, artist, title, album, path, user_rating, cover_art_id, acoustid_score,"
-        " acoustid_title, acoustid_artist, indexed_at FROM library_index"
-    ).fetchall()
-    bad_paths = {r["path"] for r in conn.execute("SELECT path FROM bad_flags")}
+    needs_scan = conn.execute("SELECT 1 FROM library_index LIMIT 1").fetchone() is None
     playlist_rows = conn.execute("""
         SELECT j.id, j.playlist_name, j.source, j.source_url, j.created_at,
                COUNT(t.id) AS total,
@@ -4303,66 +4298,77 @@ def library():
         GROUP BY j.id HAVING COUNT(t.id) > 0 ORDER BY j.created_at DESC
     """).fetchall()
     conn.close()
-
-    needs_scan = False
-    if lib_rows:
-        tracks = []
-        for r in lib_rows:
-            p = r["path"] or ""
-            # rsplit instead of Path(): this runs once per library row per page load
-            base = p.rsplit("/", 1)[-1]
-            ext = base.rsplit(".", 1)[1].upper() if "." in base else ""
-            tracks.append({
-                "id":          r["id"],
-                "artist":      r["artist"] or "",
-                "album":       r["album"] or "",
-                "title":       r["title"] or "",
-                "size_mb":     0,
-                "ext":         ext,
-                "path":        p,
-                "user_rating": r["user_rating"],
-                "cover_url":   f"/api/library/cover/{r['cover_art_id']}" if r["cover_art_id"] else "",
-                "acoustid_score": r["acoustid_score"],
-                "acoustid_title":  r["acoustid_title"] or "",
-                "acoustid_artist": r["acoustid_artist"] or "",
-                "indexed_at":  r["indexed_at"] or "",
-                "flagged_bad": (p in bad_paths),
-            })
-    else:
-        needs_scan = True
-        tracks = []
-        music_path = Path(music_path_str)
-        if music_path.exists():
-            num_re = re.compile(r"^\d+\s*[-\.]\s*")
-            for f in sorted(music_path.rglob("*")):
-                if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
-                    continue
-                parts = f.relative_to(music_path).parts
-                artist = parts[0] if len(parts) >= 3 else ""
-                album  = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
-                title  = num_re.sub("", f.stem)
-                size_mb = round(f.stat().st_size / 1_048_576, 1)
-                tracks.append({
-                    "id":          None,
-                    "artist":      artist,
-                    "album":       album,
-                    "title":       title,
-                    "size_mb":     size_mb,
-                    "ext":         f.suffix[1:].upper(),
-                    "path":        str(f),
-                    "user_rating": None,
-                    "cover_url":   "",
-                    "acoustid_score": None,
-                    "indexed_at":  "",
-                    "flagged_bad": (str(f) in bad_paths),
-                })
     playlists = [dict(r) for r in playlist_rows]
     # Browser-reachable Navidrome URL for deep links; the plain navidrome_url is
     # often a docker-internal hostname the user's browser can't resolve.
     nav_public = (get_setting("navidrome_public_url") or get_setting("navidrome_url") or "").rstrip("/")
-    return render_template("library.html", tracks=tracks, playlists=playlists,
-                           music_path=music_path_str, needs_scan=needs_scan,
+    return render_template("library.html", playlists=playlists, needs_scan=needs_scan,
                            nav_public=nav_public, title="Library")
+
+
+def _library_tracks() -> list[dict]:
+    """Every library track, as compact as the page can use: empty fields are
+    left out (the page fills defaults) and the extension and cover URL are
+    derived client-side. This used to be inlined into the /library HTML —
+    several MB at 20k tracks, rebuilt, compressed and re-sent on every visit."""
+    conn = get_conn()
+    lib_rows = conn.execute(
+        "SELECT id, artist, title, album, path, user_rating, cover_art_id, acoustid_score,"
+        " acoustid_title, acoustid_artist, indexed_at FROM library_index"
+    ).fetchall()
+    bad_paths = {r["path"] for r in conn.execute("SELECT path FROM bad_flags")}
+    conn.close()
+    tracks = []
+    if lib_rows:
+        for r in lib_rows:
+            t = {"id": r["id"], "artist": r["artist"] or "", "album": r["album"] or "",
+                 "title": r["title"] or "", "path": r["path"] or "",
+                 "indexed_at": r["indexed_at"] or ""}
+            if r["user_rating"] is not None:
+                t["user_rating"] = r["user_rating"]
+            if r["cover_art_id"]:
+                t["cover"] = r["cover_art_id"]
+            if r["acoustid_score"] is not None:
+                t["acoustid_score"] = r["acoustid_score"]
+            if r["acoustid_title"]:
+                t["acoustid_title"] = r["acoustid_title"]
+            if r["acoustid_artist"]:
+                t["acoustid_artist"] = r["acoustid_artist"]
+            if t["path"] in bad_paths:
+                t["flagged_bad"] = True
+            tracks.append(t)
+        return tracks
+    # Never scanned: show what's on disk so the page isn't empty meanwhile.
+    music_path = Path(get_setting("library_path") or "/music")
+    if music_path.exists():
+        num_re = re.compile(r"^\d+\s*[-\.]\s*")
+        for f in sorted(music_path.rglob("*")):
+            if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
+                continue
+            parts = f.relative_to(music_path).parts
+            t = {"id": None,
+                 "artist": parts[0] if len(parts) >= 3 else "",
+                 "album": parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else ""),
+                 "title": num_re.sub("", f.stem), "path": str(f), "indexed_at": ""}
+            if str(f) in bad_paths:
+                t["flagged_bad"] = True
+            tracks.append(t)
+    return tracks
+
+
+@app.route("/api/library/tracks")
+def api_library_tracks():
+    """The Library page's data. Revalidated with an ETag, so an unchanged
+    library costs a 304 instead of a re-download and re-compression."""
+    body = json.dumps(_library_tracks(), separators=(",", ":")).encode()
+    etag = hashlib.sha1(body).hexdigest()
+    if etag in (request.if_none_match or ()):
+        resp = app.response_class(status=304)
+    else:
+        resp = app.response_class(body, mimetype="application/json")
+    resp.set_etag(etag)
+    resp.headers["Cache-Control"] = "no-cache"   # always revalidate, never stale
+    return resp
 
 
 @app.route("/api/library/cover/<path:cover_art_id>")
@@ -4899,10 +4905,21 @@ def api_library_acoustid_scores():
     re-fetched the server-rendered data, which is exactly the "nothing appears
     until I navigate away and back" symptom.
     """
+    # ?ids=1,2,3 narrows it to the rows just verified — the whole table is
+    # most of a megabyte at 20k tracks, refetched after every single-song ID.
+    want = [int(x) for x in (request.args.get("ids") or "").split(",") if x.strip().isdigit()]
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT id, acoustid_score, acoustid_title, acoustid_artist FROM library_index"
-    ).fetchall()
+    if want:
+        rows = []
+        for k in range(0, len(want), 500):
+            chunk = want[k:k + 500]
+            rows += conn.execute(
+                "SELECT id, acoustid_score, acoustid_title, acoustid_artist FROM library_index"
+                f" WHERE id IN ({','.join('?' * len(chunk))})", chunk).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, acoustid_score, acoustid_title, acoustid_artist FROM library_index"
+        ).fetchall()
     conn.close()
     return jsonify({r["id"]: {"score":  r["acoustid_score"],
                               "title":  r["acoustid_title"] or "",

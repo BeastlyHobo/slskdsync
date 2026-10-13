@@ -266,3 +266,33 @@ def test_acoustid_without_a_key_says_so(A, auth):
     r = auth.post("/api/library/acoustid", json={"scope": "track", "id": 1})
     assert r.status_code == 400 and "AcoustID API key" in r.get_json()["error"]
     assert A._lib_acoustid_state["in_progress"] is False
+
+
+def test_library_tracks_are_compact_and_revalidated(A, auth):
+    conn = A.get_conn()
+    conn.execute("INSERT INTO library_index(id,artist,title,album,path,cover_art_id,acoustid_score)"
+                 " VALUES (1,'A','T','Al','/m/a.flac','al-1',0.9)")
+    conn.execute("INSERT INTO library_index(id,artist,title,album,path) VALUES (2,'B','U','','/m/b.mp3')")
+    conn.execute("INSERT INTO bad_flags(path) VALUES('/m/b.mp3')")
+    conn.commit(); conn.close()
+    r = auth.get("/api/library/tracks")
+    rows = {t["id"]: t for t in r.get_json()}
+    assert rows[1]["cover"] == "al-1" and rows[1]["acoustid_score"] == 0.9
+    assert "acoustid_score" not in rows[2] and rows[2]["flagged_bad"] is True
+    etag = r.headers["ETag"]
+    again = auth.get("/api/library/tracks", headers={"If-None-Match": etag})
+    assert again.status_code == 304 and not again.data
+    conn = A.get_conn()
+    conn.execute("UPDATE library_index SET title='T2' WHERE id=1")
+    conn.commit(); conn.close()
+    assert auth.get("/api/library/tracks", headers={"If-None-Match": etag}).status_code == 200
+
+
+def test_acoustid_scores_can_be_narrowed_to_ids(A, auth):
+    conn = A.get_conn()
+    for i in (1, 2, 3):
+        conn.execute("INSERT INTO library_index(id,artist,title,path,acoustid_score) VALUES (?,?,?,?,0.5)",
+                     (i, "A", f"T{i}", f"/m/{i}.mp3"))
+    conn.commit(); conn.close()
+    assert set(auth.get("/api/library/acoustid/scores?ids=1,3").get_json()) == {"1", "3"}
+    assert len(auth.get("/api/library/acoustid/scores").get_json()) == 3

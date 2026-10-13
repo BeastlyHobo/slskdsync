@@ -359,7 +359,7 @@
 </style>
 
 <script>
-const ALL_TRACKS    = {{ tracks | tojson }};
+const ALL_TRACKS    = [];   // filled from /api/library/tracks before the first render
 const ALL_PLAYLISTS = {{ playlists | tojson }};
 const NAV_URL       = {{ nav_public | tojson }};
 
@@ -373,6 +373,7 @@ let aidRunning        = false;
 let _verifyingTrackId = null;   // id of the single track currently being verified
 let _verifyingBtn     = null;   // button that triggered single-track verify
 let _plTracks         = [];     // tracks currently shown in playlist-tracks view
+let _verifyIds        = null;   // library ids the running verify covers, when known
 
 // Natural order: "Song 2" before "Song 10", case- and accent-insensitive.
 const _coll = new Intl.Collator(undefined, {numeric:true, sensitivity:'base'});
@@ -489,6 +490,7 @@ function verifyLib(scope, params, btn) {
   if (aidRunning) return;
   if (btn) { btn._orig = btn.innerHTML; btn.disabled=true; btn.textContent='…'; }
   const restore = () => { if(btn){ btn.disabled=false; btn.innerHTML = btn._orig || '↻'; } };
+  _verifyIds = scope === 'track' ? [params.id] : scope === 'ids' ? params.ids : null;
   if (scope === 'track' && params.id != null) {
     _verifyingTrackId = params.id;
     _verifyingBtn     = btn || null;
@@ -537,7 +539,10 @@ function pollAid() {
     if (d.in_progress) { setTimeout(pollAid, 2000); return; }
     aidRunning = false;
     document.getElementById('aid-progress-wrap').style.display = 'none';
-    fetch('/api/library/acoustid/scores').then(r=>r.json()).then(scores => {
+    // Ask only for the rows this run touched when we know them.
+    const ids = _verifyIds && _verifyIds.length <= 400 ? _verifyIds : null;
+    fetch('/api/library/acoustid/scores' + (ids ? '?ids=' + ids.join(',') : ''))
+      .then(r=>r.json()).then(scores => {
       // Each entry is {score, title, artist} — the verdict has to land in
       // ALL_TRACKS too, or the modal has nothing to render until a page load.
       ALL_TRACKS.forEach(t => {
@@ -1647,10 +1652,25 @@ try {
     if (Array.isArray(saved.stack)) navStack.push(...saved.stack);
   }
 } catch(e) {}
+// The page ships without the library; it arrives from /api/library/tracks,
+// which the browser revalidates by ETag, so an unchanged library is a 304.
+// Fields left out of that compact payload get their defaults here.
+function normTrack(t) {
+  const base = (t.path || '').split('/').pop();
+  t.ext = base.includes('.') ? base.split('.').pop().toUpperCase() : '';
+  t.cover_url = t.cover ? '/api/library/cover/' + t.cover : '';
+  if (t.acoustid_score === undefined) t.acoustid_score = null;
+  if (t.user_rating === undefined) t.user_rating = null;
+  t.acoustid_title = t.acoustid_title || '';
+  t.acoustid_artist = t.acoustid_artist || '';
+  t.flagged_bad = !!t.flagged_bad;
+  return t;
+}
+
 // Links from other tabs (libraryUrl in base.html) open a page directly, with
 // Library home underneath so Back has somewhere to go.
 let _openOnLoad = null;
-(function () {
+function openFromLink() {
   const P = new URLSearchParams(location.search);
   const g = k => P.get(k) || '';
   const open = (v, c) => { navStack.length = 0; navStack.push({view: 'home', ctx: {}}); view = v; ctx = c; };
@@ -1673,13 +1693,27 @@ let _openOnLoad = null;
   saveNav();
   // Drop the query so a reload or a later visit doesn't re-open it.
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
-})();
+}
 
-baseDepth = navStack.length;
-try { history.replaceState({libDepth: navStack.length}, ''); } catch(e) {}
+function boot() {
+  openFromLink();
+  baseDepth = navStack.length;
+  try { history.replaceState({libDepth: navStack.length}, ''); } catch(e) {}
+  render();
+  if (_openOnLoad) showTrackInfo({dataset: {path: _openOnLoad.path}});
+}
 
-render();
-if (_openOnLoad) showTrackInfo({dataset: {path: _openOnLoad.path}});
+document.getElementById('lib-content').innerHTML = '<div class="empty-lib">Loading library…</div>';
+fetch('/api/library/tracks').then(r => {
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}).then(list => {
+  for (const t of list) ALL_TRACKS.push(normTrack(t));
+  boot();
+}).catch(() => {
+  document.getElementById('lib-content').innerHTML =
+    '<div class="empty-lib">Couldn\'t load your library. <button class="lib-sm-btn" onclick="location.reload()">Try again</button></div>';
+});
 </script>
 
 {% endblock %}
