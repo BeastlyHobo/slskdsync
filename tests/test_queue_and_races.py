@@ -198,3 +198,88 @@ def test_scorer_prefers_the_right_song_over_a_better_format(appmod):
     # punctuation and accents don't fake a title/artist miss
     m2 = A.TrackMeta("Björk", "", "Don't Be Sad", 1)
     assert c.score_result({"filename": r"Bjork\01 - Dont Be Sad.flac"}, m2) > 100
+
+
+def test_scorer_uses_song_length_when_known(appmod):
+    A = appmod
+    c = A.SlskdClient()
+    m = A.TrackMeta("Radiohead", "OK Computer", "Paranoid Android", 2, duration=383)
+    studio = {"filename": r"Radiohead\OK Computer\02 - Paranoid Android.mp3", "bitRate": 320, "length": 384}
+    live = {"filename": r"Radiohead\Bootlegs\02 - Paranoid Android.flac", "length": 452}
+    assert c.score_result(studio, m) > c.score_result(live, m)
+    # unknown length on either side changes nothing
+    assert c.score_result({**live, "length": 0}, m) == c.score_result(
+        live, A.TrackMeta("Radiohead", "OK Computer", "Paranoid Android", 2))
+
+
+def test_download_stores_the_song_length(A, auth):
+    auth.post("/api/download", json={"artist": "A", "title": "T", "duration": "238"})
+    auth.post("/api/download", json={"artist": "B", "title": "U", "duration": "nonsense"})
+    conn = A.get_conn()
+    got = {r["artist"]: r["duration"] for r in conn.execute("SELECT artist, duration FROM tracks")}
+    conn.close()
+    assert got == {"A": 238, "B": 0}
+
+
+def test_watch_folder_prefers_the_file_that_was_requested(A, job, tmp_path):
+    """Two same-titled files in the watch folder: the one slskd was asked for
+    wins, not whichever the title match finds first."""
+    watch = tmp_path / "dl"
+    (watch / "Other Album").mkdir(parents=True)
+    (watch / "Pablo Honey").mkdir()
+    other = watch / "Other Album" / "02 - Creep.flac"
+    mine = watch / "Pablo Honey" / "02 - Creep.flac"
+    for f in (other, mine):
+        f.write_bytes(b"x")
+    A.set_setting("download_watch_path", str(watch))
+    conn = A.get_conn()
+    conn.execute("INSERT INTO tracks(job_id,artist,title,slskd_state,slskd_download_filename)"
+                 " VALUES(?,?,?,?,?)", (job, "Radiohead", "Creep", "downloading",
+                                        r"@@music\Radiohead\Pablo Honey\02 - Creep.flac"))
+    t = conn.execute("SELECT * FROM tracks").fetchone()
+    conn.close()
+    assert A.discover_download_for_track(t, [other, mine]) == mine
+
+
+def test_transfer_files_reads_slskds_per_user_shape(appmod):
+    data = {"username": "peer", "directories": [
+        {"directory": "Music\\Album", "files": [
+            {"id": "abc", "filename": "Music\\Album\\01 - A.flac", "state": "Queued, Remotely"}]}]}
+    files = appmod.SlskdClient._transfer_files(data)
+    assert [(f["id"], f["filename"]) for f in files] == [("abc", "Music\\Album\\01 - A.flac")]
+    # the flat list shape the old parser handled still works
+    assert len(appmod.SlskdClient._transfer_files([{"files": files}])) == 1
+
+
+def test_deleting_a_downloading_track_cancels_its_transfer(A, auth, job, monkeypatch):
+    cancelled = []
+    monkeypatch.setattr(A.SlskdClient, "cancel_download",
+                        lambda self, u, f: cancelled.append((u, f)) or True)
+    monkeypatch.setattr(A.SlskdClient, "cancel_search", lambda self, sid: None)
+    conn = A.get_conn()
+    conn.execute("INSERT INTO tracks(job_id,artist,title,slskd_state,slskd_download_user,"
+                 "slskd_download_filename) VALUES(?,?,?,?,?,?)",
+                 (job, "A", "T", "downloading", "peer", "x\\T.flac"))
+    conn.commit(); conn.close()
+    auth.delete("/api/tracks/1")
+    assert cancelled == [("peer", "x\\T.flac")]
+
+
+def test_new_playlist_tracks_join_the_playlist_job(A, auth, job):
+    """'New?' → '+ Queue' used to make separate jobs the playlist's M3U never saw."""
+    r = auth.post("/api/download/batch", json={
+        "source": "slskd", "playlist_job_id": job,
+        "tracks": [{"artist": "A", "title": "New Song", "track_number": 7, "duration": 200}]})
+    assert r.get_json()["queued"] == 1
+    conn = A.get_conn()
+    t = conn.execute("SELECT job_id, track_number, duration FROM tracks").fetchone()
+    jobs = conn.execute("SELECT COUNT(*) FROM import_jobs").fetchone()[0]
+    conn.close()
+    assert (t["job_id"], t["track_number"], t["duration"], jobs) == (job, 7, 200, 1)
+    # without it, still one track-type job per song
+    auth.post("/api/download/batch", json={"tracks": [{"artist": "B", "title": "Other"}]})
+    conn = A.get_conn()
+    assert conn.execute("SELECT COUNT(*) FROM import_jobs").fetchone()[0] == 2
+    conn.close()
+    assert auth.post("/api/download/batch", json={
+        "playlist_job_id": 999, "tracks": [{"artist": "C", "title": "X"}]}).status_code == 404

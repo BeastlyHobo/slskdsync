@@ -77,7 +77,7 @@ try:
     _HAS_ANTHROPIC = True
 except ImportError:
     _HAS_ANTHROPIC = False
-from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory, Response, stream_with_context
+from flask import Flask, render_template, request, redirect, session, url_for, flash, jsonify, send_from_directory, send_file, Response, stream_with_context
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.exceptions import HTTPException
 from dotenv import load_dotenv
@@ -244,6 +244,7 @@ def init_db():
         # what it actually is without fingerprinting again.
         ("acoustid_title", "TEXT DEFAULT NULL"),
         ("acoustid_artist", "TEXT DEFAULT NULL"),
+        ("duration", "INTEGER DEFAULT 0"),   # seconds, from the source; 0 = unknown
     ]:
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE tracks ADD COLUMN {col} {ddl}")
@@ -384,6 +385,21 @@ class TrackMeta:
     track_number: int = 0
     source_id: str = ""
     cover_url: str = ""
+    duration: int = 0          # seconds; 0 = unknown. Lets the scorer spot other versions.
+
+
+def _secs(v) -> int:
+    """A client-supplied duration in seconds, or 0 when missing/garbage."""
+    try:
+        n = int(float(v or 0))
+    except (TypeError, ValueError):
+        return 0
+    return n if 0 < n < 24 * 3600 else 0
+
+
+def _row_duration(row) -> int:
+    keys = row.keys() if hasattr(row, "keys") else ()
+    return int(row["duration"] or 0) if "duration" in keys else 0
 
 
 _LIVE_RE = re.compile(r'\b(live|unplugged|in concert|acoustic)\b', re.IGNORECASE)
@@ -427,6 +443,7 @@ class SpotifyProvider:
                     cover  = ((t.get("album") or {}).get("images") or [{}])[0].get("url", "")
                     tracks.append(TrackMeta(artist=artist, album=album,
                         title=t.get("name") or "Unknown", track_number=t.get("track_number") or 0,
+                        duration=round((t.get("duration_ms") or 0) / 1000),
                         source_id=t.get("id") or "", cover_url=cover))
                 data = client.next(data) if data.get("next") else None
             return "playlist", tracks
@@ -441,6 +458,7 @@ class SpotifyProvider:
                 artist = ", ".join(a["name"] for a in t.get("artists", [])) or "Unknown Artist"
                 tracks.append(TrackMeta(artist=artist, album=album_name, title=t.get("name") or "Unknown",
                                         track_number=t.get("track_number") or 0,
+                        duration=round((t.get("duration_ms") or 0) / 1000),
                                         source_id=t.get("id") or "", cover_url=cover))
             return "album", tracks
 
@@ -452,6 +470,7 @@ class SpotifyProvider:
             cover = ((t.get("album") or {}).get("images") or [{}])[0].get("url", "")
             return "track", [TrackMeta(artist=artist, album=album, title=t.get("name") or "Unknown",
                                        track_number=t.get("track_number") or 0,
+                        duration=round((t.get("duration_ms") or 0) / 1000),
                                        source_id=t.get("id") or "", cover_url=cover)]
 
         if "/artist/" in url:
@@ -464,6 +483,7 @@ class SpotifyProvider:
                 cover = ((t.get("album") or {}).get("images") or [{}])[0].get("url", "")
                 tracks.append(TrackMeta(artist=artist, album=album, title=t.get("name") or "Unknown",
                                         track_number=t.get("track_number") or 0,
+                        duration=round((t.get("duration_ms") or 0) / 1000),
                                         source_id=t.get("id") or "", cover_url=cover))
             return "artist", tracks
 
@@ -482,6 +502,7 @@ class SpotifyProvider:
             return TrackMeta(artist=artist, album=album,
                 title=t.name or "Unknown",
                 track_number=t.track_number or 0,
+                duration=round((getattr(t, "duration_ms", 0) or 0) / 1000),
                 source_id=t.id or "", cover_url=cover)
 
         with SpotifyClient() as client:
@@ -561,6 +582,7 @@ class AppleProvider:
                 album=result.get("collectionName", "Unknown Album"),
                 title=result.get("trackName", "Unknown Title"),
                 track_number=result.get("trackNumber", 0),
+                duration=round((result.get("trackTimeMillis") or 0) / 1000),
                 source_id=str(result.get("trackId", "")),
                 cover_url=cover,
             )]
@@ -586,6 +608,7 @@ class AppleProvider:
                     album=album_title,
                     title=r.get("trackName", ""),
                     track_number=r.get("trackNumber", 0),
+                    duration=round((r.get("trackTimeMillis") or 0) / 1000),
                     source_id=str(r.get("trackId", "")),
                     cover_url=album_cover,
                 )
@@ -624,6 +647,7 @@ class AppleProvider:
                         album=attrs.get("albumName", ""),
                         title=attrs.get("name", ""),
                         track_number=attrs.get("trackNumber", 0),
+                        duration=round((attrs.get("durationInMillis") or 0) / 1000),
                         source_id=song.get("id", ""),
                         cover_url=cover,
                     ))
@@ -692,6 +716,7 @@ class TidalProvider:
                 album=(d.get("album") or {}).get("title", "Unknown Album"),
                 title=d.get("title", "Unknown Title"),
                 track_number=d.get("trackNumber", 0),
+                duration=int(d.get("duration") or 0),
                 source_id=tid,
                 cover_url=_tidal_cover_url((d.get("album") or {}).get("cover", "")),
             )]
@@ -712,6 +737,7 @@ class TidalProvider:
                     album=album_name,
                     title=t.get("title", "Unknown Title"),
                     track_number=t.get("trackNumber", 0),
+                    duration=int(t.get("duration") or 0),
                     source_id=str(t.get("id", "")),
                     cover_url=cover,
                 ))
@@ -731,6 +757,7 @@ class TidalProvider:
                     album=(t.get("album") or {}).get("title", "Unknown Album"),
                     title=t.get("title", "Unknown Title"),
                     track_number=t.get("trackNumber", 0),
+                    duration=int(t.get("duration") or 0),
                     source_id=str(t.get("id", "")),
                     cover_url=cover,
                 ))
@@ -1636,41 +1663,66 @@ class SlskdClient:
             except Exception:
                 pass
 
-    def get_user_transfers(self, username: str) -> dict[str, str]:
-        """Return a mapping of filename → state for all slskd downloads from username.
-        States of interest: 'Errored', 'Cancelled', 'TimedOut', 'Completed', 'InProgress'."""
+    @staticmethod
+    def _transfer_files(data) -> list[dict]:
+        """The file entries in a transfers response, whatever its shape: for one
+        user slskd returns {username, directories: [{files: [...]}]}; the
+        all-users form is a list of those; some builds return flatter lists."""
+        out: list[dict] = []
+        stack = data if isinstance(data, list) else [data]
+        for item in stack:
+            if not isinstance(item, dict):
+                continue
+            if "filename" in item:
+                out.append(item)
+            for d in item.get("directories") or []:
+                out.extend(f for f in (d.get("files") or []) if isinstance(f, dict))
+            out.extend(f for f in (item.get("files") or []) if isinstance(f, dict))
+        return out
+
+    def _user_transfer_files(self, username: str) -> list[dict]:
         if not username:
-            return {}
+            return []
         url = f"{self.base}/api/v0/transfers/downloads/{username}"
         try:
             r = requests.get(url, headers=self._headers(), auth=self._auth(), timeout=15)
             if r.status_code != 200:
-                return {}
-            data = r.json()
-            result: dict[str, str] = {}
-            # slskd v0 returns a list of directory objects each with a "files" array;
-            # some builds return a flat list directly.
-            if isinstance(data, list):
-                for item in data:
-                    if isinstance(item, dict) and "files" in item:
-                        for f in item["files"]:
-                            fn = f.get("filename", "")
-                            st = f.get("state", "")
-                            if isinstance(st, dict):
-                                st = st.get("name", "")  # {name: "Errored", …}
-                            if fn:
-                                result[fn] = str(st)
-                    elif isinstance(item, dict) and "filename" in item:
-                        fn = item.get("filename", "")
-                        st = item.get("state", "")
-                        if isinstance(st, dict):
-                            st = st.get("name", "")
-                        if fn:
-                            result[fn] = str(st)
-            return result
+                return []
+            return self._transfer_files(r.json())
         except Exception as ex:
-            logger.debug(f"[slskd] get_user_transfers({username}): {ex}")
-            return {}
+            logger.debug(f"[slskd] transfers({username}): {ex}")
+            return []
+
+    def get_user_transfers(self, username: str) -> dict[str, str]:
+        """Return a mapping of filename → state for all slskd downloads from username.
+        States of interest: 'Errored', 'Cancelled', 'TimedOut', 'Completed', 'InProgress'."""
+        result: dict[str, str] = {}
+        for f in self._user_transfer_files(username):
+            st = f.get("state", "")
+            if isinstance(st, dict):
+                st = st.get("name", "")  # {name: "Errored", …}
+            if f.get("filename"):
+                result[f["filename"]] = str(st)
+        return result
+
+    def cancel_download(self, username: str, filename: str) -> bool:
+        """Cancel and remove a queued/in-progress download. A transfer we've given
+        up on would otherwise still land in the watch folder later — where a
+        track with the same title could claim it as its own."""
+        if not (username and filename):
+            return False
+        for f in self._user_transfer_files(username):
+            if f.get("filename") == filename and f.get("id"):
+                try:
+                    r = requests.delete(
+                        f"{self.base}/api/v0/transfers/downloads/{username}/{f['id']}",
+                        params={"remove": "true"}, headers=self._headers(),
+                        auth=self._auth(), timeout=10)
+                    return r.status_code < 300
+                except Exception as ex:
+                    logger.debug(f"[slskd] cancel_download({username}): {ex}")
+                    return False
+        return False
 
     def get_search_results(self, search_id: str) -> list[dict] | None:
         """Returns None if the search is still running, [] if complete with no results,
@@ -1744,6 +1796,19 @@ class SlskdClient:
         if want_a:
             score += 20 if want_a in _acoustid_norm(fn_l) else -40
 
+        # Length: Soulseek reports each file's duration and the source told us
+        # the song's. Far off means a live take, an extended mix, a skit, or a
+        # different song sharing the name — none of which the title gate sees.
+        want_len, got_len = track.duration or 0, result.get("length") or 0
+        if want_len and got_len:
+            off = abs(got_len - want_len)
+            if off <= 3:
+                score += 10
+            elif off > 30:
+                score -= 60
+            elif off > 10:
+                score -= 25
+
         # Availability — free slot means download starts immediately (+15)
         if result.get("has_slot"):
             score += 15
@@ -1815,7 +1880,8 @@ def _find_file_for_track(user_files: list, track: sqlite3.Row,
     """Return the best audio file for a track from a specific user's file list.
     Title match is required — a bare format score is not sufficient."""
     meta = TrackMeta(track["artist"] or "", track["album"] or "",
-                     track["title"] or "", track["track_number"] or 0)
+                     track["title"] or "", track["track_number"] or 0,
+                     duration=_row_duration(track))
     title_l = meta.title.lower()
     # Require the title to appear in the filename, same as _score_user_album_coverage
     candidates = [
@@ -2036,6 +2102,30 @@ def discover_download_for_track(track: sqlite3.Row,
     if not audio_files:
         logger.warning(f"[discover] Watch path {watch} contains no audio files")
         return None
+
+    # The file we asked slskd for is the best evidence there is: slskd saves it
+    # under the peer's own filename. Matching on that first stops a same-titled
+    # file from another download (or a late one we'd abandoned) being claimed.
+    keys = track.keys() if hasattr(track, "keys") else ()
+    wanted = (track["slskd_download_filename"] or "") if "slskd_download_filename" in keys else ""
+    if wanted:
+        parts = wanted.replace("\\", "/").lower().rsplit("/", 2)
+        want_base = parts[-1]
+        want_dir = parts[-2] if len(parts) > 1 else ""
+        want_stem, _, want_ext = want_base.rpartition(".")
+        hits = [f for f in audio_files
+                # slskd appends "_<ticks>" when the name is already taken
+                if f.name.lower() == want_base
+                or (want_stem and f.name.lower().startswith(want_stem + "_")
+                    and f.name.lower().endswith("." + want_ext))]
+        # slskd saves into a folder named after the remote one, which tells two
+        # same-named files ("01 - Intro.flac") from different albums apart.
+        in_dir = [f for f in hits if want_dir and f.parent.name.lower() == want_dir]
+        pick = in_dir[0] if len(in_dir) == 1 else hits[0] if len(hits) == 1 else None
+        if pick:
+            logger.debug(f"[discover] Requested-file match: {pick}")
+            return pick
+
     if not title:
         return None
 
@@ -2673,9 +2763,9 @@ def _sync_one_playlist(job_id: int, playlist_name: str, source_url: str,
            and not _already_in_library(conn, t.artist, t.title)]
     for t in new:
         conn.execute(
-            "INSERT INTO tracks(job_id, artist, album, title, track_number, source_id, cover_url)"
-            " VALUES(?,?,?,?,?,?,?)",
-            (job_id, t.artist, t.album, t.title, t.track_number, t.source_id, t.cover_url),
+            "INSERT INTO tracks(job_id, artist, album, title, track_number, source_id, cover_url, duration)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (job_id, t.artist, t.album, t.title, t.track_number, t.source_id, t.cover_url, t.duration),
         )
     conn.execute(
         "UPDATE import_jobs SET last_synced_at=datetime('now'), last_sync_new=? WHERE id=?",
@@ -3012,6 +3102,7 @@ def _worker_tick():
                 slskd.cancel_search(row["slskd_search_id"])
             except Exception:
                 pass
+        slskd.cancel_download(user, row["slskd_download_filename"] or "")
         tried = set(u for u in (row["slskd_tried_users"] or "").split(",") if u)
         if user:
             tried.add(user)
@@ -3166,7 +3257,8 @@ def _worker_tick():
         " AND (download_source IN ('slskd','') OR download_source IS NULL) LIMIT 3"
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
-                         t["track_number"] or 0, t["source_id"] or "")
+                         t["track_number"] or 0, t["source_id"] or "",
+                         duration=_row_duration(t))
         custom_raw = t["custom_search"] or ""      # guard compares the raw column
         custom = custom_raw.strip()
         attempt = t["slskd_search_attempt"] or 0
@@ -3210,7 +3302,8 @@ def _worker_tick():
         "SELECT * FROM tracks WHERE slskd_state='queued' AND slskd_search_id IS NOT NULL LIMIT 5"
     ).fetchall():
         meta = TrackMeta(t["artist"] or "", t["album"] or "", t["title"] or "",
-                         t["track_number"] or 0, t["source_id"] or "")
+                         t["track_number"] or 0, t["source_id"] or "",
+                         duration=_row_duration(t))
         results = slskd.get_search_results(t["slskd_search_id"])
         if results is None:
             continue  # search still running
@@ -4161,7 +4254,8 @@ def api_playlist_diff(job_id):
         key = ((t.artist or "").lower().strip(), (t.title or "").lower().strip())
         if key not in existing_set:
             new_tracks.append({"artist": t.artist, "title": t.title,
-                                "album": t.album, "cover_url": t.cover_url})
+                                "album": t.album, "cover_url": t.cover_url,
+                                "track_number": t.track_number, "duration": t.duration})
 
     return jsonify({"ok": True, "new_tracks": new_tracks, "total_source": len(source_tracks)})
 
@@ -4286,13 +4380,8 @@ def playlists():
 
 @app.route("/library")
 def library():
-    music_path_str = str(get_setting("library_path") or "/music")
     conn = get_conn()
-    lib_rows = conn.execute(
-        "SELECT id, artist, title, album, path, user_rating, cover_art_id, acoustid_score,"
-        " acoustid_title, acoustid_artist, indexed_at FROM library_index"
-    ).fetchall()
-    bad_paths = {r["path"] for r in conn.execute("SELECT path FROM bad_flags")}
+    needs_scan = conn.execute("SELECT 1 FROM library_index LIMIT 1").fetchone() is None
     playlist_rows = conn.execute("""
         SELECT j.id, j.playlist_name, j.source, j.source_url, j.created_at,
                COUNT(t.id) AS total,
@@ -4303,66 +4392,92 @@ def library():
         GROUP BY j.id HAVING COUNT(t.id) > 0 ORDER BY j.created_at DESC
     """).fetchall()
     conn.close()
-
-    needs_scan = False
-    if lib_rows:
-        tracks = []
-        for r in lib_rows:
-            p = r["path"] or ""
-            # rsplit instead of Path(): this runs once per library row per page load
-            base = p.rsplit("/", 1)[-1]
-            ext = base.rsplit(".", 1)[1].upper() if "." in base else ""
-            tracks.append({
-                "id":          r["id"],
-                "artist":      r["artist"] or "",
-                "album":       r["album"] or "",
-                "title":       r["title"] or "",
-                "size_mb":     0,
-                "ext":         ext,
-                "path":        p,
-                "user_rating": r["user_rating"],
-                "cover_url":   f"/api/library/cover/{r['cover_art_id']}" if r["cover_art_id"] else "",
-                "acoustid_score": r["acoustid_score"],
-                "acoustid_title":  r["acoustid_title"] or "",
-                "acoustid_artist": r["acoustid_artist"] or "",
-                "indexed_at":  r["indexed_at"] or "",
-                "flagged_bad": (p in bad_paths),
-            })
-    else:
-        needs_scan = True
-        tracks = []
-        music_path = Path(music_path_str)
-        if music_path.exists():
-            num_re = re.compile(r"^\d+\s*[-\.]\s*")
-            for f in sorted(music_path.rglob("*")):
-                if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
-                    continue
-                parts = f.relative_to(music_path).parts
-                artist = parts[0] if len(parts) >= 3 else ""
-                album  = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else "")
-                title  = num_re.sub("", f.stem)
-                size_mb = round(f.stat().st_size / 1_048_576, 1)
-                tracks.append({
-                    "id":          None,
-                    "artist":      artist,
-                    "album":       album,
-                    "title":       title,
-                    "size_mb":     size_mb,
-                    "ext":         f.suffix[1:].upper(),
-                    "path":        str(f),
-                    "user_rating": None,
-                    "cover_url":   "",
-                    "acoustid_score": None,
-                    "indexed_at":  "",
-                    "flagged_bad": (str(f) in bad_paths),
-                })
     playlists = [dict(r) for r in playlist_rows]
     # Browser-reachable Navidrome URL for deep links; the plain navidrome_url is
     # often a docker-internal hostname the user's browser can't resolve.
     nav_public = (get_setting("navidrome_public_url") or get_setting("navidrome_url") or "").rstrip("/")
-    return render_template("library.html", tracks=tracks, playlists=playlists,
-                           music_path=music_path_str, needs_scan=needs_scan,
+    return render_template("library.html", playlists=playlists, needs_scan=needs_scan,
                            nav_public=nav_public, title="Library")
+
+
+def _library_tracks() -> list[dict]:
+    """Every library track, as compact as the page can use: empty fields are
+    left out (the page fills defaults) and the extension and cover URL are
+    derived client-side. This used to be inlined into the /library HTML —
+    several MB at 20k tracks, rebuilt, compressed and re-sent on every visit."""
+    conn = get_conn()
+    lib_rows = conn.execute(
+        "SELECT id, artist, title, album, path, user_rating, cover_art_id, acoustid_score,"
+        " acoustid_title, acoustid_artist, indexed_at FROM library_index"
+    ).fetchall()
+    bad_paths = {r["path"] for r in conn.execute("SELECT path FROM bad_flags")}
+    conn.close()
+    tracks = []
+    if lib_rows:
+        for r in lib_rows:
+            t = {"id": r["id"], "artist": r["artist"] or "", "album": r["album"] or "",
+                 "title": r["title"] or "", "path": r["path"] or "",
+                 "indexed_at": r["indexed_at"] or ""}
+            if r["user_rating"] is not None:
+                t["user_rating"] = r["user_rating"]
+            if r["cover_art_id"]:
+                t["cover"] = r["cover_art_id"]
+            if r["acoustid_score"] is not None:
+                t["acoustid_score"] = r["acoustid_score"]
+            if r["acoustid_title"]:
+                t["acoustid_title"] = r["acoustid_title"]
+            if r["acoustid_artist"]:
+                t["acoustid_artist"] = r["acoustid_artist"]
+            if t["path"] in bad_paths:
+                t["flagged_bad"] = True
+            tracks.append(t)
+        return tracks
+    # Never scanned: show what's on disk so the page isn't empty meanwhile.
+    music_path = Path(get_setting("library_path") or "/music")
+    if music_path.exists():
+        num_re = re.compile(r"^\d+\s*[-\.]\s*")
+        for f in sorted(music_path.rglob("*")):
+            if not (f.is_file() and f.suffix.lower() in AUDIO_EXTS):
+                continue
+            parts = f.relative_to(music_path).parts
+            t = {"id": None,
+                 "artist": parts[0] if len(parts) >= 3 else "",
+                 "album": parts[1] if len(parts) >= 3 else (parts[0] if len(parts) == 2 else ""),
+                 "title": num_re.sub("", f.stem), "path": str(f), "indexed_at": ""}
+            if str(f) in bad_paths:
+                t["flagged_bad"] = True
+            tracks.append(t)
+    return tracks
+
+
+@app.route("/api/library/tracks")
+def api_library_tracks():
+    """The Library page's data. Revalidated with an ETag, so an unchanged
+    library costs a 304 instead of a re-download and re-compression."""
+    body = json.dumps(_library_tracks(), separators=(",", ":")).encode()
+    etag = hashlib.sha1(body).hexdigest()
+    if etag in (request.if_none_match or ()):
+        resp = app.response_class(status=304)
+    else:
+        resp = app.response_class(body, mimetype="application/json")
+    resp.set_etag(etag)
+    resp.headers["Cache-Control"] = "no-cache"   # always revalidate, never stale
+    return resp
+
+
+# Cover art comes from Navidrome. Each fetch used to hold one of waitress's 8
+# threads for up to 5 s, uncached on failure, so a screenful of covers could
+# leave the API itself waiting. Now: covers are kept on disk after the first
+# fetch, failures are remembered for a while, and at most a few fetches run
+# at once — the rest give up quickly and the page shows its placeholder.
+_COVER_FAIL_TTL = 600
+_cover_fail: dict[str, float] = {}
+_cover_fetch_slots = threading.BoundedSemaphore(3)
+
+
+def _cover_cache_path(cover_art_id: str, size: str) -> Path:
+    key = hashlib.sha1(f"{cover_art_id}|{size}".encode()).hexdigest()
+    return DATA_DIR / "covers" / key[:2] / key
 
 
 @app.route("/api/library/cover/<path:cover_art_id>")
@@ -4373,20 +4488,44 @@ def api_library_cover(cover_art_id):
     if not nav_url or not nav_user:
         return "", 404
     size = request.args.get("size", "120")
+    if not size.isdigit():
+        size = "120"
+    cached = _cover_cache_path(cover_art_id, size)
+    if cached.is_file():
+        resp = send_file(cached, mimetype="image/jpeg", max_age=86400 * 30)
+        resp.headers["Cache-Control"] = "max-age=2592000, public"
+        return resp
+    key = f"{cover_art_id}|{size}"
+    if time.time() - _cover_fail.get(key, 0) < _COVER_FAIL_TTL:
+        return "", 404
+    if not _cover_fetch_slots.acquire(timeout=2):
+        return "", 503
     try:
         r = requests.get(
             f"{nav_url}/rest/getCoverArt",
             params={"u": nav_user, "p": nav_pass, "v": "1.16.1",
                     "c": "slskdsync", "id": cover_art_id, "size": size},
-            timeout=5,
+            timeout=(2, 4),
         )
-        if r.status_code != 200:
+        ctype = r.headers.get("content-type", "")
+        if r.status_code != 200 or not ctype.startswith("image/"):
+            _cover_fail[key] = time.time()
             return "", 404
-        resp = Response(r.content, content_type=r.headers.get("content-type", "image/jpeg"))
-        resp.headers["Cache-Control"] = "max-age=86400, public"
-        return resp
     except Exception:
+        _cover_fail[key] = time.time()
         return "", 404
+    finally:
+        _cover_fetch_slots.release()
+    try:
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cached.with_suffix(".tmp")
+        tmp.write_bytes(r.content)
+        tmp.replace(cached)
+    except OSError as ex:
+        logger.debug(f"[cover] cache write failed: {ex}")
+    resp = Response(r.content, content_type=ctype)
+    resp.headers["Cache-Control"] = "max-age=2592000, public"
+    return resp
 
 
 @app.route("/logs")
@@ -4608,12 +4747,16 @@ def api_discover_lb_recs():
 @app.route("/api/tracks/<int:track_id>", methods=["DELETE"])
 def delete_track(track_id):
     conn = get_conn()
-    track = conn.execute("SELECT slskd_search_id, job_id FROM tracks WHERE id=?",
+    track = conn.execute("SELECT slskd_search_id, job_id, slskd_state, slskd_download_user,"
+                         " slskd_download_filename FROM tracks WHERE id=?",
                          (track_id,)).fetchone()
     conn.execute("DELETE FROM tracks WHERE id=?", (track_id,))
     conn.commit()
     if track:
         slskd = SlskdClient()
+        if track["slskd_state"] == "downloading":
+            slskd.cancel_download(track["slskd_download_user"] or "",
+                                  track["slskd_download_filename"] or "")
         # Only cancel the individual search if no other track shares this search_id
         if track["slskd_search_id"]:
             shared = conn.execute(
@@ -4644,9 +4787,14 @@ def retry_track(track_id):
     reset_peers = bool(data.get("reset_peers"))
     conn = get_conn()
     track = conn.execute(
-        "SELECT slskd_search_id, slskd_tried_users, local_path FROM tracks WHERE id=?",
+        "SELECT slskd_search_id, slskd_tried_users, local_path, slskd_state,"
+        " slskd_download_user, slskd_download_filename FROM tracks WHERE id=?",
         (track_id,),
     ).fetchone()
+    # A retried download mustn't arrive later and be claimed by another track.
+    if track and track["slskd_state"] == "downloading":
+        SlskdClient().cancel_download(track["slskd_download_user"] or "",
+                                      track["slskd_download_filename"] or "")
     # Only cancel the slskd search if no other track is still using it
     if track and track["slskd_search_id"]:
         shared = conn.execute(
@@ -4899,10 +5047,21 @@ def api_library_acoustid_scores():
     re-fetched the server-rendered data, which is exactly the "nothing appears
     until I navigate away and back" symptom.
     """
+    # ?ids=1,2,3 narrows it to the rows just verified — the whole table is
+    # most of a megabyte at 20k tracks, refetched after every single-song ID.
+    want = [int(x) for x in (request.args.get("ids") or "").split(",") if x.strip().isdigit()]
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT id, acoustid_score, acoustid_title, acoustid_artist FROM library_index"
-    ).fetchall()
+    if want:
+        rows = []
+        for k in range(0, len(want), 500):
+            chunk = want[k:k + 500]
+            rows += conn.execute(
+                "SELECT id, acoustid_score, acoustid_title, acoustid_artist FROM library_index"
+                f" WHERE id IN ({','.join('?' * len(chunk))})", chunk).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, acoustid_score, acoustid_title, acoustid_artist FROM library_index"
+        ).fetchall()
     conn.close()
     return jsonify({r["id"]: {"score":  r["acoustid_score"],
                               "title":  r["acoustid_title"] or "",
@@ -5366,10 +5525,10 @@ def api_download_album():
             continue
         source_id = "" if source == "monochrome" else (t.get("source_id") or "").strip()
         cur.execute(
-            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source)"
-            " VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source,duration)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
             (job_id, artist, t.get("album", ""), title,
-             t.get("track_number", 0), source_id, t.get("cover", ""), source),
+             t.get("track_number", 0), source_id, t.get("cover", ""), source, _secs(t.get("duration"))),
         )
         count += 1
     conn.commit()
@@ -5412,9 +5571,9 @@ def api_download():
     )
     job_id = cur.lastrowid
     cur.execute(
-        "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source)"
-        " VALUES(?,?,?,?,?,?,?,?)",
-        (job_id, artist, album, title, 0, source_id, cover_url, dl_source),
+        "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source,duration)"
+        " VALUES(?,?,?,?,?,?,?,?,?)",
+        (job_id, artist, album, title, 0, source_id, cover_url, dl_source, _secs(data.get("duration"))),
     )
     conn.commit()
     conn.close()
@@ -5428,6 +5587,11 @@ def api_download_batch():
     diff). Each track becomes its own track-type job so heterogeneous tracks are
     searched individually rather than batched into one album search.
 
+    With ``playlist_job_id`` (the Playlists page's "New?" check) the tracks join
+    that playlist's own job instead, exactly as a sync would add them. In
+    separate jobs they never made it into the playlist's M3U until the next
+    full sync re-found them.
+
     Returns a per-track ``results`` array aligned to the input order, with each
     entry one of: 'queued', 'in_library', 'error'.
     """
@@ -5436,6 +5600,14 @@ def api_download_batch():
     source = data.get("source", "slskd")
     conn = get_conn()
     cur = conn.cursor()
+    pl_job = None
+    if data.get("playlist_job_id") is not None:
+        pl_job = conn.execute(
+            "SELECT id FROM import_jobs WHERE id=? AND source_type NOT IN ('track','redownload')",
+            (data.get("playlist_job_id"),)).fetchone()
+        if not pl_job:
+            conn.close()
+            return jsonify({"ok": False, "error": "playlist not found"}), 404
     results = []
     queued = skipped = 0
     for t in tracks:
@@ -5449,16 +5621,19 @@ def api_download_batch():
             skipped += 1
             continue
         src_id = "" if source == "monochrome" else (t.get("source_id") or "").strip()
+        if pl_job:
+            jid = pl_job["id"]
+        else:
+            cur.execute(
+                "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
+                ("search", "track", "", 0, "queued"),
+            )
+            jid = cur.lastrowid
         cur.execute(
-            "INSERT INTO import_jobs(source,source_type,source_url,nav_playlist,status) VALUES(?,?,?,?,?)",
-            ("search", "track", "", 0, "queued"),
-        )
-        jid = cur.lastrowid
-        cur.execute(
-            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source)"
-            " VALUES(?,?,?,?,?,?,?,?)",
-            (jid, artist, (t.get("album") or "").strip(), title, 0, src_id,
-             (t.get("cover_url") or t.get("cover") or "").strip(), source),
+            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source,duration)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
+            (jid, artist, (t.get("album") or "").strip(), title, (int(t["track_number"]) if str(t.get("track_number", "")).isdigit() else 0), src_id,
+             (t.get("cover_url") or t.get("cover") or "").strip(), source, _secs(t.get("duration"))),
         )
         results.append("queued")
         queued += 1
@@ -5508,9 +5683,10 @@ def import_url():
             skipped += 1
             continue
         cur.execute(
-            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source)"
-            " VALUES(?,?,?,?,?,?,?,?)",
-            (job_id, t.artist, t.album, t.title, t.track_number, t.source_id, t.cover_url, dl_source),
+            "INSERT INTO tracks(job_id,artist,album,title,track_number,source_id,cover_url,download_source,duration)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
+            (job_id, t.artist, t.album, t.title, t.track_number, t.source_id, t.cover_url, dl_source,
+             t.duration),
         )
     queued = len(tracks) - skipped
     conn.commit()

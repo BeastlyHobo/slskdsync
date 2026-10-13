@@ -231,6 +231,7 @@ area.addEventListener('click', e => {
       artist: dlBtn.dataset.artist,
       album:  dlBtn.dataset.album,
       cover:  dlBtn.dataset.cover,
+      duration: dlBtn.dataset.duration,
     }, dlBtn.dataset.source);
     return;
   }
@@ -341,13 +342,13 @@ function trackCardHtml(t, hideDrillLinks) {
         data-title="${esc(t.title)}"
         data-artist="${esc(t.artist||'')}"
         data-album="${esc(t.album||'')}"
-        data-cover="${esc(t.cover||'')}">Soulseek</button>
+        data-cover="${esc(t.cover||'')}" data-duration="${t.duration||''}">Soulseek</button>
       <button class="btn btn-mono dl-btn"
         data-source="monochrome"
         data-title="${esc(t.title)}"
         data-artist="${esc(t.artist||'')}"
         data-album="${esc(t.album||'')}"
-        data-cover="${esc(t.cover||'')}">TIDAL</button>`;
+        data-cover="${esc(t.cover||'')}" data-duration="${t.duration||''}">TIDAL</button>`;
   return `
   <div class="track-card${inLib ? ' track-in-lib' : ''}" data-action="song" data-song="${esc(JSON.stringify(t))}">
     ${t.cover
@@ -424,10 +425,10 @@ function renderArtistPage(data) {
         : `
           <button class="btn btn-slsk dl-btn" data-source="slskd"
             data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
-            data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">SLSK</button>
+            data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}" data-duration="${t.duration||''}">SLSK</button>
           <button class="btn btn-mono dl-btn" data-source="monochrome"
             data-title="${esc(t.title)}" data-artist="${esc(t.artist||'')}"
-            data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}">TIDAL</button>`;
+            data-album="${esc(t.album||'')}" data-cover="${esc(t.cover||'')}" data-duration="${t.duration||''}">TIDAL</button>`;
       return `
       <div class="top-track-row${inLib ? ' track-in-lib' : ''}" data-action="song" data-song="${esc(JSON.stringify(t))}">
         <span class="top-track-num">${i + 1}</span>
@@ -488,7 +489,7 @@ function renderAlbumPage(data, fallbackCover) {
   if (data.error) { area.innerHTML = `<div class="loading">${esc(data.error)}</div>`; return; }
   const cover = data.cover || fallbackCover || '';
   const allTracks = data.tracks.map(t => ({
-    title: t.title, artist: t.artist || data.artist, album: data.title, cover,
+    title: t.title, artist: t.artist || data.artist, album: data.title, cover, duration: t.duration,
   }));
 
   const header = `
@@ -547,6 +548,7 @@ function queueDl(btn, item, source) {
       album: item.album,
       title: item.title,
       cover: item.cover,
+      duration: item.duration,
       source,
     }),
   })
@@ -656,9 +658,9 @@ function renderSongPage(t, d) {
        <div class="song-hint">30-second preview — handy for checking a download by ear.</div>` : ''}
     ${queued ? '' : `<div class="dl-all-row">
       <button class="btn-dl-all btn-slsk dl-btn" data-source="slskd" data-title="${esc(t.title)}"
-        data-artist="${esc(t.artist || '')}" data-album="${esc(t.album || '')}" data-cover="${esc(cover)}">⬇ Soulseek</button>
+        data-artist="${esc(t.artist || '')}" data-album="${esc(t.album || '')}" data-cover="${esc(cover)}" data-duration="${t.duration||''}">⬇ Soulseek</button>
       <button class="btn-dl-all btn-mono dl-btn" data-source="monochrome" data-title="${esc(t.title)}"
-        data-artist="${esc(t.artist || '')}" data-album="${esc(t.album || '')}" data-cover="${esc(cover)}">⬇ TIDAL</button>
+        data-artist="${esc(t.artist || '')}" data-album="${esc(t.album || '')}" data-cover="${esc(cover)}" data-duration="${t.duration||''}">⬇ TIDAL</button>
     </div>`}
     ${facts.length ? `<div class="song-facts">${facts.map(([k, v]) =>
       `<span class="k">${esc(k)}</span><span class="v">${esc(String(v))}</span>`).join('')}</div>` : ''}

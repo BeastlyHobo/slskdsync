@@ -6,7 +6,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0a0a11">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  {# "black", not "black-translucent": with translucent, iOS home-screen apps
+     draw the page from the top of the screen but can size it a status bar
+     shorter, leaving a black strip under the bottom nav (WebKit 236445 and
+     friends). The status bar sits over a near-black top bar either way. #}
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="slskdsync">
   <title>slskdsync</title>
   <link rel="manifest" href="/manifest.json">
@@ -136,6 +140,38 @@ document.addEventListener('focusout', () => {
   if (!window.matchMedia('(max-width: 919px)').matches) return;
   setTimeout(() => { if (window.scrollY) window.scrollTo(0, 0); }, 100);
 });
+</script>
+
+<script>
+// Viewport diagnostics for chasing layout gaps on a real phone: open any page
+// with ?vp=1 (once — it's remembered for the session; ?vp=0 turns it off).
+(function () {
+  try {
+    const p = new URLSearchParams(location.search).get('vp');
+    if (p != null) sessionStorage.setItem('vp', p);
+    if (sessionStorage.getItem('vp') !== '1') return;
+  } catch (e) { return; }
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;top:40%;left:8px;right:8px;z-index:9999;padding:8px 10px;' +
+    'background:rgba(0,0,0,.85);color:#7f7;font:11px/1.4 monospace;border-radius:8px;pointer-events:none;white-space:pre';
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;visibility:hidden;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)';
+  document.body.append(box, probe);
+  const show = () => {
+    const cs = getComputedStyle(probe), nav = document.querySelector('.bottom-nav');
+    const r = nav ? nav.getBoundingClientRect() : null, vv = window.visualViewport;
+    box.textContent =
+      `standalone ${!!navigator.standalone || matchMedia('(display-mode: standalone)').matches}\n` +
+      `screen ${screen.width}x${screen.height}  inner ${innerWidth}x${innerHeight}\n` +
+      `html ${document.documentElement.clientHeight}  vv ${vv ? Math.round(vv.height) + ' @' + Math.round(vv.offsetTop) : '-'}\n` +
+      `inset top ${cs.paddingTop} bottom ${cs.paddingBottom}\n` +
+      `nav ${r ? Math.round(r.top) + '–' + Math.round(r.bottom) : '-'}  scrollY ${scrollY}`;
+  };
+  show();
+  addEventListener('resize', show);
+  if (window.visualViewport) visualViewport.addEventListener('resize', show);
+  document.addEventListener('scroll', show, true);
+})();
 </script>
 
 <script>
