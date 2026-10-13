@@ -372,7 +372,11 @@ main {
    keyboard closed on the Search box and left the page offset. A bar that is
    simply in flow at the bottom of a non-scrolling body has nothing to drift. */
 @media (max-width: 919px) {
-  html, body { height: 100%; overflow: hidden; }
+  /* --app-h is the height the browser says is actually visible (set in
+     base.html). In an iOS home-screen app "100%" can be the whole screen even
+     though the page starts below the status bar, which pushed the nav's labels
+     off the bottom. */
+  html, body { height: 100%; height: var(--app-h, 100dvh); overflow: hidden; }
   body { display: flex; flex-direction: column; }
   .app-shell { flex: 1; min-height: 0; }
   .content-col {
@@ -415,8 +419,12 @@ main {
   padding-top: 6px;
 }
 
-.bottom-nav a.active,
-.bottom-nav a:hover { color: var(--accent); text-decoration: none; }
+.bottom-nav a.active { color: var(--accent); text-decoration: none; }
+/* Touch screens keep :hover on whatever was last tapped, which left a second
+   tab lit up after navigating. Only real pointers get the hover colour. */
+@media (hover: hover) {
+  .bottom-nav a:hover { color: var(--accent); text-decoration: none; }
+}
 
 /* The active pill is the icon's own background, so it can't drift away from
    the icon the way an absolutely-placed ::before did once the bar's height
