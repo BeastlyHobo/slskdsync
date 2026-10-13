@@ -1261,6 +1261,39 @@ class ListenBrainzClient:
 # AcoustID audio fingerprint verification
 # ---------------------------------------------------------------------------
 
+def _aid_verdict(results: list, artist: str, title: str) -> tuple[float, str, str]:
+    """(score, matched_title, matched_artist) for fingerprint results given as
+    (score, title, artist), judged against what the file claims to be.
+    See AcoustIDClient.verify_detail for what each score means."""
+    if not results:
+        return -1.0, "", ""
+    na, nt = _acoustid_norm(artist), _acoustid_norm(title)
+    for score, rec_title, rec_artist in results:
+        nrt = _acoustid_norm(rec_title or "")
+        nra = _acoustid_norm(rec_artist or "")
+        # Recording has no metadata in AcoustID DB — can't refute by title,
+        # so trust the acoustic fingerprint confidence directly.
+        if not nrt:
+            return float(score), "", ""
+        title_ok = nt and (nt in nrt or nrt in nt)
+        artist_ok = not na or not nra or (na in nra or nra in na)
+        if title_ok and artist_ok:
+            return float(score), rec_title or "", rec_artist or ""
+    _, best_title, best_artist = results[0]
+    return 0.0, best_title or "", best_artist or ""
+
+
+def _save_aid_verdict(conn, path: str, score, aid_title: str, aid_artist: str) -> None:
+    """Store a verdict on every row that points at this file — the library row
+    the Library tab shows and any queue row that downloaded it. Writing to
+    only one of them is how a playlist verify never showed up in Library."""
+    vals = (score, aid_title or None, aid_artist or None, path)
+    conn.execute("UPDATE library_index SET acoustid_score=?, acoustid_title=?,"
+                 " acoustid_artist=? WHERE path=?", vals)
+    conn.execute("UPDATE tracks SET acoustid_score=?, acoustid_title=?,"
+                 " acoustid_artist=? WHERE local_path=?", vals)
+
+
 def _acoustid_norm(s: str) -> str:
     """Fold a title/artist to a comparable key.
 
@@ -1407,27 +1440,19 @@ class AcoustIDClient:
         tag = f'"{title}" by {artist}'
         try:
             import acoustid
-            na, nt = _acoustid_norm(artist), _acoustid_norm(title)
             results = list(acoustid.match(api_key, str(path), meta="recordings", parse=True, force_fpcalc=True))
             if not results:
                 logger.info(f"[AcoustID] {tag} → not in database")
                 return -1.0, "", ""
-            for score, _rid, rec_title, rec_artist in results:
-                nrt = _acoustid_norm(rec_title or "")
-                nra = _acoustid_norm(rec_artist or "")
-                # Recording has no metadata in AcoustID DB — can't refute by title,
-                # so trust the acoustic fingerprint confidence directly.
-                if not nrt:
-                    logger.info(f"[AcoustID] {tag} → {score:.0%} match (recording has no metadata in DB)")
-                    return float(score), "", ""
-                title_ok = nt and (nt in nrt or nrt in nt)
-                artist_ok = not na or not nra or (na in nra or nra in na)
-                if title_ok and artist_ok:
-                    logger.info(f"[AcoustID] {tag} → {score:.0%} match")
-                    return float(score), rec_title or "", rec_artist or ""
-            best_score, _, best_title, best_artist = results[0]
-            logger.warning(f"[AcoustID] {tag} → wrong track ({best_score:.0%} match for \"{best_title}\" by {best_artist})")
-            return 0.0, best_title or "", best_artist or ""
+            verdict = _aid_verdict([(s, t, a) for s, _rid, t, a in results], artist, title)
+            if verdict[0] == 0.0:
+                best_score = results[0][0]
+                logger.warning(f"[AcoustID] {tag} → wrong track ({best_score:.0%} match for"
+                               f" \"{verdict[1]}\" by {verdict[2]})")
+            else:
+                logger.info(f"[AcoustID] {tag} → {verdict[0]:.0%} match"
+                            + ("" if verdict[1] else " (recording has no metadata in DB)"))
+            return verdict
         except Exception as exc:
             logger.warning(
                 f"[AcoustID] {tag} → fingerprint failed: {exc}"
@@ -3592,7 +3617,7 @@ def _worker_tick():
 _scan_state: dict = {"in_progress": False, "count": 0, "source": "", "last_at": ""}
 _scan_state_lock = threading.Lock()
 
-_lib_acoustid_state: dict = {"in_progress": False, "done": 0, "total": 0}
+_lib_acoustid_state: dict = {"in_progress": False, "done": 0, "total": 0, "failed": 0}
 _lib_acoustid_lock = threading.Lock()
 
 
@@ -3757,17 +3782,15 @@ def _run_lib_acoustid_inner(ids: list, table: str = "library_index") -> None:
             resolved, row["artist"] or "", row["title"] or "")
         if score is not None:
             conn = get_conn()
-            if table == "library_index":
-                conn.execute(
-                    "UPDATE library_index SET acoustid_score=?, acoustid_title=?,"
-                    " acoustid_artist=? WHERE id=?",
-                    (score, aid_title or None, aid_artist or None, row_id))
-            else:
-                conn.execute(f"UPDATE {table} SET acoustid_score=? WHERE id=?", (score, row_id))
+            _save_aid_verdict(conn, str(resolved), score, aid_title, aid_artist)
             conn.commit()
             conn.close()
         with _lib_acoustid_lock:
             _lib_acoustid_state["done"] += 1
+            if score is None:
+                # fpcalc or the AcoustID request failed — say so, rather than
+                # finishing as if the file had been checked.
+                _lib_acoustid_state["failed"] = _lib_acoustid_state.get("failed", 0) + 1
     logger.info(f"[AcoustID] verification complete for {len(ids)} tracks")
 
 def _app_secret() -> str:
@@ -4978,7 +5001,7 @@ def api_library_acoustid():
         # are slow enough that two concurrent POSTs both cleared the check and
         # launched duplicate runs, re-fingerprinting every file and racing on
         # the progress counters.
-        _lib_acoustid_state.update(in_progress=True, done=0, total=0)
+        _lib_acoustid_state.update(in_progress=True, done=0, total=0, failed=0)
     started = False
     try:
         data = _json_body()
@@ -5173,7 +5196,22 @@ def api_library_identify():
     if err:
         return jsonify({"ok": False, "error": err}), 400
     candidates, err = _acoustid.identify(p)
-    return jsonify({"ok": not err, "error": err, "candidates": candidates})
+    saved = None
+    if not err and candidates:
+        # Keep what was heard, so the badge and verdict are still there after
+        # the sheet closes (and after a reload), like a Verify run's.
+        conn = get_conn()
+        row = conn.execute("SELECT artist, title FROM library_index WHERE path=?",
+                           (str(p),)).fetchone() or conn.execute(
+            "SELECT artist, title FROM tracks WHERE local_path=?", (str(p),)).fetchone()
+        if row:
+            score, t, a = _aid_verdict([(c["score"], c["title"], c["artist"]) for c in candidates],
+                                       row["artist"] or "", row["title"] or "")
+            _save_aid_verdict(conn, str(p), score, t, a)
+            conn.commit()
+            saved = {"score": score, "title": t, "artist": a}
+        conn.close()
+    return jsonify({"ok": not err, "error": err, "candidates": candidates, "saved": saved})
 
 
 @app.route("/api/library/resolve-url", methods=["POST"])

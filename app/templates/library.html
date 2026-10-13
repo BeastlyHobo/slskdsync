@@ -22,13 +22,18 @@
 <!-- Artist / album header, rendered per view -->
 <div id="lib-hero"></div>
 
-<!-- Search + sort + filter, all on one row -->
+<!-- Search, then sort / order / filter (and the active filters) on one row -->
 <div class="lib-toolbar">
   <input id="lib-search" type="search" placeholder="Search library…" autocomplete="off">
-  <select id="lib-sort" class="lib-sort" aria-label="Sort" style="display:none"
+</div>
+<div id="lib-controls" class="lib-controls" style="display:none">
+  <select id="lib-sort" class="lib-sort" aria-label="Sort by" style="display:none"
           onchange="setSortBy(this.value)"></select>
+  <button id="lib-sort-dir" class="lib-filter-btn" style="display:none"
+          onclick="toggleSortDir()" title="Reverse the order"></button>
   <button id="lib-filter-btn" class="lib-filter-btn" style="display:none"
           onclick="toggleFilterPanel()" aria-expanded="false">Filter</button>
+  <div id="lib-active" class="lib-active"></div>
 </div>
 
 <!-- Filters live behind one button; the active ones show as removable chips. -->
@@ -70,8 +75,6 @@
   </div>
   <button id="verify-view-btn" class="lib-sm-btn lf-verify" onclick="verifyCurrentView()">🎧 Verify everything in this view</button>
 </div>
-<div id="lib-active" class="lib-active"></div>
-
 <!-- AcoustID progress (shown while a multi-track verify runs) -->
 <div id="aid-progress-wrap" class="lib-progress" style="display:none">
   <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.15rem">
@@ -279,9 +282,10 @@
 /* Header + toolbar */
 .lib-head { margin-bottom:.7rem; }
 .lib-head .page-title { overflow-wrap:anywhere; }
-.lib-toolbar { display:flex; gap:.4rem; align-items:center; margin-bottom:.55rem; }
+.lib-toolbar { display:flex; gap:.4rem; align-items:center; margin-bottom:.5rem; }
 .lib-toolbar #lib-search { flex:1; min-width:0; }
-.lib-sort { flex-shrink:1; min-width:0; max-width:42%; font-size:.78rem; padding:.45rem .5rem;
+.lib-controls { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin-bottom:.55rem; }
+.lib-sort { flex-shrink:1; min-width:0; max-width:50%; font-size:.78rem; padding:.45rem .5rem;
   background:var(--surface2); color:var(--text); border:1px solid var(--border);
   border-radius:var(--radius-pill); cursor:pointer; font-family:var(--font-ui); }
 .lib-filter-btn { flex-shrink:0; font-size:.78rem; font-weight:600; padding:.45rem .8rem;
@@ -296,8 +300,7 @@
 .lf-chips { display:flex; gap:.35rem; flex-wrap:wrap; }
 .lf-chips .af-chip { font-size:.75rem; padding:5px 11px; }
 .lf-verify { align-self:flex-start; font-size:.75rem; padding:.35rem .7rem; }
-.lib-active { display:flex; gap:.35rem; flex-wrap:wrap; margin-bottom:.5rem; }
-.lib-active:empty { display:none; }
+.lib-active { display:contents; }
 .lib-active .af-chip { font-size:.72rem; padding:4px 10px; }
 .lib-progress { margin-bottom:.6rem; }
 .lib-count { font-size:.75rem; color:var(--text-muted); margin-bottom:.35rem; }
@@ -390,8 +393,24 @@ const SORTS = {
   'artists':         [['name','Name'],['tracks','Most songs'],['added','Recently added']],
   'albums':          [['album','Title'],['artist','Artist'],['added','Recently added'],['tracks','Most songs']],
 };
-let sortPrefs = {};
+let sortPrefs = {}, sortDirs = {};
 try { sortPrefs = JSON.parse(localStorage.getItem('lib_sort') || '{}') || {}; } catch(e) {}
+try { sortDirs  = JSON.parse(localStorage.getItem('lib_sort_dir') || '{}') || {}; } catch(e) {}
+// What each order reads as, natural way round and reversed.
+const SORT_DIR_LABELS = {
+  title: ['A–Z', 'Z–A'], artist: ['A–Z', 'Z–A'], album: ['A–Z', 'Z–A'], name: ['A–Z', 'Z–A'],
+  added: ['Newest', 'Oldest'], aid: ['Worst first', 'Best first'],
+  format: ['Lossless first', 'Lossy first'], track: ['1 → 99', '99 → 1'],
+  tracks: ['Most', 'Fewest'], playlist: ['In order', 'Reversed'],
+};
+// 1 = the natural way round, -1 = reversed; remembered per view and order.
+function sortDir(v) { return sortDirs[v + ':' + sortFor(v)] === -1 ? -1 : 1; }
+function toggleSortDir() {
+  sortDirs[view + ':' + sortFor(view)] = -sortDir(view);
+  try { localStorage.setItem('lib_sort_dir', JSON.stringify(sortDirs)); } catch(e) {}
+  songsPage = 1;
+  render();
+}
 function sortFor(v) {
   const opts = SORTS[v] || [];
   return opts.some(o => o[0] === sortPrefs[v]) ? sortPrefs[v] : (opts[0] || [''])[0];
@@ -409,6 +428,17 @@ function showSort(v) {
   sel.innerHTML = opts.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
   sel.value = sortFor(v);
   sel.style.display = '';
+  const dirBtn = document.getElementById('lib-sort-dir');
+  const labels = SORT_DIR_LABELS[sortFor(v)] || ['↓', '↑'];
+  dirBtn.textContent = (sortDir(v) === 1 ? '↓ ' : '↑ ') + labels[sortDir(v) === 1 ? 0 : 1];
+  dirBtn.style.display = '';
+}
+
+// Primary order × direction, then the tie-breakers always the natural way
+// round — "Artist Z–A" keeps each artist's albums and songs in order.
+function directed(primary, tie) {
+  const d = sortDir(view);
+  return (a, b) => d * primary(a, b) || (tie ? tie(a, b) : 0);
 }
 
 // Leading track number from "07 - Title.flac" / "07. Title.mp3"; filenames
@@ -421,16 +451,19 @@ function trackNo(t) {
 // Worst first: wrong song, then unidentified/uncertain, then verified, then unchecked.
 function aidRank(s) { return s == null ? 2 : s < 0 ? 0.6 : s; }
 function sortTracks(list, key) {
+  const byTitle = (a, b) => cmp(a.title, b.title);
+  const byNo = (a, b) => (trackNo(a) ?? 999) - (trackNo(b) ?? 999);
   const by = {
-    title:  (a, b) => cmp(a.title, b.title),
-    artist: (a, b) => cmp(a.artist, b.artist) || cmp(a.album, b.album) || cmp(a.title, b.title),
-    album:  (a, b) => cmp(a.album, b.album) || ((trackNo(a) ?? 999) - (trackNo(b) ?? 999)) || cmp(a.title, b.title),
-    added:  (a, b) => (b.indexed_at || '').localeCompare(a.indexed_at || '') || cmp(a.title, b.title),
-    aid:    (a, b) => aidRank(a.acoustid_score) - aidRank(b.acoustid_score) || cmp(a.title, b.title),
-    format: (a, b) => (LOSSLESS_EXTS.has(b.ext) - LOSSLESS_EXTS.has(a.ext)) || cmp(a.ext, b.ext) || cmp(a.title, b.title),
-    track:  (a, b) => ((trackNo(a) ?? 999) - (trackNo(b) ?? 999)) || cmp(a.title, b.title),
+    title:  [byTitle, (a, b) => cmp(a.artist, b.artist)],
+    artist: [(a, b) => cmp(a.artist, b.artist), (a, b) => cmp(a.album, b.album) || byNo(a, b) || byTitle(a, b)],
+    album:  [(a, b) => cmp(a.album, b.album), (a, b) => byNo(a, b) || byTitle(a, b)],
+    added:  [(a, b) => (b.indexed_at || '').localeCompare(a.indexed_at || ''), byTitle],
+    aid:    [(a, b) => aidRank(a.acoustid_score) - aidRank(b.acoustid_score), byTitle],
+    format: [(a, b) => (LOSSLESS_EXTS.has(b.ext) - LOSSLESS_EXTS.has(a.ext)) || cmp(a.ext, b.ext), byTitle],
+    track:  [byNo, byTitle],
   }[key];
-  return by ? [...list].sort(by) : list;   // 'playlist' keeps server order
+  if (!by) return sortDir(view) === 1 ? list : [...list].reverse();   // 'playlist': server order
+  return [...list].sort(directed(by[0], by[1]));
 }
 
 // ── AcoustID ─────────────────────────────────────────────────────────────
@@ -539,6 +572,9 @@ function pollAid() {
     if (d.in_progress) { setTimeout(pollAid, 2000); return; }
     aidRunning = false;
     document.getElementById('aid-progress-wrap').style.display = 'none';
+    if (d.failed) showToast(d.failed === 1 && d.total === 1
+      ? "Couldn't fingerprint this file — see Logs"
+      : `${d.failed} of ${d.total} couldn't be fingerprinted — see Logs`, 4000);
     // Ask only for the rows this run touched when we know them.
     const ids = _verifyIds && _verifyIds.length <= 400 ? _verifyIds : null;
     fetch('/api/library/acoustid/scores' + (ids ? '?ids=' + ids.join(',') : ''))
@@ -725,9 +761,9 @@ function renderArtists() {
   if (q) artists = artists.filter(a =>
     matchQ(fold(a), q) || map[a].some(t => matchQ(hay(t), q)));
   const key = sortFor('artists');
-  if (key === 'tracks') artists.sort((a, b) => map[b].length - map[a].length || cmp(a, b));
-  else if (key === 'added') artists.sort((a, b) => newestAdded(map[b]).localeCompare(newestAdded(map[a])) || cmp(a, b));
-  else artists.sort(cmp);
+  if (key === 'tracks') artists.sort(directed((a, b) => map[b].length - map[a].length, cmp));
+  else if (key === 'added') artists.sort(directed((a, b) => newestAdded(map[b]).localeCompare(newestAdded(map[a])), cmp));
+  else artists.sort(directed(cmp));
 
   if (!artists.length) {
     document.getElementById('lib-content').innerHTML = '<div class="empty-lib">No artists match.</div>';
@@ -751,7 +787,7 @@ function renderArtists() {
   };
 
   // The A–Z index only means something in name order.
-  if (key !== 'name') {
+  if (key !== 'name' || sortDir('artists') === -1) {
     document.getElementById('lib-content').innerHTML = `<div class="az-list">${artists.map(rowHtml).join('')}</div>`;
     return;
   }
@@ -837,12 +873,13 @@ function renderAlbums() {
   if (q) groups = groups.filter(g =>
     g.tracks.some(t => matchQ(hay(t), q)));
   const key = sortFor('albums');
-  groups.sort({
-    album:  (a, b) => cmp(a.album, b.album) || cmp(a.artist, b.artist),
-    artist: (a, b) => cmp(a.artist, b.artist) || cmp(a.album, b.album),
-    added:  (a, b) => newestAdded(b.tracks).localeCompare(newestAdded(a.tracks)) || cmp(a.album, b.album),
-    tracks: (a, b) => b.tracks.length - a.tracks.length || cmp(a.album, b.album),
-  }[key] || ((a, b) => cmp(a.album, b.album)));
+  const [primary, tie] = {
+    album:  [(a, b) => cmp(a.album, b.album), (a, b) => cmp(a.artist, b.artist)],
+    artist: [(a, b) => cmp(a.artist, b.artist), (a, b) => cmp(a.album, b.album)],
+    added:  [(a, b) => newestAdded(b.tracks).localeCompare(newestAdded(a.tracks)), (a, b) => cmp(a.album, b.album)],
+    tracks: [(a, b) => b.tracks.length - a.tracks.length, (a, b) => cmp(a.album, b.album)],
+  }[key] || [(a, b) => cmp(a.album, b.album), null];
+  groups.sort(directed(primary, tie));
   if (!groups.length) { document.getElementById('lib-content').innerHTML='<div class="empty-lib">No albums match.</div>'; return; }
   const total = groups.length;
   groups = groups.slice(0, songsPage * PAGE_SIZE);
@@ -1180,6 +1217,7 @@ function badPassesFilter(t) {
 function render() {
   document.getElementById('lib-hero').innerHTML = '';
   document.getElementById('lib-sort').style.display = 'none';
+  document.getElementById('lib-sort-dir').style.display = 'none';
   document.getElementById('lib-filter-btn').style.display = 'none';
   document.getElementById('lib-active').innerHTML = '';
   const trackView = ['songs','album-tracks','artist-albums','playlist-tracks'].includes(view);
@@ -1192,6 +1230,9 @@ function render() {
   else if (view==='artist-albums') renderArtistAlbums();
   else if (view==='album-tracks')  renderAlbumTracks();
   else if (view==='playlist-tracks') renderPlaylistTracks();
+  const anyControl = ['lib-sort', 'lib-filter-btn'].some(id =>
+    document.getElementById(id).style.display !== 'none');
+  document.getElementById('lib-controls').style.display = anyControl ? 'flex' : 'none';
 }
 
 // ── Scan ──────────────────────────────────────────────────────────────────
@@ -1467,6 +1508,16 @@ function fxIdentify() {
     }
     const same = c => !aidDisagrees({title: t.title, artist: t.artist,
                                      acoustid_title: c.title, acoustid_artist: c.artist});
+    // The server stored this as the file's verdict; mirror it so the badge
+    // and verdict stay after the sheet closes.
+    if (d.saved) {
+      t.acoustid_score  = d.saved.score;
+      t.acoustid_title  = d.saved.title  || '';
+      t.acoustid_artist = d.saved.artist || '';
+      renderModalBadges(t);
+      renderModalMeta(t, _modalDiskInfo);
+      render();
+    }
     const top = d.candidates[0];
     const head = same(top)
       ? `<div class="fx-verdict ok">✓ Sounds like the right song — “${esc(top.title)}” by ${esc(top.artist || '?')}.</div>`

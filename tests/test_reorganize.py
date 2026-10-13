@@ -399,3 +399,30 @@ def test_hand_picked_version_is_not_deduped_against_the_original(A, auth, job):
     assert r.get_json()["ok"]
     r = auth.post("/api/download", json={"artist": "Radiohead", "title": "Creep"})
     assert r.get_json().get("skipped")
+
+
+def test_identify_keeps_its_verdict(A, auth, lib, job, monkeypatch):
+    """Identify used to show candidates and save nothing, so the result was
+    gone once the sheet closed."""
+    root, f = lib
+    conn = A.get_conn()
+    conn.execute("INSERT INTO tracks(job_id,artist,title,slskd_state,local_path)"
+                 " VALUES(?,?,?,'completed',?)", (job, "Wrong Artist", "Wrong Title", str(f)))
+    conn.commit(); conn.close()
+    monkeypatch.setattr(A._acoustid, "identify", lambda p: ([
+        {"score": 0.93, "title": "Real Song", "artist": "Real Artist"}], ""))
+    d = auth.post("/api/library/identify", json={"path": str(f)}).get_json()
+    assert d["saved"] == {"score": 0.0, "title": "Real Song", "artist": "Real Artist"}
+    conn = A.get_conn()
+    lib_row = conn.execute("SELECT acoustid_score, acoustid_title FROM library_index").fetchone()
+    q_row = conn.execute("SELECT acoustid_score, acoustid_title FROM tracks").fetchone()
+    conn.close()
+    assert tuple(lib_row) == tuple(q_row) == (0.0, "Real Song")
+
+
+def test_aid_verdict_matches_verify_semantics(A):
+    v = A._aid_verdict
+    assert v([], "A", "T") == (-1.0, "", "")
+    assert v([(0.9, "Song (Remastered)", "Björk")], "Bjork", "Song") == (0.9, "Song (Remastered)", "Björk")
+    assert v([(0.8, "Other", "X")], "A", "Song") == (0.0, "Other", "X")
+    assert v([(0.7, "", "")], "A", "Song") == (0.7, "", "")

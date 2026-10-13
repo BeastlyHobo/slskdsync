@@ -320,3 +320,31 @@ def test_cover_proxy_caches_hits_and_failures(A, auth, monkeypatch):
         assert auth.get("/api/library/cover/bad").status_code == 404
     # one Navidrome call each: the hit came from disk, the miss from memory
     assert calls == ["good", "bad"]
+
+
+def test_playlist_verify_lands_on_the_library_row_too(A, job, monkeypatch):
+    conn = A.get_conn()
+    conn.execute("INSERT INTO tracks(id,job_id,artist,title,slskd_state,local_path)"
+                 " VALUES(5,?,'A','T','completed','/m/t.flac')", (job,))
+    conn.execute("INSERT INTO library_index(id,artist,title,path) VALUES(9,'A','T','/m/t.flac')")
+    conn.commit(); conn.close()
+    monkeypatch.setattr(A, "_build_fs_index", lambda root: {})
+    monkeypatch.setattr(A, "_resolve_path", lambda p, *a: A.Path(p))
+    monkeypatch.setattr(A._acoustid, "verify_detail", lambda p, a, t: (0.88, "T", "A"))
+    A._run_lib_acoustid([5], "tracks")
+    conn = A.get_conn()
+    assert conn.execute("SELECT acoustid_score FROM library_index WHERE id=9").fetchone()[0] == 0.88
+    assert conn.execute("SELECT acoustid_score FROM tracks WHERE id=5").fetchone()[0] == 0.88
+    conn.close()
+
+
+def test_failed_fingerprints_are_counted(A, monkeypatch):
+    conn = A.get_conn()
+    conn.execute("INSERT INTO library_index(id,artist,title,path) VALUES(1,'A','T','/m/t.flac')")
+    conn.commit(); conn.close()
+    monkeypatch.setattr(A, "_build_fs_index", lambda root: {})
+    monkeypatch.setattr(A, "_resolve_path", lambda p, *a: A.Path(p))
+    monkeypatch.setattr(A._acoustid, "verify_detail", lambda p, a, t: (None, "", ""))
+    A._lib_acoustid_state.update(failed=0)
+    A._run_lib_acoustid([1])
+    assert A._lib_acoustid_state["failed"] == 1
