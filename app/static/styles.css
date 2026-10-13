@@ -26,6 +26,7 @@
 
   /* Frosted bars (sidebar / top-bar / bottom-nav) */
   --bar:      rgba(13,13,20,0.72);
+  --bar-solid: #0c0c12;   /* --bar over the page backdrop, as an opaque colour */
   --bar-blur: saturate(160%) blur(22px);
   --blur:     saturate(160%) blur(22px);
 
@@ -102,7 +103,10 @@
 
 /* ── Reset ──────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { height: 100%; }
+/* If iOS ever leaves a strip below the layout viewport (it has, in home-screen
+   apps), it shows the canvas. Paint the canvas the bottom nav's colour so the
+   strip reads as part of the nav rather than a black bar. */
+html { height: 100%; background-color: var(--bar-solid); }
 button  { font-family: inherit; cursor: pointer; border: none; background: none; }
 input, select, textarea { font-family: inherit; color: inherit; }
 
@@ -383,7 +387,7 @@ main {
   flex-shrink: 0;
   min-height: calc(var(--nav-h) + var(--inset-bottom));
   padding-bottom: var(--inset-bottom);
-  background: var(--bar);
+  background: var(--bar-solid);
   border-top: 1px solid var(--border);
   display: flex;
   z-index: 100;
