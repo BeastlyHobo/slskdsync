@@ -25,6 +25,26 @@
       ' stroke-linejoin="round" aria-hidden="true" focusable="false">' +
       (window.ICON_PATHS[name] || '') + '</svg>';
   };
+  // Size the phone layout to what's really visible. innerHeight is the
+  // visible height; CSS "100%" in an iOS home-screen app can be the whole
+  // screen even though the page starts below the status bar. Not refitted
+  // while typing, so the keyboard can't squash the layout.
+  (function () {
+    var root = document.documentElement;
+    function typing() {
+      var el = document.activeElement;
+      return el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+    }
+    function fit() {
+      if (!typing() && window.innerHeight > 0) root.style.setProperty('--app-h', window.innerHeight + 'px');
+    }
+    fit();
+    window.addEventListener('resize', fit);
+    window.addEventListener('orientationchange', function () { setTimeout(fit, 300); });
+    document.addEventListener('focusout', function () { setTimeout(fit, 150); });
+    window.addEventListener('pageshow', fit);
+  })();
+
   // Links into the rich pages, shared by every tab. Song/artist/album pages
   // for the catalog live on Search; owned files live in Library.
   (function () {
@@ -157,6 +177,14 @@ document.addEventListener('focusout', () => {
   const probe = document.createElement('div');
   probe.style.cssText = 'position:fixed;visibility:hidden;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)';
   document.body.append(box, probe);
+  const probeH = h => {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;top:0;width:1px;visibility:hidden;height:' + h;
+    document.body.appendChild(d);
+    const v = Math.round(d.getBoundingClientRect().height);
+    d.remove();
+    return v;
+  };
   const show = () => {
     const cs = getComputedStyle(probe), nav = document.querySelector('.bottom-nav');
     const r = nav ? nav.getBoundingClientRect() : null, vv = window.visualViewport;
@@ -165,6 +193,7 @@ document.addEventListener('focusout', () => {
       `screen ${screen.width}x${screen.height}  inner ${innerWidth}x${innerHeight}\n` +
       `html ${document.documentElement.clientHeight}  vv ${vv ? Math.round(vv.height) + ' @' + Math.round(vv.offsetTop) : '-'}\n` +
       `inset top ${cs.paddingTop} bottom ${cs.paddingBottom}\n` +
+      `100% ${probeH('100%')}  100dvh ${probeH('100dvh')}  100vh ${probeH('100vh')}  app-h ${getComputedStyle(document.documentElement).getPropertyValue('--app-h') || '-'}\n` +
       `nav ${r ? Math.round(r.top) + '–' + Math.round(r.bottom) : '-'}  scrollY ${scrollY}`;
   };
   show();
