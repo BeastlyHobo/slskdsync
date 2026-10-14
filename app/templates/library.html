@@ -176,6 +176,28 @@
 
     <div class="tm-section-label">Details</div>
     <div id="tm-meta" class="tm-meta"></div>
+
+    <div class="tm-danger">
+      <button id="tm-del-btn" class="del-trigger" onclick="askDelete('song')">🗑 Delete from library…</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete confirmation: lists what goes, and the button stays locked until DELETE is typed -->
+<div id="del-modal" class="tm-overlay del-overlay" style="display:none" onclick="if(event.target===this)closeDelete()">
+  <div class="tm-card" role="alertdialog" aria-modal="true" aria-labelledby="del-title">
+    <button class="tm-close" onclick="closeDelete()" aria-label="Close">✕</button>
+    <div id="del-title" class="tm-title del-title"></div>
+    <div id="del-sub" class="del-sub"></div>
+    <div id="del-list" class="del-list"></div>
+    <label for="del-confirm" class="del-label">Type <b>DELETE</b> to confirm</label>
+    <input id="del-confirm" class="fx-input del-input" type="text" autocomplete="off"
+      autocapitalize="characters" spellcheck="false" placeholder="DELETE">
+    <div class="del-foot">
+      <span id="del-error" class="del-error"></span>
+      <button class="lib-sm-btn" onclick="closeDelete()">Cancel</button>
+      <button id="del-go" class="lib-sm-btn del-go" onclick="doDelete()" disabled>Delete</button>
+    </div>
   </div>
 </div>
 
@@ -323,6 +345,33 @@
 .lib-hero-actions { display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.8rem; }
 .lib-hero-actions .lib-sm-btn { font-size:.75rem; padding:.4rem .75rem; text-decoration:none;
   border-radius:var(--radius-pill); }
+.del-trigger { background:none; border:1px solid color-mix(in oklab, var(--err), transparent 65%);
+  color:var(--err); border-radius:var(--radius-pill); padding:.4rem .75rem; font:inherit;
+  font-size:.75rem; font-weight:700; cursor:pointer; }
+.del-trigger:hover { background:var(--err-bg); }
+.del-trigger:disabled { opacity:.4; cursor:default; }
+.lib-hero-actions .del-trigger { margin-left:auto; }
+.tm-danger { margin-top:1.4rem; padding-top:.9rem; border-top:1px solid var(--border); text-align:center; }
+.del-overlay { z-index:1001; }
+.del-title { padding-right:1.6rem; overflow-wrap:anywhere; }
+.del-sub { font-size:.8rem; color:var(--text-muted); margin:.4rem 0 .7rem; }
+.del-sub b { color:var(--err); }
+.del-list { max-height:40dvh; overflow-y:auto; overscroll-behavior:contain;
+  border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:.8rem; }
+.del-row { display:flex; gap:.6rem; align-items:baseline; padding:.4rem .65rem;
+  border-bottom:1px solid var(--border); font-size:.8rem; }
+.del-row:last-child { border-bottom:none; }
+.del-row.kept { opacity:.6; }
+.del-row .del-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.del-row .del-note { font-size:.7rem; color:var(--text-muted); white-space:nowrap; }
+.del-row.kept .del-note { color:var(--ok); white-space:normal; text-align:right; }
+.del-label { display:block; font-size:.78rem; color:var(--text-muted); margin-bottom:.3rem; }
+.del-input { font-family:var(--font-mono); letter-spacing:.08em; }
+.del-foot { display:flex; gap:.4rem; align-items:center; justify-content:flex-end; margin-top:.8rem; }
+.del-error { margin-right:auto; font-size:.75rem; color:var(--err); }
+.lib-sm-btn.del-go { color:var(--err); border-color:color-mix(in oklab, var(--err), transparent 55%); }
+.lib-sm-btn.del-go:not(:disabled) { background:var(--err); color:#fff; border-color:var(--err); }
+.lib-sm-btn.del-go:disabled { opacity:.45; cursor:default; }
 .lib-section { font-size:.75rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
   color:var(--text-muted); margin:.9rem 0 .45rem; }
 
@@ -801,6 +850,7 @@ function renderArtistAlbums() {
     <div class="lib-hero-actions">
       <button class="lib-sm-btn" onclick="verifyTracks(_pageTracks, this)">🎧 Verify all ${all.length}</button>
       <a class="lib-sm-btn" href="${esc(artistUrl(ctx.artist))}">Discography &amp; top songs ›</a>
+      <button class="del-trigger" onclick="askDelete('artist')">🗑 Delete artist…</button>
     </div>`;
 
   const shelf = albums.map(al => {
@@ -880,6 +930,7 @@ function renderAlbumTracks() {
     <div class="lib-hero-actions">
       <button class="lib-sm-btn" onclick="verifyTracks(_pageTracks, this)">🎧 Verify album</button>
       <a class="lib-sm-btn" href="${esc(albumUrl(ctx.album, ctx.artist))}">Full tracklist &amp; missing songs ›</a>
+      <button class="del-trigger" onclick="askDelete('album')">🗑 Delete album…</button>
     </div>`;
   const key = sortFor('album-tracks');
   const q = searchVal();
@@ -1281,7 +1332,7 @@ function showTrackInfo(rowEl) {
   document.getElementById('fx-m-album').value  = t.album  || '';
   document.getElementById('fx-m-title').value  = t.title  || '';
   // Nothing on disk (a playlist entry that never downloaded) → nothing to fix.
-  ['tm-q-identify','tm-q-rename','tm-q-replace'].forEach(id =>
+  ['tm-q-identify','tm-q-rename','tm-q-replace','tm-del-btn'].forEach(id =>
     document.getElementById(id).disabled = !t.path);
   // The catalog's view of this song: preview, release, the rest of the album.
   document.getElementById('tm-song-link').href = songUrl({title: t.title, artist: t.artist, album: t.album});
@@ -1634,14 +1685,126 @@ function doRedownload() {
   });
 }
 
+// ── Delete songs / album / artist ─────────────────────────────────────────
+let _del = null;   // {kind, paths, songs (from the server), deletable}
+
+function fmtBytes(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
+  if (n >= 1e6) return Math.round(n / 1e6) + ' MB';
+  return Math.max(1, Math.round(n / 1e3)) + ' KB';
+}
+
+function askDelete(kind) {
+  let tracks, title;
+  if (kind === 'song') {
+    if (!_modalTrack || !_modalTrack.path) return;
+    tracks = [_modalTrack];
+    title = `Delete “${_modalTrack.title || 'this song'}”?`;
+  } else {
+    tracks = _pageTracks.filter(t => t.path);
+    title = kind === 'album' ? `Delete the album “${ctx.album}”?` : `Delete everything by ${ctx.artist}?`;
+  }
+  if (!tracks.length) return;
+  const byPath = new Map(tracks.map(t => [t.path, t]));
+  _del = {kind, byPath, songs: [], deletable: []};
+  document.getElementById('del-title').textContent = title;
+  document.getElementById('del-sub').textContent = 'Checking files…';
+  document.getElementById('del-list').innerHTML = '';
+  document.getElementById('del-error').textContent = '';
+  const input = document.getElementById('del-confirm');
+  input.value = ''; input.disabled = true;
+  delSyncGo();
+  document.getElementById('del-modal').style.display = 'flex';
+  fetch('/api/library/delete-preview', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({paths: [...byPath.keys()]}),
+  }).then(r => r.json()).then(d => {
+    if (!_del || _del.byPath !== byPath) return;
+    _del.songs = d.songs || [];
+    _del.deletable = _del.songs.filter(s => s.size != null && !s.playlists.length);
+    delRender();
+  }).catch(() => { document.getElementById('del-sub').textContent = '✗ Network error'; });
+}
+
+function delRender() {
+  const n = _del.deletable.length;
+  const bytes = _del.deletable.reduce((t, s) => t + s.size, 0);
+  const kept = _del.songs.filter(s => s.playlists.length).length;
+  let sub = n
+    ? `Permanently deletes <b>${n} song file${n !== 1 ? 's' : ''} (${fmtBytes(bytes)})</b> from your music folder and Navidrome. This can't be undone.`
+    : 'Nothing here can be deleted.';
+  if (kept) sub += ` ${kept} song${kept !== 1 ? 's are' : ' is'} in a playlist and will be kept — remove that playlist first to delete ${kept !== 1 ? 'them' : 'it'}.`;
+  document.getElementById('del-sub').innerHTML = sub;
+  document.getElementById('del-list').innerHTML = _del.songs.map(s => {
+    const t = _del.byPath.get(s.path) || {};
+    const name = (t.title || s.path.split('/').pop()) + (_del.kind === 'artist' && t.album ? ' · ' + t.album : '');
+    const note = s.playlists.length ? 'kept · in ' + s.playlists.join(', ')
+               : s.size == null ? 'file missing' : fmtBytes(s.size);
+    return `<div class="del-row${s.playlists.length ? ' kept' : ''}">
+      <span class="del-name">${esc(name)}</span><span class="del-note">${esc(note)}</span></div>`;
+  }).join('');
+  const input = document.getElementById('del-confirm');
+  input.disabled = !n;
+  if (n) input.focus();
+  delSyncGo();
+}
+
+function delSyncGo() {
+  const go = document.getElementById('del-go');
+  const n = _del ? _del.deletable.length : 0;
+  const typed = document.getElementById('del-confirm').value.trim().toUpperCase() === 'DELETE';
+  go.disabled = !(n && typed);
+  go.textContent = n ? `Delete ${n} song${n !== 1 ? 's' : ''}` : 'Delete';
+}
+document.getElementById('del-confirm').addEventListener('input', delSyncGo);
+
+function closeDelete() {
+  document.getElementById('del-modal').style.display = 'none';
+  _del = null;
+}
+
+function doDelete() {
+  if (!_del || !_del.deletable.length) return;
+  const confirmWord = document.getElementById('del-confirm').value.trim();
+  if (confirmWord.toUpperCase() !== 'DELETE') return;
+  const {kind} = _del;
+  const go = document.getElementById('del-go');
+  const err = document.getElementById('del-error');
+  go.disabled = true; go.textContent = 'Deleting…'; err.textContent = '';
+  fetch('/api/library/delete', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({paths: _del.deletable.map(s => s.path), confirm: confirmWord}),
+  }).then(r => r.json()).then(d => {
+    if (!d.ok) { err.textContent = '✗ ' + (d.error || 'Delete failed'); delSyncGo(); return; }
+    const gone = new Set(d.deleted);
+    const bytes = _del.deletable.filter(s => gone.has(s.path)).reduce((t, s) => t + s.size, 0);
+    for (const list of [ALL_TRACKS, _plTracks])
+      for (let i = list.length - 1; i >= 0; i--) if (gone.has(list[i].path)) list.splice(i, 1);
+    closeDelete();
+    if (kind === 'song') closeTrackModal();
+    let note = `Deleted ${gone.size} song${gone.size !== 1 ? 's' : ''}` + (gone.size ? ` · freed ${fmtBytes(bytes)}` : '');
+    if (d.failed.length) note += ` · ${d.failed.length} couldn't be deleted (see Logs)`;
+    showToast(note, 5000);
+    // An album or artist with nothing left has no page to stay on.
+    const left = view === 'album-tracks'
+      ? ALL_TRACKS.some(t => artistKey(t) === ctx.artist && (t.album || '(Unknown)') === ctx.album)
+      : view === 'artist-albums' ? ALL_TRACKS.some(t => artistKey(t) === ctx.artist) : true;
+    if (left) render(); else goBack();
+  }).catch(() => { err.textContent = '✗ Network error'; delSyncGo(); });
+}
+
 // The modal is authored inside the page's content block, which puts it several
 // levels down inside .app-shell. A position:fixed overlay only resolves
 // against the viewport while no ancestor creates a containing block, and on
 // iOS that nesting is where full-screen overlays come up short. Reparenting to
 // <body> makes it structurally immune.
 document.body.appendChild(document.getElementById('track-modal'));
+document.body.appendChild(document.getElementById('del-modal'));
 
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTrackModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (_del) closeDelete(); else closeTrackModal();
+});
 
 // Restore last navigation state from this session (e.g. after switching tabs)
 try {

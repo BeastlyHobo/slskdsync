@@ -4271,6 +4271,55 @@ def _m3u_paths(playlist_name: str) -> list[str]:
     return [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
 
 
+def _playlist_usage(conn, exclude_ids: list[int] = ()) -> dict[str, set[str]]:
+    """file path → names of the playlists that list it (in their M3U or as a
+    completed download), skipping the given import jobs."""
+    marks = ",".join("?" * len(exclude_ids))
+    used_by: dict[str, set[str]] = {}
+    for r in conn.execute(
+        f"SELECT DISTINCT j.playlist_name, t.local_path FROM tracks t"
+        f" JOIN import_jobs j ON j.id=t.job_id WHERE j.id NOT IN ({marks})"
+        " AND COALESCE(j.playlist_name,'')!='' AND t.slskd_state='completed'"
+        " AND t.local_path IS NOT NULL", list(exclude_ids)):
+        used_by.setdefault(r["local_path"], set()).add(r["playlist_name"])
+    for (name,) in conn.execute(
+        f"SELECT DISTINCT playlist_name FROM import_jobs WHERE id NOT IN ({marks})"
+        " AND COALESCE(playlist_name,'')!=''", list(exclude_ids)):
+        for p in _m3u_paths(name):
+            used_by.setdefault(p, set()).add(name)
+    return used_by
+
+
+def _delete_library_files(conn, paths: list[str]) -> tuple[list[Path], list[dict]]:
+    """Delete library files and everything that still says they're owned.
+    Commits. Returns (deleted, failed) where failed is [{path, error}]."""
+    deleted, failed = [], []
+    for p in paths:
+        f, err = _library_file(p)
+        if not err:
+            try:
+                f.unlink()
+            except OSError as ex:
+                err = str(ex)
+        if err:
+            logger.warning(f"[library] Could not delete {p}: {err}")
+            failed.append({"path": p, "error": err})
+            continue
+        # A completed queue row anywhere counts as "owned", which would stop
+        # the song from ever being downloaded again.
+        conn.execute("DELETE FROM tracks WHERE local_path=? AND slskd_state='completed'", (p,))
+        conn.execute("DELETE FROM library_index WHERE path=?", (p,))
+        conn.execute("DELETE FROM bad_flags WHERE path=?", (p,))
+        deleted.append(f)
+        logger.info(f"[library] Deleted {p}")
+    conn.commit()
+    with _lib_keys_lock:
+        _lib_keys_cache["at"] = 0.0   # the owned-songs set just changed
+    for f in deleted:
+        _prune_empty_parents(f.parent)
+    return deleted, failed
+
+
 def _playlist_removal_plan(conn, job_id: int) -> tuple[Optional[list[int]], list[dict]]:
     """The jobs that make up a playlist and the songs it put in the library.
 
@@ -4298,18 +4347,7 @@ def _playlist_removal_plan(conn, job_id: int) -> tuple[Optional[list[int]], list
         " AND slskd_state='completed' AND local_path IS NOT NULL", ids)}
     paths = list(dict.fromkeys(_m3u_paths(name) + list(dl)))
 
-    used_by: dict[str, set[str]] = {}
-    for r in conn.execute(
-        f"SELECT DISTINCT j.playlist_name, t.local_path FROM tracks t"
-        f" JOIN import_jobs j ON j.id=t.job_id WHERE j.id NOT IN ({marks})"
-        " AND COALESCE(j.playlist_name,'')!='' AND t.slskd_state='completed'"
-        " AND t.local_path IS NOT NULL", ids):
-        used_by.setdefault(r["local_path"], set()).add(r["playlist_name"])
-    for (other,) in conn.execute(
-        f"SELECT DISTINCT playlist_name FROM import_jobs WHERE id NOT IN ({marks})"
-        " AND COALESCE(playlist_name,'')!=''", ids):
-        for p in _m3u_paths(other):
-            used_by.setdefault(p, set()).add(other)
+    used_by = _playlist_usage(conn, ids)
 
     lib = {r["path"]: r for r in conn.execute("SELECT path, artist, title, album FROM library_index")}
     songs = []
@@ -4377,32 +4415,11 @@ def api_playlist_remove(job_id):
     conn.execute(f"DELETE FROM playlist_tracks WHERE job_id IN ({marks})", ids)
     conn.execute(f"DELETE FROM import_jobs WHERE id IN ({marks})", ids)
 
-    deleted, failed = [], []
     # Songs another playlist lists are always kept: that playlist's next sync
     # would only download them again.
-    for p in [s["path"] for s in songs if s["path"] in want and not s["other_playlists"]]:
-        f, err = _library_file(p)
-        if not err:
-            try:
-                f.unlink()
-            except OSError as ex:
-                err = str(ex)
-        if err:
-            logger.warning(f"[playlist] Could not delete {p}: {err}")
-            failed.append({"path": p, "error": err})
-            continue
-        # A completed queue row anywhere counts as "owned", which would stop
-        # the song from ever being downloaded again.
-        conn.execute("DELETE FROM tracks WHERE local_path=? AND slskd_state='completed'", (p,))
-        conn.execute("DELETE FROM library_index WHERE path=?", (p,))
-        conn.execute("DELETE FROM bad_flags WHERE path=?", (p,))
-        deleted.append(f)
-    conn.commit()
+    deleted, failed = _delete_library_files(
+        conn, [s["path"] for s in songs if s["path"] in want and not s["other_playlists"]])
     conn.close()
-    with _lib_keys_lock:
-        _lib_keys_cache["at"] = 0.0   # the owned-songs set just changed
-    for f in deleted:
-        _prune_empty_parents(f.parent)
 
     for name in names:
         try:
@@ -4415,6 +4432,52 @@ def api_playlist_remove(job_id):
     logger.info(f"[playlist] Removed job(s) {ids} ({', '.join(names) or 'unnamed'}):"
                 f" deleted {len(deleted)} file(s), {len(failed)} failed")
     return jsonify({"ok": True, "deleted": len(deleted), "failed": failed})
+
+
+def _library_delete_plan(conn, paths: list[str]) -> list[dict]:
+    """The songs a library delete would touch: size on disk, and the playlists
+    that list each one (those are kept — a playlist's next sync would only
+    download them again)."""
+    used_by = _playlist_usage(conn)
+    songs = []
+    for p in dict.fromkeys(paths):
+        f = Path(p)
+        songs.append({"path": p, "size": f.stat().st_size if f.is_file() else None,
+                      "playlists": sorted(used_by.get(p, ()))})
+    return songs
+
+
+@app.route("/api/library/delete-preview", methods=["POST"])
+def api_library_delete_preview():
+    paths = [p for p in (_json_body().get("paths") or []) if isinstance(p, str)]
+    conn = get_conn()
+    songs = _library_delete_plan(conn, paths)
+    conn.close()
+    return jsonify({"ok": True, "songs": songs})
+
+
+@app.route("/api/library/delete", methods=["POST"])
+def api_library_delete():
+    """Permanently delete songs, an album or an artist from the library.
+    Needs confirm="DELETE" — the page sends it only once the word is typed."""
+    data = _json_body()
+    if (data.get("confirm") or "").strip().upper() != "DELETE":
+        return jsonify({"ok": False, "error": "Type DELETE to confirm"}), 400
+    paths = [p for p in (data.get("paths") or []) if isinstance(p, str)]
+    if not paths:
+        return jsonify({"ok": False, "error": "Nothing to delete"}), 400
+    conn = get_conn()
+    songs = _library_delete_plan(conn, paths)
+    kept = [s["path"] for s in songs if s["playlists"]]
+    todo = [s["path"] for s in songs if not s["playlists"]]
+    deleted, failed = _delete_library_files(conn, todo)
+    conn.close()
+    if deleted:
+        _navidrome_start_scan()
+    bad = {f["path"] for f in failed}
+    # The paths as sent, so the page can drop exactly those songs.
+    return jsonify({"ok": True, "deleted": [p for p in todo if p not in bad],
+                    "kept": kept, "failed": failed})
 
 
 def _tail_lines(path: Path, n: int) -> list[str]:
